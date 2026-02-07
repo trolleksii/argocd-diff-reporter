@@ -1,0 +1,12 @@
+server:
+  addr: 127.0.0.1:8080
+
+github:
+  appId: 1
+  installationId: 1
+  privateKey: |-
+    placeholder
+
+log:
+  level: info
+  format: json
