@@ -1,10 +1,10 @@
 package logging
 
 import (
-	"log/slog"
-	"strings"
 	"fmt"
+	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 )

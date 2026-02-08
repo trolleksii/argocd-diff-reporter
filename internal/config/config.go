@@ -3,11 +3,12 @@ package config
 import (
 	"fmt"
 	"os"
-	"strconv"
 	"sigs.k8s.io/yaml"
+	"strconv"
 )
 
 type Config struct {
+	Target string          `yaml:"targetModule"`
 	Server ServerConfig    `yaml:"server"`
 	Github GithubAppConfig `yaml:"github"`
 	Log    LogConfig       `yaml:"log"`
@@ -18,8 +19,8 @@ type ServerConfig struct {
 }
 
 type GithubAppConfig struct {
-	AppID          int64 `yaml:"appId"`
-	InstallationID int64 `yaml:"installationId"`
+	AppID          int64  `yaml:"appId"`
+	InstallationID int64  `yaml:"installationId"`
 	PrivateKey     string `yaml:"privateKey"`
 }
 
@@ -35,7 +36,8 @@ func Load(path string) (*Config, error) {
 	}
 
 	cfg := &Config{
-		Log:    LogConfig{Level: "info", Format: "text"}, // defaults
+		Target: "all",
+		Log:    LogConfig{Level: "info", Format: "text"},
 		Server: ServerConfig{Addr: "0.0.0.0:8000"},
 	}
 	if err := yaml.Unmarshal(data, cfg); err != nil {
@@ -51,22 +53,21 @@ func Load(path string) (*Config, error) {
 }
 
 func (c *Config) ApplyEnv() error {
-    if v := os.Getenv("GITHUB_APP_ID"); v != "" {
+	if v := os.Getenv("GITHUB_APP_ID"); v != "" {
 		if i64v, err := strconv.ParseInt(v, 10, 0); err == nil {
-        	c.Github.AppID = i64v
+			c.Github.AppID = i64v
 		}
-    }
-    if v := os.Getenv("GITHUB_INSTALLATION_ID"); v != "" {
+	}
+	if v := os.Getenv("GITHUB_INSTALLATION_ID"); v != "" {
 		if i64v, err := strconv.ParseInt(v, 10, 0); err == nil {
 			c.Github.InstallationID = i64v
 		}
-    }
-    if v := os.Getenv("GITHUB_APP_PRIVATE_KEY"); v != "" {
-        c.Github.PrivateKey = v
-    }
+	}
+	if v := os.Getenv("GITHUB_APP_PRIVATE_KEY"); v != "" {
+		c.Github.PrivateKey = v
+	}
 	return nil
 }
-
 
 func (c *Config) Validate() error {
 	if c.Github.AppID == 0 {
