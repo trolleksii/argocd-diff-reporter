@@ -1,9 +1,18 @@
 package modules
 
 import (
+	"context"
 	"fmt"
 	"sync"
 )
+
+// Service is what each module's init function returns.
+type Service interface {
+	Run(ctx context.Context) error
+}
+
+// InitFunc creates a service. It's called only when the module is needed.
+type InitFunc func(r *Registry) (Service, error)
 
 type Registry struct {
 	mu       sync.RWMutex

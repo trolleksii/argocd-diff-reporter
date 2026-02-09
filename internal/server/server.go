@@ -8,19 +8,12 @@ import (
 	"log/slog"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
-	"github.com/trolleksii/argocd-diff-reporter/internal/modules"
 )
 
 type Server struct {
 	logger     *slog.Logger
 	httpServer *http.Server
 	mux        *http.ServeMux
-}
-
-func InitServer(cfg config.ServerConfig, logger *slog.Logger) modules.InitFunc {
-	return func(r *modules.Registry) (modules.Service, error) {
-		return New(cfg, logger), nil
-	}
 }
 
 func New(cfg config.ServerConfig, logger *slog.Logger) *Server {

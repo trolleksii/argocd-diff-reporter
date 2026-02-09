@@ -7,10 +7,13 @@ import (
 	"os/signal"
 	"syscall"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 	"github.com/trolleksii/argocd-diff-reporter/internal/logging"
 	"github.com/trolleksii/argocd-diff-reporter/internal/modules"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server"
+	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 )
 
 func main() {
@@ -27,24 +30,40 @@ func main() {
 	}
 	slog.SetDefault(logger)
 
-	mm := modules.NewManager()
-
+	registry := modules.NewRegistry()
 	ctx, cancel := signal.NotifyContext(context.Background(),
 		syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	err = nats.SetupNats(cfg.Nats, ctx, registry)
+	if err != nil {
+		log.Error("failed to start embedded NATS", "error", err)
+	}
+
+	var services []modules.Service
 	switch cfg.Target {
 	case "all":
-		mm.Register("server", server.InitServer(cfg.Server, logger))
+		services = append(services,
+			server.New(cfg.Server, logger),
+			// repo worker and other components
+		)
 	case "server":
-		mm.Register("server", server.InitServer(cfg.Server, logger))
+		services = append(services,
+			server.New(cfg.Server, logger),
+		)
+	case "repoworker":
+		// TBD
 	default:
-		logger.Error("unknown module", "target", cfg.Target)
+		log.Error("unknown module", "target", cfg.Target)
 		os.Exit(1)
 	}
 
-	if err := mm.Run(ctx); err != nil {
-		logger.Error("app error", "error", err)
+	g, gCtx := errgroup.WithContext(ctx)
+	for _, svc := range services {
+		g.Go(func() error { return svc.Run(gCtx) })
+	}
+	if err := g.Wait(); err != nil {
+		log.Error("app error", "error", err)
 		os.Exit(1)
 	}
 }

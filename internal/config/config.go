@@ -9,6 +9,7 @@ import (
 
 type Config struct {
 	Target string          `yaml:"targetModule"`
+	Nats   NatsConfig      `yaml:"nats"`
 	Server ServerConfig    `yaml:"server"`
 	Github GithubAppConfig `yaml:"github"`
 	Log    LogConfig       `yaml:"log"`
@@ -16,6 +17,14 @@ type Config struct {
 
 type ServerConfig struct {
 	Addr string `yaml:"addr"`
+}
+
+type NatsConfig struct {
+	Addr string `yaml:"addr"`
+	// or
+	Domain     string `yaml:"domain"`
+	ServerName string `yaml:"serverName"`
+	StoreDir   string `yaml:"storeDir"`
 }
 
 type GithubAppConfig struct {
@@ -78,6 +87,10 @@ func (c *Config) Validate() error {
 	}
 	if c.Github.PrivateKey == "" {
 		return fmt.Errorf("Github Application Private Key is required")
+	}
+
+	if c.Target != "all" && c.Nats.Addr == "" {
+		return fmt.Errorf("NATS address is required")
 	}
 	return nil
 }
