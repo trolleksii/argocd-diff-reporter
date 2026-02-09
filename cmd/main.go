@@ -12,8 +12,8 @@ import (
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 	"github.com/trolleksii/argocd-diff-reporter/internal/logging"
 	"github.com/trolleksii/argocd-diff-reporter/internal/modules"
-	"github.com/trolleksii/argocd-diff-reporter/internal/server"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
+	"github.com/trolleksii/argocd-diff-reporter/internal/server"
 )
 
 func main() {
@@ -35,12 +35,13 @@ func main() {
 		syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	err = nats.SetupNats(cfg.Nats, ctx, registry)
+	natsSvc, err := nats.New(cfg.Nats, ctx, logger, registry)
 	if err != nil {
-		log.Error("failed to start embedded NATS", "error", err)
+		logger.Error("failed to start NATS", "error", err)
+		os.Exit(1)
 	}
 
-	var services []modules.Service
+	services := []modules.Service{natsSvc}
 	switch cfg.Target {
 	case "all":
 		services = append(services,
@@ -54,7 +55,7 @@ func main() {
 	case "repoworker":
 		// TBD
 	default:
-		log.Error("unknown module", "target", cfg.Target)
+		logger.Error("unknown module", "target", cfg.Target)
 		os.Exit(1)
 	}
 
@@ -63,7 +64,7 @@ func main() {
 		g.Go(func() error { return svc.Run(gCtx) })
 	}
 	if err := g.Wait(); err != nil {
-		log.Error("app error", "error", err)
+		logger.Error("app error", "error", err)
 		os.Exit(1)
 	}
 }

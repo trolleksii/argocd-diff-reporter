@@ -3,6 +3,7 @@ package nats
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
@@ -13,13 +14,21 @@ import (
 	"github.com/trolleksii/argocd-diff-reporter/internal/modules"
 )
 
-func SetupNats(cfg config.NatsConfig, ctx context.Context, r *modules.Registry) error {
+func New(cfg config.NatsConfig, ctx context.Context, log *slog.Logger, r *modules.Registry) (modules.Service, error) {
 	var nc *nats.Conn
-	var err error
+	var srv *server.Server
+
+	closedCh := make(chan struct{})
+	closedHandler := nats.ClosedHandler(func(_ *nats.Conn) {
+		log.With("component", "nats").Debug("all connections drained")
+		close(closedCh)
+	})
+
 	if cfg.Addr != "" {
-		nc, err = nats.Connect(cfg.Addr)
+		var err error
+		nc, err = nats.Connect(cfg.Addr, closedHandler)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	} else {
 		opts := &server.Options{
@@ -28,28 +37,30 @@ func SetupNats(cfg config.NatsConfig, ctx context.Context, r *modules.Registry) 
 			JetStreamDomain: cfg.Domain,
 			ServerName:      cfg.ServerName,
 			StoreDir:        cfg.StoreDir,
+			NoSigs:          true,
 		}
-		srv, err := server.NewServer(opts)
+		var err error
+		srv, err = server.NewServer(opts)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		go srv.Start()
-		defer srv.Shutdown()
 		if !srv.ReadyForConnections(5 * time.Second) {
-			return errors.New("NATS Server timeout")
+			return nil, errors.New("nats: server timeout")
 		}
 
-		nc, err = nats.Connect(srv.ClientURL(), nats.InProcessServer(srv))
+		nc, err = nats.Connect(srv.ClientURL(), nats.InProcessServer(srv), closedHandler)
 		if err != nil {
-			return err
+			srv.Shutdown()
+			return nil, err
 		}
 	}
-	defer nc.Drain()
 
 	js, err := jetstream.New(nc)
 	if err != nil {
-		return err
+		nc.Drain()
+		return nil, err
 	}
 	r.Set("jetstream", js)
 
@@ -59,19 +70,41 @@ func SetupNats(cfg config.NatsConfig, ctx context.Context, r *modules.Registry) 
 		TTL:         1 * time.Hour,
 	})
 	if err != nil {
-		return err
+		nc.Drain()
+		return nil, err
 	}
 	r.Set("kvstore", kvStore)
+
 	objs, err := js.CreateOrUpdateObjectStore(ctx, jetstream.ObjectStoreConfig{
 		Bucket:      "reports",
 		Description: "Diff reports",
 		TTL:         31 * 24 * time.Hour,
 	})
 	if err != nil {
-		return err
+		nc.Drain()
+		return nil, err
 	}
 	r.Set("objectstore", objs)
 
+	return &Nats{nc: nc, srv: srv, log: log.With("component", "nats"), closedCh: closedCh}, nil
+}
+
+type Nats struct {
+	nc       *nats.Conn
+	srv      *server.Server
+	log      *slog.Logger
+	closedCh chan struct{}
+}
+
+func (n *Nats) Run(ctx context.Context) error {
 	<-ctx.Done()
+	n.log.Debug("nats: draining connections...")
+	n.nc.Drain()
+	<-n.closedCh
+	if n.srv != nil {
+		n.srv.Shutdown()
+		n.srv.WaitForShutdown()
+		n.log.Debug("nats: server shutdown complete")
+	}
 	return nil
 }

@@ -11,15 +11,15 @@ import (
 )
 
 type Server struct {
-	logger     *slog.Logger
+	log        *slog.Logger
 	httpServer *http.Server
 	mux        *http.ServeMux
 }
 
-func New(cfg config.ServerConfig, logger *slog.Logger) *Server {
+func New(cfg config.ServerConfig, log *slog.Logger) *Server {
 	mux := http.NewServeMux()
 	return &Server{
-		logger: logger,
+		log: log.With("component", "server"),
 		httpServer: &http.Server{
 			Addr:         cfg.Addr,
 			Handler:      mux,
@@ -32,7 +32,7 @@ func New(cfg config.ServerConfig, logger *slog.Logger) *Server {
 }
 
 func (s *Server) Run(ctx context.Context) error {
-	s.logger.Info("starting HTTP server", "addr", s.httpServer.Addr)
+	s.log.Info("starting HTTP server", "addr", s.httpServer.Addr)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -45,7 +45,7 @@ func (s *Server) Run(ctx context.Context) error {
 	case err := <-errCh:
 		return err
 	case <-ctx.Done():
-		s.logger.Info("shutting down HTTP server")
+		s.log.Info("shutting down HTTP server")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		return s.httpServer.Shutdown(shutdownCtx)
