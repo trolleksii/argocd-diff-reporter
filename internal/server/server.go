@@ -18,6 +18,8 @@ type Server struct {
 
 func New(cfg config.ServerConfig, log *slog.Logger) *Server {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+
 	return &Server{
 		log: log.With("component", "server"),
 		httpServer: &http.Server{
@@ -50,12 +52,4 @@ func (s *Server) Run(ctx context.Context) error {
 		defer cancel()
 		return s.httpServer.Shutdown(shutdownCtx)
 	}
-}
-
-func (s *Server) RegisterHandler(pattern string, handler http.Handler) {
-	s.mux.Handle(pattern, handler)
-}
-
-func (s *Server) RegisterHandlerFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
-	s.mux.HandleFunc(pattern, handler)
 }

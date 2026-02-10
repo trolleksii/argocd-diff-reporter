@@ -19,6 +19,17 @@ type ServerConfig struct {
 	Addr string `yaml:"addr"`
 }
 
+type WebhookConfig struct {
+	Secret       string          `yaml:"secret"`
+	AllowedRepos []GitRepoFilter `yaml:"repositories"`
+}
+
+type GitRepoFilter struct {
+	Owner     string   `yaml:"owner"`
+	Repo      string   `yaml:"repo"`
+	FileGlobs []string `yaml:"fileGlobs"`
+}
+
 type NatsConfig struct {
 	Addr string `yaml:"addr"`
 	// or
