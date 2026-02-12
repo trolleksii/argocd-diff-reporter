@@ -11,7 +11,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
-	"github.com/trolleksii/argocd-diff-reporter/internal/modules"
+	"github.com/trolleksii/argocd-diff-reporter/internal/registry"
 )
 
 func New(cfg config.NatsConfig, ctx context.Context, log *slog.Logger, r *modules.Registry) (modules.Service, error) {

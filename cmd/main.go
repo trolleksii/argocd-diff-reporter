@@ -11,7 +11,7 @@ import (
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 	"github.com/trolleksii/argocd-diff-reporter/internal/logging"
-	"github.com/trolleksii/argocd-diff-reporter/internal/modules"
+	"github.com/trolleksii/argocd-diff-reporter/internal/registry"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server"
 )
@@ -30,7 +30,7 @@ func main() {
 	}
 	slog.SetDefault(logger)
 
-	registry := modules.NewRegistry()
+	registry := registry.NewRegistry()
 	ctx, cancel := signal.NotifyContext(context.Background(),
 		syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -41,16 +41,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	services := []modules.Service{natsSvc}
+	services := []registry.Service{natsSvc}
 	switch cfg.Target {
 	case "all":
 		services = append(services,
-			server.New(cfg.Server, logger),
-			// repo worker and other components
+			server.NewServer(cfg.Server, logger, registry),
 		)
 	case "server":
 		services = append(services,
-			server.New(cfg.Server, logger),
+			server.NewServer(cfg.Server, logger, registry),
 		)
 	case "repoworker":
 		// TBD

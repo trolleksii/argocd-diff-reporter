@@ -1,7 +1,6 @@
 package webhook
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -12,7 +11,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
-	"github.com/trolleksii/argocd-diff-reporter/internal/modules"
+	"github.com/trolleksii/argocd-diff-reporter/internal/registry"
 )
 
 type WebhookHandler struct {
@@ -21,8 +20,8 @@ type WebhookHandler struct {
 	log *slog.Logger
 }
 
-func NewWebhookHandler(cfg config.WebhookConfig, log *slog.Logger, r *modules.Registry) (*WebhookHandler, error) {
-	js, err := modules.Get[jetstream.JetStream](r, "jetstream")
+func NewWebhookHandler(cfg config.WebhookConfig, log *slog.Logger, r *registry.Registry) (*WebhookHandler, error) {
+	js, err := registry.Get[jetstream.JetStream](r, "jetstream")
 	if err != nil {
 		return nil, err
 	}
