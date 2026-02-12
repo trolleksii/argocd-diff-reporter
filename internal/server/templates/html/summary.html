@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PR #{{.Number}} - {{.Owner}}/{{.Repo}}</title>
+    <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.6"></script>
+    <script src="https://cdn.jsdelivr.net/npm/htmx-ext-ws@2.0.2"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f6f8fa;
+            color: #24292f;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .header {
+            background-color: #0969da;
+            color: white;
+            padding: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+        }
+        .header-content {
+            flex: 1;
+        }
+        .header h1 {
+            margin: 0 0 10px 0;
+            font-size: 24px;
+        }
+        .github-link {
+            color: white;
+            text-decoration: none;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background-color 0.2s;
+        }
+        .github-link:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        .github-icon {
+            width: 20px;
+            height: 20px;
+            fill: currentColor;
+        }
+        .header .meta {
+            opacity: 0.9;
+            font-size: 14px;
+        }
+        .content {
+            padding: 20px;
+        }
+        .summary {
+            background-color: #f6f8fa;
+            border: 1px solid #d1d9e0;
+            border-radius: 6px;
+            padding: 16px;
+            margin-bottom: 20px;
+        }
+        .summary h2 {
+            margin: 0 0 10px 0;
+            font-size: 16px;
+            color: #656d76;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            border: 1px solid #d1d9e0;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        table th:nth-child(1) {
+            min-width: 30%;
+        }
+        table th:nth-child(2) {
+            width: 5%;
+        }
+        table th:nth-child(3) {
+            max-width: 60%;
+        }
+        th, td {
+            padding: 12px 16px;
+            text-align: left;
+            border-bottom: 1px solid #d1d9e0;
+        }
+        th {
+            background-color: #f6f8fa;
+            font-weight: 600;
+            color: #656d76;
+        }
+        tr:last-child td {
+            border-bottom: none;
+        }
+        tr:hover {
+            background-color: #f6f8fa;
+        }
+        .app-link {
+            color: #0969da;
+            text-decoration: none;
+            padding: 4px 8px;
+            border-radius: 4px;
+            display: inline-block;
+            margin: 2px;
+        }
+        .app-link:hover {
+            background-color: #f1f8ff;
+            text-decoration: underline;
+        }
+        .app-error {
+            color: #d1242f;
+            background-color: #ffebe9;
+            padding: 4px 8px;
+            border-radius: 4px;
+            display: inline-block;
+            margin: 2px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .no-results {
+            text-align: center;
+            padding: 40px;
+            color: #656d76;
+        }
+        .file-row td:first-child {
+            font-weight: 600;
+            background-color: #f6f8fa;
+        }
+        .ws-indicator {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 500;
+            display: none;
+            z-index: 1000;
+        }
+        .ws-indicator.connected {
+            background-color: #d4f7dc;
+            color: #1f883d;
+            border: 1px solid #a2eeaf;
+            display: block;
+        }
+        .ws-indicator.disconnected {
+            background-color: #ffeaa7;
+            color: #9a6700;
+            border: 1px solid #d4ac00;
+            display: block;
+        }
+        .ws-indicator.error {
+            background-color: #ffedef;
+            color: #d1242f;
+            border: 1px solid #fd2d37;
+            display: block;
+        }
+    </style>
+</head>
+<body hx-ext="ws" ws-connect="/ws/updates/summary:{{.Number}}">
+    <div id="ws-indicator" class="ws-indicator">Connecting...</div>
+    <div class="container" 
+         hx-get="/pulls/{{.Number}}?partial=true"
+         hx-trigger="load, ws-refresh from:body"
+         hx-swap="innerHTML">
+        <!-- Header -->
+        <div id="summary-header">
+            <div class="header">
+                <div class="header-content">
+                    <h1>PR #{{.Number}}: {{.Title}}</h1>
+                    <div class="meta">
+                        <strong>Repository:</strong> {{.Owner}}/{{.Repo}}<br>
+                        <strong>Author:</strong> {{.Author}}<br>
+                        <strong>Base:</strong> {{.BaseSHA}}<br>
+                        <strong>Head:</strong> {{.HeadSHA}}
+                    </div>
+                </div>
+                <a href="https://github.com/{{.Owner}}/{{.Repo}}/pull/{{.Number}}" target="_blank" class="github-link" title="View on GitHub">
+                    <svg class="github-icon" viewBox="0 0 16 16">
+                        <path d="M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 0 1.5 0V5A4 4 0 0 0 11 1h-1V.854a.25.25 0 0 1-.427-.177L7.177 3.073a.25.25 0 0 1 0 .354ZM3.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm0 9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm10.5 0a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Z"/>
+                    </svg>
+                </a>
+            </div>
+        </div>
+
+        <div class="content">
+            <!-- Stats section -->
+            <div id="summary-stats">
+                {{if eq (len .Files) 0}}
+                <div class="summary">
+                    <h2>Processing Status</h2>
+                    <p>This PR has not been processed yet or contains no YAML files. Processing happens automatically when a PR is opened or updated.</p>
+                </div>
+                {{else}}
+                <div class="summary">
+                    <h2>Processing Summary</h2>
+                    <p><strong>{{len .Files}}</strong> YAML file(s) processed.</p>
+                </div>
+                {{end}}
+            </div>
+            <!-- File list -->
+            <div id="file-list">
+                {{if eq (len .Files) 0}}
+                <div class="no-results">
+                    <h3>No Results Available</h3>
+                    <p>This PR has not been processed yet or contains no processable YAML files.</p>
+                </div>
+                {{else}}
+                <table id="file-table">
+                    <thead>
+                        <tr>
+                            <th>File</th>
+                            <th>Diffs</th>
+                            <th>Application</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{$pr := .}}
+                        {{range $k, $v := .Files}}
+                        {{if ne (len $v.Errors) 0}}
+                        <tr class="file-row">
+                            <td>{{$k}}</td>
+                            <td>-</td>
+                            <td>
+                                {{range $v.Errors}}
+                                <span class="app-error">{{.}}</span>
+                                {{end}}
+                            </td>
+                        </tr>
+                        {{else if eq (len $v.Apps) 0}}
+                        <tr class="file-row">
+                            <td>{{$k}}</td>
+                            <td>-</td>
+                            <td>No applications</td>
+                        </tr>
+                        {{else}}
+                        <tr class="file-row">
+                            <td rowspan="{{len $v.Apps}}">{{$k}}</td>
+                            {{range $name, $app := $v.Apps}}
+                            <td>{{$app.DiffStats.DiffCount}}</td>
+                            <td>
+                                <a href="/reports/{{$pr.Number}}/{{$pr.BaseSHA}}:{{$pr.HeadSHA}}:{{$k}}:{{$name}}" class="app-link">{{$name}}</a>
+                            </td>
+                        </tr>
+                        {{end}}
+                        {{end}}
+                        {{end}}
+                    </tbody>
+                </table>
+                {{end}}
+            </div>
+        </div>
+    </div>
+    <script>
+        // WebSocket connection status handlers
+        document.addEventListener('htmx:wsOpen', function() {
+            const indicator = document.getElementById('ws-indicator');
+            indicator.textContent = 'Connected';
+            indicator.className = 'ws-indicator connected';
+            setTimeout(() => indicator.style.display = 'none', 3000);
+        });
+        
+        document.addEventListener('htmx:wsError', function() {
+            const indicator = document.getElementById('ws-indicator');
+            indicator.textContent = 'Connection Error';
+            indicator.className = 'ws-indicator error';
+        });
+        
+        document.addEventListener('htmx:wsClose', function() {
+            const indicator = document.getElementById('ws-indicator');
+            indicator.textContent = 'Disconnected';
+            indicator.className = 'ws-indicator disconnected';
+        });
+        
+        // Trigger summary content refresh on WebSocket messages
+        document.addEventListener('htmx:wsAfterMessage', function(event) {
+            // Trigger the HTMX refresh for the summary content
+            htmx.trigger(document.body, 'ws-refresh');
+        });
+    </script>
+</body>
+</html>

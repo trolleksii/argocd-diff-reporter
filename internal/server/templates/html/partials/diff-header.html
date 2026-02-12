@@ -1,0 +1,7 @@
+<div class="diff-section">
+    <div class="diff-path" 
+         hx-on:click="this.parentElement.querySelector('.diff-content').classList.toggle('collapsed'); this.querySelector('.diff-toggle').classList.toggle('collapsed')">
+        <span>{{.Path}}</span>
+        <span class="diff-toggle">▼</span>
+    </div>
+    <div class="diff-content">

@@ -1,0 +1,15 @@
+{{range .}}
+<li>
+    <a href="/pulls/{{.Number}}" class="pr-item">
+        <div class="pr-status {{if eq .Status 1}}success{{else if eq .Status 0}}in-progress{{else}}error{{end}}"></div>
+        <div class="pr-info">
+            <span class="pr-number">PR #{{.Number}}</span>
+            <span class="pr-title">{{.Title}}</span>
+        </div>
+    </a>
+</li>
+{{else}}
+<li class="pr-item">
+    <div class="pr-info">No recent PRs processed</div>
+</li>
+{{end}}

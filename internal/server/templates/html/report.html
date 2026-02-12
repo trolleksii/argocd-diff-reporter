@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.AppName}}</title>
+    <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.6"></script>
+    <script src="https://cdn.jsdelivr.net/npm/htmx-ext-ws@2.0.2"></script>
+    <style>
+        body {
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 14px;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            background-color: #fafafa;
+            color: #333;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .header {
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid #eee;
+        }
+        .header h1 {
+            margin: 0;
+            color: #2c3e50;
+            font-size: 28px;
+        }
+        .header .meta {
+            color: #7f8c8d;
+            margin-top: 10px;
+        }
+        .diff-section {
+            margin-bottom: 30px;
+            border: 1px solid #e1e8ed;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        .diff-path {
+            background-color: #f8f9fa;
+            padding: 12px 16px;
+            font-weight: bold;
+            color: #495057;
+            border-bottom: 1px solid #e1e8ed;
+            cursor: pointer;
+            user-select: none;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .diff-path:hover {
+            background-color: #e9ecef;
+        }
+        .diff-toggle {
+            font-size: 16px;
+            transition: transform 0.2s;
+        }
+        .diff-toggle.collapsed {
+            transform: rotate(-90deg);
+        }
+        .diff-content {
+            padding: 16px;
+            transition: all 0.3s ease;
+        }
+        .diff-content.collapsed {
+            display: none;
+        }
+        .all-collapsed .diff-content {
+            display: none;
+        }
+        .all-collapsed .diff-toggle {
+            transform: rotate(-90deg);
+        }
+        .all-expanded .diff-content {
+            display: block;
+        }
+        .all-expanded .diff-toggle {
+            transform: rotate(0deg);
+        }
+        .diff-detail {
+            margin-bottom: 16px;
+        }
+        .diff-detail:last-child {
+            margin-bottom: 0;
+        }
+        .change-type {
+            font-weight: bold;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            display: inline-block;
+            margin-bottom: 8px;
+        }
+        .change-type.addition {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .change-type.removal {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .change-type.modification {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+        .change-type.orderchange {
+            background-color: #d1ecf1;
+            color: #0c5460;
+        }
+        .yaml-content {
+            background-color: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 4px;
+            padding: 12px;
+            margin-top: 8px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+        }
+        .yaml-addition {
+            background-color: #e6ffed;
+            border-left: 4px solid #28a745;
+        }
+        .yaml-removal {
+            background-color: #ffeef0;
+            border-left: 4px solid #dc3545;
+        }
+        .yaml-modification {
+            background-color: #fff8e1;
+            border-left: 4px solid #ffc107;
+        }
+        .diff-modification {
+            margin-top: 8px;
+        }
+        .diff-modification .yaml-content {
+            margin-top: 0;
+            margin-bottom: 4px;
+        }
+        .diff-modification .yaml-content:last-child {
+            margin-bottom: 0;
+        }
+        .diff-summary {
+            background-color: #e9ecef;
+            padding: 16px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+        .diff-summary h2 {
+            margin: 0 0 10px 0;
+            color: #495057;
+        }
+        .diff-controls {
+            margin-bottom: 20px;
+            text-align: right;
+        }
+        .diff-controls button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-left: 8px;
+        }
+        .diff-controls button:hover {
+            background-color: #0056b3;
+        }
+        .no-diffs {
+            text-align: center;
+            padding: 40px;
+            color: #6c757d;
+        }
+        .footer {
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #eee;
+            text-align: center;
+            color: #6c757d;
+            font-size: 12px;
+        }
+        .update-indicator {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background-color: #28a745;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 4px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            z-index: 1000;
+            font-size: 14px;
+            display: none;
+        }
+        .update-indicator.show {
+            display: block;
+        }
+        .update-indicator.updating {
+            background-color: #ffc107;
+            color: #212529;
+        }
+        .htmx-indicator {
+            opacity: 0;
+            transition: opacity 300ms ease-in;
+        }
+        .htmx-request .htmx-indicator {
+            opacity: 1;
+        }
+    </style>
+    <script>
+        function handleReportUpdate(event) {
+            const reportId = JSON.parse(event.detail.message);
+            window.location.href = `/reports/{{.PRNumber}}/${reportId}`;
+        }
+        document.addEventListener('htmx:wsOpen', function() {
+            const indicator = document.getElementById('update-indicator');
+            indicator.textContent = 'Connected - monitoring for updates...';
+            indicator.className = 'update-indicator show';
+            setTimeout(() => indicator.className = 'update-indicator', 3000);
+        });
+        document.addEventListener('htmx:wsError', function() {
+            const indicator = document.getElementById('update-indicator');
+            indicator.textContent = 'Connection error';
+            indicator.className = 'update-indicator show updating';
+        });
+        document.addEventListener('htmx:wsClose', function() {
+            const indicator = document.getElementById('update-indicator');
+            indicator.textContent = 'Connection closed';
+            indicator.className = 'update-indicator show updating';
+        });
+        document.addEventListener('htmx:wsAfterMessage', function(event) {
+            handleReportUpdate(event);
+        });
+        
+        // Time indicator functionality
+        function updateTimeIndicator() {
+            const pageLoadTime = Date.now();
+            const indicator = document.getElementById('time-indicator');
+            
+            function formatTimeAgo(seconds) {
+                if (seconds < 60) {
+                    return seconds === 1 ? '1 second ago' : `${seconds} seconds ago`;
+                } else if (seconds < 3600) {
+                    const minutes = Math.floor(seconds / 60);
+                    return minutes === 1 ? '1 minute ago' : `${minutes} minutes ago`;
+                } else {
+                    const hours = Math.floor(seconds / 3600);
+                    return hours === 1 ? '1 hour ago' : `${hours} hours ago`;
+                }
+            }
+            
+            function updateDisplay() {
+                const now = Date.now();
+                const secondsElapsed = Math.floor((now - pageLoadTime) / 1000);
+                
+                if (secondsElapsed === 0) {
+                    indicator.textContent = 'just now';
+                } else {
+                    indicator.textContent = formatTimeAgo(secondsElapsed);
+                }
+            }
+            
+            updateDisplay();
+            setInterval(updateDisplay, 1000);
+        }
+        
+        // Start time indicator when page loads
+        document.addEventListener('DOMContentLoaded', updateTimeIndicator);
+    </script>
+</head>
+<body>
+    <div id="update-indicator" class="update-indicator htmx-indicator">Connecting to live updates...</div>
+    <div class="container" hx-ext="ws" ws-connect="/ws/updates/{{.PRNumber}}:{{.File}}:{{.AppName}}">
+        <div class="header">
+            <h1>{{.AppName}}</h1>
+            <div class="meta">
+                <strong>BaseSHA:</strong> {{.BaseSHA}} <br>
+                <strong>HeadSHA:</strong> {{.HeadSHA}} <br>
+                <strong>Generated:</strong> <span id="time-indicator">now</span>
+            </div>
+        </div>
+        <div class="diff-summary">
+            <h2>Summary</h2>
+            <p><strong>{{.DiffCount}}</strong> difference(s) found:</p>
+            <ul>
+                {{if .AdditionCount}}<li><span class="change-type addition">+</span> {{.AdditionCount}} addition(s)</li>{{end}}
+                {{if .RemovalCount}}<li><span class="change-type removal">-</span> {{.RemovalCount}} removal(s)</li>{{end}}
+                {{if .ModificationCount}}<li><span class="change-type modification">±</span> {{.ModificationCount}} modification(s)</li>{{end}}
+                {{if .OrderChangeCount}}<li><span class="change-type orderchange">⇆</span> {{.OrderChangeCount}} order change(s)</li>{{end}}
+            </ul>
+        </div>
+        {{if eq .DiffCount 0}}
+        <div class="no-diffs">
+            <h3>No differences found</h3>
+            <p>The compared files are identical.</p>
+        </div>
+        {{else}}
+        <div class="diff-controls">
+            <button hx-on:click="document.querySelector('.container').className = 'container all-expanded'">Expand All</button>
+            <button hx-on:click="document.querySelector('.container').className = 'container all-collapsed'">Collapse All</button>
+        </div>
+        {{.Diffs}}
+        {{end}}
+        <div class="footer">
+            Generated by dyff HTML reporter
+        </div>
+    </div>
+</body>
+</html>
