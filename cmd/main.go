@@ -9,6 +9,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/trolleksii/argocd-diff-reporter/internal/bus"
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 	"github.com/trolleksii/argocd-diff-reporter/internal/logging"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
@@ -46,12 +47,15 @@ func main() {
 
 	// feels excessive
 	js := nats.GetJetstream(rg)
-	kv := nats.GetKVStore(rg)
-	obj := nats.GetObjectStore(rg)
-	st := store.NewStore(kv, obj)
+	bus := bus.NewBus(js)
+
+	st := store.NewStore(
+		nats.GetKVStore(rg),
+		nats.GetObjectStore(rg),
+	)
 
 	httpSvc := server.NewServer(cfg.Server, logger,
-		webhook.Route(cfg.Webhook, logger, js),
+		webhook.Route(cfg.Webhook, logger, bus),
 		ui.Route(logger, st),
 	)
 	services := []registry.Service{

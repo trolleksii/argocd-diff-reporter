@@ -7,30 +7,29 @@ import (
 	"strconv"
 
 	"github.com/google/go-github/v82/github"
-	"github.com/nats-io/nats.go"
-	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/trolleksii/argocd-diff-reporter/internal/bus"
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server"
 )
 
 type WebhookHandler struct {
 	cfg config.WebhookConfig
-	js  jetstream.JetStream
+	bus *bus.Bus
 	log *slog.Logger
 }
 
-func Route(cfg config.WebhookConfig, log *slog.Logger, js jetstream.JetStream) server.Route {
+func Route(cfg config.WebhookConfig, log *slog.Logger, b *bus.Bus) server.Route {
 	return func(mux *http.ServeMux) {
-		mux.Handle("/webhook", NewWebhookHandler(cfg, log, js))
+		mux.Handle("/webhook", NewWebhookHandler(cfg, log, b))
 	}
 }
 
-func NewWebhookHandler(cfg config.WebhookConfig, log *slog.Logger, js jetstream.JetStream) *WebhookHandler {
+func NewWebhookHandler(cfg config.WebhookConfig, log *slog.Logger, b *bus.Bus) *WebhookHandler {
 	return &WebhookHandler{
 		cfg: cfg,
 		log: log.With("module", "server", "handler", "webhook"),
-		js:  js,
+		bus: b,
 	}
 }
 
@@ -55,31 +54,26 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		switch action {
 		case "opened", "synchronize", "reopened", "closed":
-			h.log.Debug("new request enqued")
 			pr := event.GetPullRequest()
-			prNum := pr.GetNumber()
-			branch := pr.GetHead().GetRef()
-			baseSha := pr.GetBase().GetSHA()
-			headSha := pr.GetHead().GetSHA()
-			eventId := fmt.Sprintf("%d.%s.%s", prNum, baseSha, headSha)
-			_, err = h.js.PublishMsg(r.Context(), &nats.Msg{
-				Subject: fmt.Sprintf("tasks.pr.%d", prNum),
-				Header: nats.Header{
-					"eventId":    []string{eventId},
-					"action":     []string{action},
-					"repository": []string{repoName},
-					"owner":      []string{owner},
-					"branch":     []string{branch},
-					"prNum":      []string{strconv.Itoa(prNum)},
-					"title":      []string{pr.GetTitle()},
-					"author":     []string{pr.GetUser().GetLogin()},
-					"baseSha":    []string{baseSha},
-					"headSha":    []string{headSha},
+			prNum := strconv.Itoa(pr.GetNumber())
+			err = h.bus.Publish(r.Context(), bus.Message{
+				Subject: "pr.changed",
+				Headers: map[string]string{
+					"action":     action,
+					"repository": repoName,
+					"owner":      owner,
+					"branch":     pr.GetHead().GetRef(),
+					"prNum":      prNum
+					"title":      pr.GetTitle(),
+					"author":     pr.GetUser().GetLogin(),
+					"baseSha":    pr.GetBase().GetSHA(),
+					"headSha":    pr.GetHead().GetSHA(),
 				},
 			})
 			if err != nil {
 				h.log.Error("Failed to publish PR event", "error", err)
 			}
+			h.log.Debug("new request enqued", "pr", prNum)
 		}
 	}
 }
