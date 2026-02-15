@@ -2,19 +2,19 @@ package templates
 
 import (
 	"embed"
-	"html/template"
 	"fmt"
+	"html/template"
 )
 
 //go:embed all:html
 var templateFS embed.FS
 
 var templates map[string]string = map[string]string{
-	"index": "html/index.html",
-	"latestprs": "html/latestprs.html",
-	"summary": "html/summary.html",
-	"table": "html/partials/table.html",
-	"report": "html/partials/report.html",
+	"index":       "html/index.html",
+	"latestprs":   "html/latestprs.html",
+	"summary":     "html/summary.html",
+	"table":       "html/partials/table.html",
+	"report":      "html/partials/report.html",
 	"diff-header": "html/partials/diff-header.html",
 	"diff-footer": "html/partials/diff-footer.html",
 	"diff-detail": "html/partials/diff-detail.html",

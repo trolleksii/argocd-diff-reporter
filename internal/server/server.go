@@ -7,8 +7,8 @@ import (
 
 	"log/slog"
 
-	"github.com/trolleksii/argocd-diff-reporter/internal/registry"
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
+	"github.com/trolleksii/argocd-diff-reporter/internal/registry"
 )
 
 type Server struct {
@@ -18,8 +18,14 @@ type Server struct {
 	registry   *registry.Registry
 }
 
-func NewServer(cfg config.ServerConfig, log *slog.Logger, registry *registry.Registry) *Server {
+type Route func(*http.ServeMux)
+
+func NewServer(cfg config.ServerConfig, log *slog.Logger, routes ...Route) *Server {
 	mux := http.NewServeMux()
+
+	for _, r := range routes {
+		r(mux)
+	}
 
 	return &Server{
 		log: log.With("component", "server"),
@@ -31,14 +37,6 @@ func NewServer(cfg config.ServerConfig, log *slog.Logger, registry *registry.Reg
 			IdleTimeout:  60 * time.Second,
 		},
 		mux: mux,
-		registry: registry,
-	}
-}
-
-func (s *Server) RegisterHandlers(handlers map[string]http.Handler) {
-	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
-	for pattern, handler := range handlers {
-		s.mux.Handle(pattern, handler)
 	}
 }
 

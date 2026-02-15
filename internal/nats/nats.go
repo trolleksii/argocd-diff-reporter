@@ -14,7 +14,7 @@ import (
 	"github.com/trolleksii/argocd-diff-reporter/internal/registry"
 )
 
-func New(cfg config.NatsConfig, ctx context.Context, log *slog.Logger, r *modules.Registry) (modules.Service, error) {
+func New(cfg config.NatsConfig, ctx context.Context, log *slog.Logger, r *registry.Registry) (registry.Service, error) {
 	var nc *nats.Conn
 	var srv *server.Server
 
@@ -86,7 +86,7 @@ func New(cfg config.NatsConfig, ctx context.Context, log *slog.Logger, r *module
 	}
 	r.Set("objectstore", objs)
 
-	return &Nats{nc: nc, srv: srv, log: log.With("component", "nats"), closedCh: closedCh}, nil
+	return &Nats{nc: nc, srv: srv, JS: js, KV: kvStore, Obj: objs, log: log.With("component", "nats"), closedCh: closedCh}, nil
 }
 
 type Nats struct {
@@ -107,4 +107,19 @@ func (n *Nats) Run(ctx context.Context) error {
 		n.log.Debug("nats: server shutdown complete")
 	}
 	return nil
+}
+
+func GetJetstream(r *registry.Registry) jetstream.JetStream {
+	js, _ := registry.Get[jetstream.JetStream](r, "jetstream")
+	return js
+}
+
+func GetKVStore(r *registry.Registry) jetstream.KeyValue {
+	kv, _ := registry.Get[jetstream.KeyValue](r, "kvstore")
+	return kv
+}
+
+func GetObjectStore(r *registry.Registry) jetstream.ObjectStore {
+	obj, _ := registry.Get[jetstream.ObjectStore](r, "objectstore")
+	return obj
 }

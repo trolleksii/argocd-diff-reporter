@@ -11,7 +11,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
-	"github.com/trolleksii/argocd-diff-reporter/internal/registry"
+	"github.com/trolleksii/argocd-diff-reporter/internal/server"
 )
 
 type WebhookHandler struct {
@@ -20,16 +20,18 @@ type WebhookHandler struct {
 	log *slog.Logger
 }
 
-func NewWebhookHandler(cfg config.WebhookConfig, log *slog.Logger, r *registry.Registry) (*WebhookHandler, error) {
-	js, err := registry.Get[jetstream.JetStream](r, "jetstream")
-	if err != nil {
-		return nil, err
+func Route(cfg config.WebhookConfig, log *slog.Logger, js jetstream.JetStream) server.Route {
+	return func(mux *http.ServeMux) {
+		mux.Handle("/webhook", NewWebhookHandler(cfg, log, js))
 	}
+}
+
+func NewWebhookHandler(cfg config.WebhookConfig, log *slog.Logger, js jetstream.JetStream) *WebhookHandler {
 	return &WebhookHandler{
 		cfg: cfg,
 		log: log.With("module", "server", "handler", "webhook"),
 		js:  js,
-	}, nil
+	}
 }
 
 func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

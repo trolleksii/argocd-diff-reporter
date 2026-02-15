@@ -8,11 +8,12 @@ import (
 )
 
 type Config struct {
-	Target string          `yaml:"targetModule"`
-	Nats   NatsConfig      `yaml:"nats"`
-	Server ServerConfig    `yaml:"server"`
-	Github GithubAppConfig `yaml:"github"`
-	Log    LogConfig       `yaml:"log"`
+	Target  string          `yaml:"targetModule"`
+	Nats    NatsConfig      `yaml:"nats"`
+	Server  ServerConfig    `yaml:"server"`
+	Github  GithubAppConfig `yaml:"github"`
+	Log     LogConfig       `yaml:"log"`
+	Webhook WebhookConfig   `yaml:"webhook"`
 }
 
 type ServerConfig struct {

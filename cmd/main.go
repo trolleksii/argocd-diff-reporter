@@ -11,9 +11,12 @@ import (
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 	"github.com/trolleksii/argocd-diff-reporter/internal/logging"
-	"github.com/trolleksii/argocd-diff-reporter/internal/registry"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
+	"github.com/trolleksii/argocd-diff-reporter/internal/registry"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server"
+	"github.com/trolleksii/argocd-diff-reporter/internal/server/ui"
+	"github.com/trolleksii/argocd-diff-reporter/internal/server/webhook"
+	"github.com/trolleksii/argocd-diff-reporter/internal/store"
 )
 
 func main() {
@@ -30,32 +33,30 @@ func main() {
 	}
 	slog.SetDefault(logger)
 
-	registry := registry.NewRegistry()
+	rg := registry.NewRegistry()
 	ctx, cancel := signal.NotifyContext(context.Background(),
 		syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	natsSvc, err := nats.New(cfg.Nats, ctx, logger, registry)
+	natsSvc, err := nats.New(cfg.Nats, ctx, logger, rg)
 	if err != nil {
 		logger.Error("failed to start NATS", "error", err)
 		os.Exit(1)
 	}
 
-	services := []registry.Service{natsSvc}
-	switch cfg.Target {
-	case "all":
-		services = append(services,
-			server.NewServer(cfg.Server, logger, registry),
-		)
-	case "server":
-		services = append(services,
-			server.NewServer(cfg.Server, logger, registry),
-		)
-	case "repoworker":
-		// TBD
-	default:
-		logger.Error("unknown module", "target", cfg.Target)
-		os.Exit(1)
+	// feels excessive
+	js := nats.GetJetstream(rg)
+	kv := nats.GetKVStore(rg)
+	obj := nats.GetObjectStore(rg)
+	st := store.NewStore(kv, obj)
+
+	httpSvc := server.NewServer(cfg.Server, logger,
+		webhook.Route(cfg.Webhook, logger, js),
+		ui.Route(logger, st),
+	)
+	services := []registry.Service{
+		natsSvc,
+		httpSvc,
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)

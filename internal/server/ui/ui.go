@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/trolleksii/argocd-diff-reporter/internal/server"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server/templates"
 	"github.com/trolleksii/argocd-diff-reporter/internal/store"
 )
@@ -18,11 +19,20 @@ type UIHandler struct {
 	store           *store.Store
 }
 
-func NewUIHandler(log slog.Logger) *UIHandler {
+func NewUIHandler(log *slog.Logger, store *store.Store) *UIHandler {
 	return &UIHandler{
 		log:             log.With("module", "server", "handler", "ui"),
-		templateManager: templates.NewManager(), // TODO: proper injection
-		store:           store.NewStore(), // TODO: proper injection
+		templateManager: templates.NewManager(),
+		store:           store,
+	}
+}
+
+func Route(log *slog.Logger, store *store.Store) server.Route {
+	uh := NewUIHandler(log, store)
+	return func(mux *http.ServeMux) {
+		mux.HandleFunc("GET /{$}", uh.ServeIndex)
+		mux.HandleFunc("GET /pulls/{pr}", uh.ServeSummary)
+		mux.HandleFunc("GET /reports/{pr}/{id...}", uh.ServeReport)
 	}
 }
 
@@ -89,7 +99,7 @@ func (h *UIHandler) ServeReport(w http.ResponseWriter, r *http.Request) {
 	// Get the report from storage
 	report, err := h.store.GetReport(r.Context(), id)
 	if err != nil {
-		h.log.Error("report not found", "id", id, )
+		h.log.Error("report not found", "id", id)
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
