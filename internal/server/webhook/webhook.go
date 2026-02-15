@@ -78,7 +78,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// parseWebhookRequest takes a request and a webhook config and returns a github event in no errors occured
+// parseWebhookRequest takes a request and a webhook config and returns a github event if no errors occured
 func parseWebhookRequest(r *http.Request, secret string) (any, error) {
 	payload, err := github.ValidatePayload(r, []byte(secret))
 	if err != nil {
