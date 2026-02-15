@@ -49,6 +49,14 @@ func Subscribe(js jetstream.JetStream, log *slog.Logger, stream string, name str
 	}
 }
 
+type Handler interface {
+	Handle(ctx context.Context, msg jetstream.Msg)
+}
+
+type HandlerFunc func(ctx context.Context, msg jetstream.Msg)
+
+func (f HandlerFunc) Handle(ctx context.Context, msg jetstream.Msg) { f(ctx, msg) }
+
 type Subscriber struct {
 	js      jetstream.JetStream
 	log     *slog.Logger
@@ -81,4 +89,15 @@ func (s *Subscriber) Run(ctx context.Context) error {
 	cc.Stop()
 	s.log.Info("stopped")
 	return nil
+}
+
+func EnsureStream(ctx context.Context, js jetstream.JetStream, name string, subjects []string) error {
+	_, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
+		Name:     name,
+		Subjects: subjects,
+	})
+	if err != nil {
+		return fmt.Errorf("bus: create stream %s: %w", name, err)
+	}
+	return err
 }
