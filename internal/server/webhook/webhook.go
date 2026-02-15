@@ -63,7 +63,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					"repository": repoName,
 					"owner":      owner,
 					"branch":     pr.GetHead().GetRef(),
-					"prNum":      prNum
+					"prNum":      prNum,
 					"title":      pr.GetTitle(),
 					"author":     pr.GetUser().GetLogin(),
 					"baseSha":    pr.GetBase().GetSHA(),
