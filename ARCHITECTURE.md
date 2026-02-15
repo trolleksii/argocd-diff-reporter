@@ -80,6 +80,34 @@ Diff workers generate and store Diff Reports.
 3. **Diff Worker** generates report → stores in NATS KV (compressed)
 4. **UI** reads from KV, displays real-time via WebSocket
 
+## Orchestration
+
+ Webhook        Fetcher          Snapshotter                    Argo                                HELM                               Coordinator                     Differ                Coordinator
+pr.changed -> pr.enriched -> repo.snapshot.complete -> appset.render.complete -> helm.fetch.complete -> helm.render.complete--> report.preparation.complete -> report.generate.complete---> pr.processed
+                        \                                                    \-> helm.fetch.complete -> helm.render.complete-/                                                           /
+                         \-> repo.snapshot.complete -> appset.render.complete -> helm.fetch.complete -> helm.render.complete--> report.preparation.complete -> report.generate.complete-/
+                                                                             \-> helm.fetch.complete -> helm.render.complete-/
+
+Stages.
+1. Raw event data; filtration according to config. 
+   Payload: initial PR info
+2. Fetching commits, finding from_files and to_files. Appending PR info with it.
+   Payload: SHA, files list, PR Info.
+3. Taking a snapshot of files at a sha.
+   Payload: PR info, sha, repo location on disk
+4. Loading files one by one; rendering applicationsets(or kustomize in the future).
+   Payload: PR info, helm release info.
+5. Fetching helm chart over git or https.
+   Payload: PR info, chart location, helm release info
+6. Rendering helm chart.
+   Payload: PR info, manifests location in object store
+7. Waiting until both base and sha helm renders are done
+   Payload: PR info, location of manifests for base and head
+8. Rendering of the diff report.
+   Payload: PR info, location of the repord in object store
+9. Notify stakeholdersi; consolidate PR info in the kv store 
+
+
 ## Data Storage
 
 TBD
