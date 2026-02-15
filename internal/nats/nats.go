@@ -86,7 +86,7 @@ func New(cfg config.NatsConfig, ctx context.Context, log *slog.Logger, r *regist
 	}
 	r.Set("objectstore", objs)
 
-	return &Nats{nc: nc, srv: srv, JS: js, KV: kvStore, Obj: objs, log: log.With("component", "nats"), closedCh: closedCh}, nil
+	return &Nats{nc: nc, srv: srv, log: log.With("component", "nats"), closedCh: closedCh}, nil
 }
 
 type Nats struct {
