@@ -47,7 +47,7 @@ func main() {
 
 	// feels excessive
 	js := nats.GetJetstream(rg)
-	bus := bus.NewBus(js)
+	b := bus.NewPublisher(js)
 
 	st := store.NewStore(
 		nats.GetKVStore(rg),
@@ -55,12 +55,21 @@ func main() {
 	)
 
 	httpSvc := server.NewServer(cfg.Server, logger,
-		webhook.Route(cfg.Webhook, logger, bus),
+		webhook.Route(cfg.Webhook, logger, b),
 		ui.Route(logger, st),
 	)
+
+	if err := bus.EnsureStream(ctx, js, "pr-diffs", []string{
+		"pr.>", "repo.>", "appset.>", "helm.>", "report.>",
+	}); err != nil {
+		logger.Error("failed to ensure stream", "error", err)
+		os.Exit(1)
+	}
+
 	services := []registry.Service{
 		natsSvc,
 		httpSvc,
+		// workers here
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)

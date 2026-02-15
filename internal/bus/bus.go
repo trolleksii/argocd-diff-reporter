@@ -7,7 +7,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-func (b *Bus) Publish(ctx context.Context, msg Message) error {
+func (b *Publisher) Publish(ctx context.Context, msg Message) error {
 	header := nats.Header{}
 	for k, v := range msg.Headers {
 		header[k] = []string{v}
@@ -24,7 +24,7 @@ func (b *Bus) Publish(ctx context.Context, msg Message) error {
 	return err
 }
 
-type Bus struct {
+type Publisher struct {
 	js jetstream.JetStream
 }
 
@@ -34,6 +34,6 @@ type Message struct {
 	Data    []byte
 }
 
-func NewBus(js jetstream.JetStream) *Bus {
-	return &Bus{js: js}
+func NewPublisher(js jetstream.JetStream) *Publisher {
+	return &Publisher{js: js}
 }
