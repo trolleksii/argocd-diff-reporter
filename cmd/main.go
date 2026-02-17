@@ -11,6 +11,7 @@ import (
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/bus"
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
+	"github.com/trolleksii/argocd-diff-reporter/internal/gitrepomanager"
 	"github.com/trolleksii/argocd-diff-reporter/internal/logging"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/registry"
@@ -66,10 +67,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	grm := gitrepomanager.NewGitRepoManager(cfg.Workers.GitWorker)
+
 	services := []registry.Service{
 		natsSvc,
 		httpSvc,
-		// workers here
+		grm,
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)

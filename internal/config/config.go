@@ -14,6 +14,7 @@ type Config struct {
 	Github  GithubAppConfig `yaml:"github"`
 	Log     LogConfig       `yaml:"log"`
 	Webhook WebhookConfig   `yaml:"webhook"`
+	Workers WorkersConfig   `yaml:"workers"`
 }
 
 type ServerConfig struct {
@@ -29,6 +30,15 @@ type GitRepoFilter struct {
 	Owner     string   `yaml:"owner"`
 	Repo      string   `yaml:"repo"`
 	FileGlobs []string `yaml:"fileGlobs"`
+}
+
+type WorkersConfig struct {
+	GitWorker GitWorkerConfig `yaml:"gitWorker"`
+}
+
+type GitWorkerConfig struct {
+	CloneBaseDir string
+	SnapshotBaseDir string
 }
 
 type NatsConfig struct {
