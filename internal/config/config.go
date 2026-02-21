@@ -3,8 +3,10 @@ package config
 import (
 	"fmt"
 	"os"
-	"sigs.k8s.io/yaml"
 	"strconv"
+	"time"
+
+	"sigs.k8s.io/yaml"
 )
 
 type Config struct {
@@ -37,8 +39,10 @@ type WorkersConfig struct {
 }
 
 type GitWorkerConfig struct {
-	CloneBaseDir string
-	SnapshotBaseDir string
+	CloneBaseDir    string        `yaml:"cloneBaseDir"`
+	SnapshotBaseDir string        `yaml:"snapshotBaseDir"`
+	GCInterval      time.Duration `yaml:"gcInterval"`
+	MaxIdleTime     time.Duration `yaml:"maxIdleTime"`
 }
 
 type NatsConfig struct {
@@ -70,6 +74,14 @@ func Load(path string) (*Config, error) {
 		Target: "all",
 		Log:    LogConfig{Level: "info", Format: "text"},
 		Server: ServerConfig{Addr: "0.0.0.0:8000"},
+		Workers: WorkersConfig{
+			GitWorker: GitWorkerConfig{
+				CloneBaseDir: "repositories",
+				SnapshotBaseDir: "snapshots",
+				GCInterval: 5 * time.Minute,
+				MaxIdleTime: 10 * time.Minute,
+			},
+		},
 	}
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
