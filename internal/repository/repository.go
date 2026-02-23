@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -30,129 +29,40 @@ type Repository struct {
 	queue        chan request
 }
 
-type request struct {
-	Kind     requestKind
-	Snapshot snapshotRequest
-	Fetch    fetchRequest
-	Result   chan Result
-}
-
-type requestKind int
-
-const (
-	SNAPSHOT_REQUEST requestKind = iota
-	FETCH_REQUEST    
-)
-
-type snapshotRequest struct {
-	SHA       string
-	Directory string
-	Files     []string
-}
-
-type fetchRequest struct {
-	Base, Head string
-}
-
-type Result struct {
-	SnapshotDir string
-	Changes     []Change
-	Error       error
-}
-
+// Change represents a file change between two commits.
 type Change struct {
 	From string
 	To   string
 }
 
-func (r *Repository) EnqueueFetchRequest(base, head string) chan Result {
-	out := make(chan Result, 1)
-	r.queue <- request{
-		Kind: FETCH_REQUEST,
-		Fetch: fetchRequest{
-			Base: base,
-			Head: head,
-		},
-		Result: out,
-	}
-	return out
+type requestKind int
+
+const (
+	kindSnapshot requestKind = iota
+	kindNameDiff
+)
+
+type snapshotRequest struct {
+	ref       string
+	directory string
+	files     []string
 }
 
-func (r *Repository) EnqueueSnapshotRequest(sha, dir string, files []string) chan Result {
-	out := make(chan Result, 1)
-	r.queue <- request{
-		Kind: SNAPSHOT_REQUEST,
-		Snapshot: snapshotRequest{
-			SHA:       sha,
-			Files:     files,
-			Directory: dir,
-		},
-		Result: out,
-	}
-	return out
+type diffRequest struct {
+	base, head string
 }
 
-func validateFetchRequest(req fetchRequest) error {
-	if req.Base == "" || req.Head == "" {
-		return errors.New("invalid fetch request: both base and head sha must be set")
-	}
-	return nil
+type result struct {
+	snapshotDir string
+	changes     []Change
+	error       error
 }
 
-func validateSnapshotRequest(req snapshotRequest) error {
-	if req.SHA == "" {
-		return errors.New("invalid snapshot request: commit sha is not set")
-	}
-	if req.Directory != "" && len(req.Files) != 0 {
-		return errors.New("invalid snapshot request: files and directory snapshots are mutually exclusive")
-	}
-	if req.Directory == "" && len(req.Files) == 0 {
-		return errors.New("invalid snapshot request: neither directory or files were set")
-	}
-	return nil
-}
-
-func (r *Repository) startQueuePoller(ctx context.Context) {
-	for {
-		select {
-		case req := <-r.queue:
-			switch req.Kind {
-			case FETCH_REQUEST:
-				if err := validateFetchRequest(req.Fetch); err != nil {
-					r.log.Error("invalid fetch request", "error", err)
-					req.Result <- Result{Error: err}
-					close(req.Result)
-					continue
-				}
-				changes, err := r.ListChangedFiles(req.Fetch.Base, req.Fetch.Head)
-				if err != nil {
-					r.log.Error("failed to pre-fetch branch", "error", err)
-				}
-				req.Result <- Result{
-					Changes: changes,
-					Error:   err,
-				}
-				close(req.Result)
-			case SNAPSHOT_REQUEST:
-				if err := validateSnapshotRequest(req.Snapshot); err != nil {
-					r.log.Error("invalid snapshot request", "error", err)
-					req.Result <- Result{Error: err}
-					close(req.Result)
-					continue
-				}
-				snapshotDir, err := r.GetOrCreateSnapshot(req.Snapshot.SHA, req.Snapshot.Directory, req.Snapshot.Files)
-				req.Result <- Result{
-					SnapshotDir: snapshotDir,
-					Error:       err,
-				}
-				close(req.Result)
-			default:
-				panic("unknown git repository request kind")
-			}
-		case <-ctx.Done():
-			return
-		}
-	}
+type request struct {
+	kind     requestKind
+	snapshot snapshotRequest
+	diff     diffRequest
+	result   chan result
 }
 
 // NewRepository creates a new Repository, reusing a local clone if one already exists.
@@ -199,8 +109,98 @@ func NewRepository(ctx context.Context, url, cloneRootDir, snapshotsRootDir stri
 	return r, nil
 }
 
+func (r *Repository) startQueuePoller(ctx context.Context) {
+	for {
+		select {
+		case req := <-r.queue:
+			switch req.kind {
+			case kindNameDiff:
+				changes, err := r.fetchAndListChangedFiles(req.diff.base, req.diff.head) 
+				if err != nil {
+					r.log.Error("failed to list changed files", "error", err)
+				}
+				req.result <- result{changes: changes, error: err}
+				close(req.result)
+			case kindSnapshot:
+				dir, err := r.getOrCreateSnapshot(req.snapshot.ref, req.snapshot.directory, req.snapshot.files)
+				if err != nil {
+					r.log.Error("failed to create snapshot", "error", err)
+				}
+				req.result <- result{snapshotDir: dir, error: err}
+				close(req.result)
+			default:
+				panic("unknown request kind")
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
+}
 
+// ListChangedFiles returns the files that changed between base and head commits.
+// Requests are serialized through the internal queue to preserve order.
 func (r *Repository) ListChangedFiles(base, head string) ([]Change, error) {
+	if base == "" || head == "" {
+		return nil, fmt.Errorf("both base and head sha must be set")
+	}
+	out := make(chan result, 1)
+	r.queue <- request{
+		kind:   kindNameDiff,
+		diff:   diffRequest{base: base, head: head},
+		result: out,
+	}
+	res := <-out
+	return res.changes, res.error
+}
+
+// GetOrCreateSnapshot returns a local directory containing a snapshot of the
+// given ref. Checks for a cached snapshot before going through the queue.
+// repoDir and files are mutually exclusive: set one or the other.
+func (r *Repository) GetOrCreateSnapshot(ref, repoDir string, files []string) (string, error) {
+	if ref == "" {
+		return "", fmt.Errorf("ref must be set")
+	}
+	if repoDir != "" && len(files) != 0 {
+		return "", fmt.Errorf("repoDir and files are mutually exclusive")
+	}
+	if repoDir == "" && len(files) == 0 {
+		return "", fmt.Errorf("either repoDir or files must be set")
+	}
+
+	// Fast path: return immediately if snapshot already exists on disk.
+	if dir := r.computeSnapshotDir(ref, repoDir, files); r.snapshotExists(dir) {
+		return dir, nil
+	}
+
+	out := make(chan result, 1)
+	r.queue <- request{
+		kind:     kindSnapshot,
+		snapshot: snapshotRequest{ref: ref, directory: repoDir, files: files},
+		result:   out,
+	}
+	res := <-out
+	return res.snapshotDir, res.error
+}
+
+// computeSnapshotDir returns the deterministic local path for a snapshot.
+func (r *Repository) computeSnapshotDir(ref, repoDir string, files []string) string {
+	if repoDir != "" {
+		fingerprint := fmt.Sprintf("%x", xxhash.Sum64String(repoDir))
+		return filepath.Join(r.snapshotsDir, ref, fingerprint)
+	}
+	sorted := make([]string, len(files))
+	copy(sorted, files)
+	sort.Strings(sorted)
+	fingerprint := fmt.Sprintf("%x", xxhash.Sum64String(strings.Join(sorted, ",")))
+	return filepath.Join(r.snapshotsDir, ref, fingerprint)
+}
+
+func (r *Repository) snapshotExists(dir string) bool {
+	_, err := os.Stat(dir)
+	return err == nil
+}
+
+func (r *Repository) fetchAndListChangedFiles(base, head string) ([]Change, error) {
 	if err := r.fetchRefSpecs([]config.RefSpec{
 		config.RefSpec(fmt.Sprintf("%s:%s", base, base)),
 		config.RefSpec(fmt.Sprintf("%s:%s", head, head)),
@@ -209,42 +209,6 @@ func (r *Repository) ListChangedFiles(base, head string) ([]Change, error) {
 	}
 	return r.listChangedFiles(base, head)
 }
-
-func (r *Repository) GetOrCreateSnapshot(ref, repoDir string, files []string) (string, error) {
-	var snapshotDir string
-	var createFn func(hash plumbing.Hash) error
-
-	if repoDir != "" {
-		fingerprint := fmt.Sprintf("%x", xxhash.Sum64String(repoDir))
-		snapshotDir = filepath.Join(r.snapshotsDir, ref, fingerprint)
-		createFn = func(hash plumbing.Hash) error {
-			return r.createDirSnapshot(hash, repoDir, snapshotDir)
-		}
-	} else {
-		sort.Strings(files)
-		fingerprint := fmt.Sprintf("%x", xxhash.Sum64String(strings.Join(files, ",")))
-		snapshotDir = filepath.Join(r.snapshotsDir, ref, fingerprint)
-		createFn = func(hash plumbing.Hash) error {
-			return r.createFilesSnapshot(hash, files, snapshotDir)
-		}
-	}
-
-	if _, err := os.Stat(snapshotDir); err == nil {
-		return snapshotDir, nil
-	}
-
-	hash, err := r.fetchRef(ref)
-	if err != nil {
-		return "", fmt.Errorf("failed to fetch target revision: %w", err)
-	}
-
-	if err := createFn(*hash); err != nil {
-		os.RemoveAll(snapshotDir)
-		return "", fmt.Errorf("failed to create snapshot: %w", err)
-	}
-	return snapshotDir, nil
-}
-
 
 func (r *Repository) listChangedFiles(base, head string) ([]Change, error) {
 	var changes []Change
@@ -276,6 +240,28 @@ func (r *Repository) listChangedFiles(base, head string) ([]Change, error) {
 	}
 	return changes, nil
 }
+
+func (r *Repository) getOrCreateSnapshot(ref, repoDir string, files []string) (string, error) {
+	snapshotDir := r.computeSnapshotDir(ref, repoDir, files)
+
+	hash, err := r.fetchRef(ref)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch ref: %w", err)
+	}
+
+	if repoDir != "" {
+		err = r.createDirSnapshot(*hash, repoDir, snapshotDir)
+	} else {
+		err = r.createFilesSnapshot(*hash, files, snapshotDir)
+	}
+
+	if err != nil {
+		os.RemoveAll(snapshotDir)
+		return "", fmt.Errorf("failed to create snapshot: %w", err)
+	}
+	return snapshotDir, nil
+}
+
 
 func (r *Repository) fetchRefSpecs(refSpecs []config.RefSpec) error {
 	httpAuth, err := r.auth.GetBasicHTTPAuth()
@@ -352,7 +338,6 @@ func (r *Repository) fetchRef(ref string) (*plumbing.Hash, error) {
 	}
 	return r.repo.ResolveRevision(plumbing.Revision(ref))
 }
-
 
 func (r *Repository) createDirSnapshot(hash plumbing.Hash, repoDir, snapshotDir string) error {
 	commit, err := r.repo.CommitObject(hash)
