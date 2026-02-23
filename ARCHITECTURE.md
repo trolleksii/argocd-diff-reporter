@@ -1,6 +1,6 @@
 # Architecture
 
-This is a rough view on how system will look like.
+Work in progress.
 
 ## Overview
 
@@ -111,3 +111,63 @@ Stages.
 ## Data Storage
 
 TBD
+
+## Webhook events
+
+The Pull Request event(opened, synchronized) that reaches the webhook server already contains some of the information necessary for processing and reporting the result:
+  - Repository Owner and Name
+  - PR Number
+  - PR Title
+  - PR Author
+  - Branches(base and head)
+  - Commit SHAs(base and head)
+
+# Workers
+
+## Git worker
+
+Git worker has two responsibilities:
+
+1. Fetch commits from the remote. Find the list of files that were changed.
+   Lsten at `pr.changed`
+   Fan-out to `pr.enriched`.
+   Inputs:
+     - Base SHA
+     - Head SHA
+     - PR Metadata
+   Outputs:
+     - PR metadata
+     - Commit SHA
+     - Changed files
+
+2. Create snapshot of changed files.
+   Listen at `pr.enriched`
+   Publish to `repo.snapshot.complete`.
+   Inputs:
+     - PR metadata
+     - Commit SHA
+     - Changed files
+   Outputs:
+     - PR metadata
+     - Commit SHA
+     - Changed files
+     - Snapshot Location
+3. Create snapshot of a directory.
+   Listen for events at `appset.render.complete`
+   Publish to `helm.fetch.complete` (TBD: what about kustomize?)
+   Inputs:
+     - ...
+   Outputs:
+     - PR metadata
+     - File name
+     - Application name
+     - Helm values location
+     - Snapshot location
+
+### Snapshot of files
+
+In this context worker is always aware of commit shas it needs to fetch and a precise list of files to snapshot.
+
+### Snapshot of a directory(ArgoCD Application source)
+
+In this context source is a directory in a git repo. The main challenge is that `targetRevision` in ArgoCD manifests can be either of branch, tag, or commit sha. The worker has to detect which type is it, and then fetch the associated commit and make a snapshot of that directory.

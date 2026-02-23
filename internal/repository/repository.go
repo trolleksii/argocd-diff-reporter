@@ -1,15 +1,17 @@
-package repository 
+package repository
 
 import (
 	"context"
-	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -20,26 +22,152 @@ import (
 
 // Repository represents a git repository
 type Repository struct {
-	repo     *git.Repository
-	auth     *githubauth.GithubCredManager
-	cloneDir string
-	url      string
-	nameHash string
+	repo         *git.Repository
+	auth         *githubauth.GithubCredManager
+	cloneDir     string
+	snapshotsDir string
+	log          *slog.Logger
+	queue        chan request
+}
+
+type request struct {
+	Kind     requestKind
+	Snapshot snapshotRequest
+	Fetch    fetchRequest
+	Result   chan Result
+}
+
+type requestKind int
+
+const (
+	SNAPSHOT_REQUEST requestKind = 0
+	FETCH_REQUEST    requestKind = 1
+)
+
+type snapshotRequest struct {
+	SHA       string
+	Directory string
+	Files     []string
+}
+
+type fetchRequest struct {
+	Base, Head string
+}
+
+type Result struct {
+	SnapshotDir string
+	Changes     []Change
+	Error       error
+}
+
+type Change struct {
+	From string
+	To   string
+}
+
+func (r *Repository) EnqueueFetchRequest(base, head string) chan Result {
+	out := make(chan Result, 1)
+	r.queue <- request{
+		Kind: FETCH_REQUEST,
+		Fetch: fetchRequest{
+			Base: base,
+			Head: head,
+		},
+		Result: out,
+	}
+	return out
+}
+
+func (r *Repository) EnqueueSnapshotRequest(sha, dir string, files []string) chan Result {
+	out := make(chan Result, 1)
+	r.queue <- request{
+		Kind: SNAPSHOT_REQUEST,
+		Snapshot: snapshotRequest{
+			SHA:       sha,
+			Files:     files,
+			Directory: dir,
+		},
+		Result: out,
+	}
+	return out
+}
+
+func validateFetchRequest(req fetchRequest) error {
+	if req.Base == "" || req.Head == "" {
+		return errors.New("invalid fetch request: both base and head sha must be set")
+	}
+	return nil
+}
+
+func validateSnapshotRequest(req snapshotRequest) error {
+	if req.SHA == "" {
+		return errors.New("invalid snapshot request: commit sha is not set")
+	}
+	if req.Directory != "" && len(req.Files) != 0 {
+		return errors.New("invalid snapshot request: files and directory snapshots are mutually exclusive")
+	}
+	if req.Directory == "" && len(req.Files) == 0 {
+		return errors.New("invalid snapshot request: neither directory or files were set")
+	}
+	return nil
+}
+
+func (r *Repository) startQueuePoller(ctx context.Context) {
+	defer close(r.queue)
+	for {
+		select {
+		case req, ok := <-r.queue:
+			if !ok {
+				return
+			}
+			switch req.Kind {
+			case FETCH_REQUEST:
+				defer close(req.Result)
+				if err := validateFetchRequest(req.Fetch); err != nil {
+					r.log.Error("invalid fetch request", "error", err)
+				}
+
+				changes, err := r.WrapperThingThatNeedsAName(req.Fetch.Base, req.Fetch.Head)
+				if err != nil {
+					r.log.Error("failed to pre-fetch branch", "error", err)
+				}
+				req.Result <- Result{
+					Changes: changes,
+					Error:   err,
+				}
+			case SNAPSHOT_REQUEST:
+				defer close(req.Result)
+				if err := validateSnapshotRequest(req.Snapshot); err != nil {
+					r.log.Error("invalid snapshot request", "error", err)
+				}
+				snapshotDir, err := r.GetOrCreateSnapshot(req.Snapshot.SHA, req.Snapshot.Directory, req.Snapshot.Files)
+				req.Result <- Result{
+					SnapshotDir: snapshotDir,
+					Error:       err,
+				}
+			default:
+				panic("unknown git repository request kind")
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 // NewRepository creates a new repository instance
-func NewRepository(url, cloneDir string, auth *githubauth.GithubCredManager) (*Repository, error) {
-
+func NewRepository(ctx context.Context, url, cloneRootDir, snapshotsRootDir string, auth *githubauth.GithubCredManager) (*Repository, error) {
+	id := string(xxhash.Sum64String(url))
+	cloneDir := filepath.Join(cloneRootDir, id)
+	snapshotsDir := filepath.Join(snapshotsRootDir, id)
 	// Ensure clone directory exists
 	if err := os.MkdirAll(cloneDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create clone directory: %w", err)
 	}
-
 	r := &Repository{
-		url:      url,
-		cloneDir: cloneDir,
-		auth:     auth,
-		nameHash: fmt.Sprintf("%x", sha256.Sum256([]byte(url))),
+		cloneDir:     cloneDir,
+		snapshotsDir: snapshotsDir,
+		auth:         auth,
+		queue:        make(chan request, 2),
 	}
 
 	// Try to open existing repository
@@ -73,41 +201,146 @@ func NewRepository(url, cloneDir string, auth *githubauth.GithubCredManager) (*R
 	if err != nil {
 		return nil, fmt.Errorf("failed to clone repository: %w", err)
 	}
-
 	r.repo = repo
+	go r.startQueuePoller(ctx)
+
 	return r, nil
 }
 
-func (r *Repository) fetchCommitSHA(commitSHA string) (*plumbing.Hash, error) {
-	hash, err := r.repo.ResolveRevision(plumbing.Revision(commitSHA))
-	if err == nil {
-		return hash, nil
+// TODO: find a better name
+func (r *Repository) WrapperThingThatNeedsAName(base, head string) ([]Change, error) {
+	if err := r.fetchRefSpecs([]config.RefSpec{
+		config.RefSpec(fmt.Sprintf("%s:%s", base, base)),
+		config.RefSpec(fmt.Sprintf("%s:%s", head, head)),
+	}); err != nil {
+		return nil, err
+	}
+	return r.listChangedFiles(base, head)
+}
+
+func (r *Repository) GetOrCreateSnapshot(ref, repoDir string, files []string) (string, error) {
+	// TODO: check if snapshot already exists and return it's location right away
+
+	// fetch the ref
+	hash, err := r.fetchUnknownRef(ref)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch target revision: %w", err)
+	}
+	var snapshotDir string
+	if repoDir != "" {
+		fingerprint := string(xxhash.Sum64String(repoDir))
+		snapshotDir = filepath.Join(r.snapshotsDir, ref, fingerprint)
+		err = r.createDirSnapshot(*hash, repoDir, snapshotDir)
+	} else {
+		sort.Strings(files)
+		fingerprint := string(xxhash.Sum64String(strings.Join(files, ",")))
+		snapshotDir = filepath.Join(r.snapshotsDir, ref, fingerprint)
+		err = r.createFilesSnapshot(*hash, files, snapshotDir)
 	}
 
+	if err != nil {
+		os.RemoveAll(snapshotDir)
+		return "", fmt.Errorf("failed to resolve target revision: %w", err)
+	}
+	return snapshotDir, nil
+}
+
+// TakeFilesSnapshot takes a snapshot of a list of files at a given git `ref`.
+func (r *Repository) TakeFilesSnapshot(ref string, files []string) (string, error) {
+
+	snapshotPath := filepath.Join(r.snapshotsDir, ref)
+	hash, _ := r.repo.ResolveRevision(plumbing.Revision(ref))
+
+	err := r.createFilesSnapshot(*hash, files, snapshotPath)
+	if err != nil {
+		os.RemoveAll(snapshotPath)
+		return "", fmt.Errorf("failed to create files snapshot: %w", err)
+	}
+	return snapshotPath, nil
+}
+
+// TakeDirSnapshots take a snapshot of a directory `dir` at a given git `ref`.
+func (r *Repository) TakeDirSnapshot(ref, targetDir string) (string, error) {
+	snapshotPath := filepath.Join(r.snapshotsDir, ref)
+
+	hash, err := r.fetchUnknownRef(ref)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch target revision: %w", err)
+	}
+
+	err = r.createDirSnapshot(*hash, targetDir, snapshotPath)
+	if err != nil {
+		os.RemoveAll(snapshotPath)
+		return "", fmt.Errorf("failed to create directory snapshot: %w", err)
+	}
+	return snapshotPath, nil
+}
+
+func (r *Repository) listChangedFiles(base, head string) ([]Change, error) {
+	var changes []Change
+	headCommit, err := r.repo.CommitObject(plumbing.NewHash(head))
+	if err != nil {
+		return changes, err
+	}
+	baseCommit, err := r.repo.CommitObject(plumbing.NewHash(base))
+	if err != nil {
+		return changes, err
+	}
+
+	headTree, err := headCommit.Tree()
+	if err != nil {
+		return changes, err
+	}
+	baseTree, err := baseCommit.Tree()
+	if err != nil {
+		return changes, err
+	}
+
+	diff, err := baseTree.Diff(headTree)
+	if err != nil {
+		return changes, err
+	}
+
+	for _, change := range diff {
+		changes = append(changes, Change{From: change.From.Name, To: change.To.Name})
+	}
+	return changes, nil
+}
+
+func (r *Repository) fetchRefSpecs(refSpecs []config.RefSpec) error {
 	httpAuth, err := r.auth.GetBasicHTTPAuth()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get HTTP auth: %w", err)
+		return fmt.Errorf("failed to get HTTP auth: %w", err)
 	}
-
 	err = r.repo.Fetch(&git.FetchOptions{
 		Auth:       httpAuth,
 		RemoteName: "origin",
 		Depth:      0,
-		RefSpecs: []config.RefSpec{
-			config.RefSpec(fmt.Sprintf("+%s:%s", commitSHA, commitSHA)),
-		},
+		RefSpecs:   refSpecs,
 	})
-	if err != nil {
-		return nil, err
+	if err == git.NoErrAlreadyUpToDate {
+		return nil
 	}
-	return r.repo.ResolveRevision(plumbing.Revision(commitSHA))
+	return err
 }
 
 func (r *Repository) fetchUnknownRef(ref string) (*plumbing.Hash, error) {
 	// Check locally first
-	hash, err := r.repo.ResolveRevision(plumbing.Revision(ref))
-	if err == nil {
+	if hash, err := r.repo.ResolveRevision(plumbing.Revision(ref)); err == nil {
 		return hash, nil
+	}
+
+	// try fetch the commit
+	if err := r.fetchRefSpecs([]config.RefSpec{
+		config.RefSpec(fmt.Sprintf("+%s:%s", ref, ref)),
+	}); err == nil {
+		return r.repo.ResolveRevision(plumbing.Revision(ref))
+	}
+
+	// as a last resort list remote and see if it has the ref we need
+	remote, err := r.repo.Remote("origin")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get remote: %w", err)
 	}
 
 	httpAuth, err := r.auth.GetBasicHTTPAuth()
@@ -115,11 +348,7 @@ func (r *Repository) fetchUnknownRef(ref string) (*plumbing.Hash, error) {
 		return nil, fmt.Errorf("failed to get HTTP auth: %w", err)
 	}
 
-	// Get remote references
-	remote, _ := r.repo.Remote("origin")
-	refs, err := remote.List(&git.ListOptions{
-		Auth: httpAuth,
-	})
+	refs, err := remote.List(&git.ListOptions{Auth: httpAuth})
 	if err != nil {
 		return nil, err
 	}
@@ -127,100 +356,36 @@ func (r *Repository) fetchUnknownRef(ref string) (*plumbing.Hash, error) {
 	var refSpecs []config.RefSpec
 	for _, remoteRef := range refs {
 		refName := remoteRef.Name().String()
-
-		if strings.HasSuffix(refName, "/"+ref) {
-			// Found it - determine RefSpec and fetch
-			if strings.HasPrefix(refName, "refs/heads/") {
-				refSpecs = append(refSpecs, config.RefSpec(fmt.Sprintf("+%s:refs/remotes/origin/%s", refName, ref)))
-			} else if strings.HasPrefix(refName, "refs/tags/") {
-				refSpecs = append(refSpecs, config.RefSpec(fmt.Sprintf("+%s:%s", refName, refName)))
-			}
-			break
+		if !strings.HasSuffix(refName, "/"+ref) {
+			continue
 		}
+		switch {
+		case strings.HasPrefix(refName, "refs/heads/"):
+			refSpecs = append(refSpecs, config.RefSpec(fmt.Sprintf("+%s:refs/remotes/origin/%s", refName, ref)))
+		case strings.HasPrefix(refName, "refs/tags/"):
+			refSpecs = append(refSpecs, config.RefSpec(fmt.Sprintf("+%s:%s", refName, refName)))
+		}
+		break
+	}
+
+	if len(refSpecs) == 0 {
+		return nil, fmt.Errorf("ref %q not found in remote", ref)
 	}
 
 	// Not found in refs - try as commit SHA
-	refSpecs = append(refSpecs, config.RefSpec(fmt.Sprintf("+%s:%s", ref, ref)))
-	err = r.repo.Fetch(&git.FetchOptions{
+	if err := r.repo.Fetch(&git.FetchOptions{
 		Auth:       httpAuth,
 		RemoteName: "origin",
 		Depth:      0,
 		RefSpecs:   refSpecs,
-	})
-	if err != nil {
+	}); err != nil {
 		return nil, err
 	}
 	return r.repo.ResolveRevision(plumbing.Revision(ref))
 }
 
-func (r *Repository) FetchBranch(branch string) error {
-	httpAuth, err := r.auth.GetBasicHTTPAuth()
-	if err != nil {
-		return fmt.Errorf("failed to get HTTP auth: %w", err)
-	}
-	err = r.repo.Fetch(&git.FetchOptions{
-		RemoteName: "origin",
-		Auth:       httpAuth,
-		RefSpecs: []config.RefSpec{
-			"+refs/heads/main:refs/remotes/origin/main",
-			config.RefSpec(fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branch, branch)),
-		},
-	})
-	if err == git.NoErrAlreadyUpToDate {
-		return nil
-	}
-	return err
-}
-func (r *Repository) TakeFilesSnapshot(snapshotBase, commitSHA string, files []string) (string, error) {
-	cacheKey := r.buildCacheKey(commitSHA, files)
-	snapshotDir := filepath.Join(snapshotBase, r.nameHash, cacheKey)
-
-	hash, err := r.fetchCommitSHA(commitSHA)
-	if err != nil {
-		return "", fmt.Errorf("failed to fetch target revision: %w", err)
-	}
-	err = r.createFilesSnapshot(*hash, files, snapshotDir)
-
-	if err != nil {
-		os.RemoveAll(snapshotDir)
-		return "", fmt.Errorf("failed to resolve target revision: %w", err)
-	}
-	return snapshotDir, nil
-}
-
-func (r *Repository) TakeDirSnapshot(ctx context.Context, snapshotBase, ref, repoDir string) (string, error) {
-	snapshotDir := filepath.Join(snapshotBase, r.nameHash, ref)
-
-	hash, err := r.fetchUnknownRef(ref)
-	if err != nil {
-		return "", fmt.Errorf("failed to fetch target revision: %w", err)
-	}
-	err = r.createDirSnapshot(*hash, repoDir, snapshotDir)
-
-	if err != nil {
-		os.RemoveAll(snapshotDir)
-		return "", fmt.Errorf("failed to resolve target revision: %w", err)
-	}
-	return snapshotDir, nil
-}
-
-// buildCacheKey returns a unique cache key per ref/[]files combination
-func (r *Repository) buildCacheKey(ref string, files []string) string {
-	sorted := make([]string, len(files))
-	copy(sorted, files)
-	sort.Strings(sorted)
-
-	filesHash := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(sorted, ","))))
-	return fmt.Sprintf("%s/%s", ref, filesHash)
-}
-
 // CreateSnapshotNew creates a snapshot of the repository at the given commit SHA and recursively extracts a repoDir with all it's content
 func (r *Repository) createDirSnapshot(hash plumbing.Hash, repoDir, snapshotDir string) error {
-	// Create the snapshot directory first (outside the lock)
-	if err := os.MkdirAll(snapshotDir, 0755); err != nil {
-		return fmt.Errorf("failed to create snapshot directory: %w", err)
-	}
-
 	// Get the commit object
 	commit, err := r.repo.CommitObject(hash)
 	if err != nil {
@@ -296,11 +461,6 @@ func (r *Repository) extractTreeRecursively(tree *object.Tree, currentPath, snap
 
 // CreateSnapshotNew creates a snapshot of the repository at the given commit SHA end extracts all files specified in the argument
 func (r *Repository) createFilesSnapshot(hash plumbing.Hash, files []string, snapshotDir string) error {
-	// Create the snapshot directory first (outside the lock)
-	if err := os.MkdirAll(snapshotDir, 0755); err != nil {
-		return fmt.Errorf("failed to create snapshot directory: %w", err)
-	}
-
 	commit, err := r.repo.CommitObject(hash)
 	if err != nil {
 		return fmt.Errorf("failed to get commit object: %w", err)
