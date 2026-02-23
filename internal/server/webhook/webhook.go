@@ -15,17 +15,17 @@ import (
 
 type WebhookHandler struct {
 	cfg config.WebhookConfig
-	bus *bus.Publisher
+	bus *bus.Bus
 	log *slog.Logger
 }
 
-func Route(cfg config.WebhookConfig, log *slog.Logger, b *bus.Publisher) server.Route {
+func Route(cfg config.WebhookConfig, log *slog.Logger, b *bus.Bus) server.Route {
 	return func(mux *http.ServeMux) {
-		mux.Handle("/webhook", NewWebhookHandler(cfg, log, b))
+		mux.Handle("/webhook", newWebhookHandler(cfg, log, b))
 	}
 }
 
-func NewWebhookHandler(cfg config.WebhookConfig, log *slog.Logger, b *bus.Publisher) *WebhookHandler {
+func newWebhookHandler(cfg config.WebhookConfig, log *slog.Logger, b *bus.Bus) *WebhookHandler {
 	return &WebhookHandler{
 		cfg: cfg,
 		log: log.With("module", "server", "handler", "webhook"),

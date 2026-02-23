@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"time"
 
 	"sigs.k8s.io/yaml"
 )
@@ -39,10 +38,11 @@ type WorkersConfig struct {
 }
 
 type GitWorkerConfig struct {
-	CloneBaseDir    string        `yaml:"cloneBaseDir"`
-	SnapshotBaseDir string        `yaml:"snapshotBaseDir"`
-	GCInterval      time.Duration `yaml:"gcInterval"`
-	MaxIdleTime     time.Duration `yaml:"maxIdleTime"`
+	CloneBaseDir    string `yaml:"cloneBaseDir"`
+	SnapshotBaseDir string `yaml:"snapshotBaseDir"`
+	StreamName      string `yaml:"streamName"`
+	ConsumerName    string `yaml:"consumerName"`
+	Subject         string `yaml:"subject"`
 }
 
 type NatsConfig struct {
@@ -76,10 +76,8 @@ func Load(path string) (*Config, error) {
 		Server: ServerConfig{Addr: "0.0.0.0:8000"},
 		Workers: WorkersConfig{
 			GitWorker: GitWorkerConfig{
-				CloneBaseDir: "repositories",
+				CloneBaseDir:    "repositories",
 				SnapshotBaseDir: "snapshots",
-				GCInterval: 5 * time.Minute,
-				MaxIdleTime: 10 * time.Minute,
 			},
 		},
 	}

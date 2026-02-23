@@ -11,6 +11,7 @@ import (
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/bus"
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
+	"github.com/trolleksii/argocd-diff-reporter/internal/githubauth"
 	"github.com/trolleksii/argocd-diff-reporter/internal/gitrepomanager"
 	"github.com/trolleksii/argocd-diff-reporter/internal/logging"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
@@ -48,7 +49,7 @@ func main() {
 
 	// feels excessive
 	js := nats.GetJetstream(rg)
-	b := bus.NewPublisher(js)
+	b := bus.NewBus(js)
 
 	st := store.NewStore(
 		nats.GetKVStore(rg),
@@ -60,19 +61,25 @@ func main() {
 		ui.Route(logger, st),
 	)
 
-	if err := bus.EnsureStream(ctx, js, "pr-diffs", []string{
+	if _, err := bus.EnsureStream(ctx, js, "pr-diffs", []string{
 		"pr.>", "repo.>", "appset.>", "helm.>", "report.>",
 	}); err != nil {
 		logger.Error("failed to ensure stream", "error", err)
 		os.Exit(1)
 	}
 
-	grm := gitrepomanager.NewGitRepoManager(cfg.Workers.GitWorker)
+	auth, err := githubauth.NewAuth(ctx, logger, cfg.Github)
+	if err != nil {
+		logger.Error("failed to create github auth", "error", err)
+		os.Exit(1)
+	}
+
+	gitRepoMgr := gitrepomanager.NewGitRepoManager(cfg.Workers.GitWorker, auth, b, logger)
 
 	services := []registry.Service{
 		natsSvc,
 		httpSvc,
-		grm,
+		gitRepoMgr,
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)
