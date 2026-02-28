@@ -6,6 +6,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/vmihailenco/msgpack/v5"
 )
 
 // Handler is the callback invoked for each consumed message.
@@ -23,7 +24,7 @@ type ConsumerConfig struct {
 type Message struct {
 	Subject string
 	Headers map[string]string
-	Data    []byte
+	Data    any
 }
 
 // Bus provides both publish and consume capabilities over JetStream.
@@ -44,17 +45,47 @@ func (b *Bus) Publish(ctx context.Context, msg Message) error {
 		Subject: msg.Subject,
 		Header:  header,
 	}
-	if len(msg.Data) != 0 {
-		m.Data = msg.Data
+	if msg.Data != nil {
+		data, err := msgpack.Marshal(msg.Data)
+		if err != nil {
+			return err
+		}
+		m.Data = data
 	}
 
 	_, err := b.js.PublishMsg(ctx, m)
 	return err
 }
 
+// TODO: find better name
+// WrapHandler provides means to unmarshal message data into concrete type retur
+func WrapHandler[T any](ctx context.Context, fn Handler) jetstream.MessageHandler {
+	return func(msg jetstream.Msg) {
+		hdrs := msg.Headers()
+		var result T
+		if err := msgpack.Unmarshal(msg.Data(), &result); err != nil {
+			msg.Nak()
+			return
+		}
+		m := Message{
+			Subject: msg.Subject(),
+			Data:    result,
+		}
+		if hdrs != nil {
+			m.Headers = make(map[string]string, len(hdrs))
+			for k, vs := range hdrs {
+				if len(vs) > 0 {
+					m.Headers[k] = vs[0]
+				}
+			}
+		}
+		fn(ctx, m, msg.Ack, msg.Nak)
+	}
+} 
+
 // Consume creates (or updates) a JetStream consumer and starts delivering
 // messages to fn. It blocks until ctx is cancelled, then stops the consumer.
-func (b *Bus) Consume(ctx context.Context, cfg ConsumerConfig, fn Handler) error {
+func (b *Bus) Consume(ctx context.Context, cfg ConsumerConfig, fn jetstream.MessageHandler) error {
 	cons, err := b.js.CreateOrUpdateConsumer(ctx, cfg.StreamName, jetstream.ConsumerConfig{
 		Name:          cfg.ConsumerName,
 		FilterSubject: cfg.Subject,
@@ -64,22 +95,7 @@ func (b *Bus) Consume(ctx context.Context, cfg ConsumerConfig, fn Handler) error
 		return fmt.Errorf("bus: create consumer %s: %w", cfg.ConsumerName, err)
 	}
 
-	cc, err := cons.Consume(func(jmsg jetstream.Msg) {
-		hdrs := jmsg.Headers()
-		msg := Message{
-			Subject: jmsg.Subject(),
-			Data:    jmsg.Data(),
-		}
-		if hdrs != nil {
-			msg.Headers = make(map[string]string, len(hdrs))
-			for k, vs := range hdrs {
-				if len(vs) > 0 {
-					msg.Headers[k] = vs[0]
-				}
-			}
-		}
-		fn(ctx, msg, jmsg.Ack, jmsg.Nak)
-	})
+	cc, err := cons.Consume(fn)
 	if err != nil {
 		return fmt.Errorf("bus: start consuming %s: %w", cfg.ConsumerName, err)
 	}
