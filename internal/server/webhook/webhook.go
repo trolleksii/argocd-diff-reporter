@@ -56,23 +56,24 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case "closed":
 			pr := event.GetPullRequest()
 			prNum := strconv.Itoa(pr.GetNumber())
-			err = h.bus.Publish(r.Context(), bus.Message{
-				Subject: "pr.closed",
-				Headers: map[string]string{
+			err = h.bus.Publish(r.Context(),
+				"pr.closed",
+				map[string]string{
 					"repository": repoName,
 					"owner":      owner,
 					"prNum":      prNum,
 				},
-			})
+				nil,
+			)
 			if err != nil {
 				h.log.Error("Failed to publish PR event", "error", err)
 			}
 		case "opened", "synchronize", "reopened":
 			pr := event.GetPullRequest()
 			prNum := strconv.Itoa(pr.GetNumber())
-			err = h.bus.Publish(r.Context(), bus.Message{
-				Subject: "pr.changed",
-				Headers: map[string]string{
+			err = h.bus.Publish(r.Context(),
+				"pr.changed",
+				map[string]string{
 					"repository": repoName,
 					"owner":      owner,
 					"prNum":      prNum,
@@ -82,7 +83,8 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					"baseSha":    pr.GetBase().GetSHA(),
 					"headSha":    pr.GetHead().GetSHA(),
 				},
-			})
+				nil,
+			)
 			if err != nil {
 				h.log.Error("Failed to publish PR event", "error", err)
 			}

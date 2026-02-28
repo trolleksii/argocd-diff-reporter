@@ -11,10 +11,10 @@ var templateFS embed.FS
 
 var templates map[string]string = map[string]string{
 	"index":       "html/index.html",
-	"latestprs":   "html/latestprs.html",
 	"summary":     "html/summary.html",
+	"report":      "html/report.html",
 	"table":       "html/partials/table.html",
-	"report":      "html/partials/report.html",
+	"latestprs":   "html/partials/latest-prs.html",
 	"diff-header": "html/partials/diff-header.html",
 	"diff-footer": "html/partials/diff-footer.html",
 	"diff-detail": "html/partials/diff-detail.html",

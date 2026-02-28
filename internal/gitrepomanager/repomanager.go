@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/bus"
@@ -49,67 +48,70 @@ func (m *GitRepoManager) Run(ctx context.Context) error {
 	return nil
 }
 
+func try(log *slog.Logger, msg string, fn func() error) {
+	if err := fn(); err != nil {
+		log.Error(msg, "error", err)
+	}
+}
+
 // process handles one incoming snapshot request.
-func (m *GitRepoManager) process(ctx context.Context, msg bus.Message, ack, nak func() error) {
-	repoURL := msg.Headers["repo-url"]
-	sha := msg.Headers["sha"]
-	snapshotType := msg.Headers["snapshot-type"]
-	repoDir := msg.Headers["repo-dir"]
-	filesRaw := msg.Headers["files"]
-
-	if repoURL == "" || sha == "" {
-		m.log.Error("malformed snapshot request, missing required headers",
-			"repo-url", repoURL, "sha", sha)
-		// no nak — malformed messages should not be retried
-		return
-	}
-
-	log := m.log.With("repo", repoURL, "sha", sha)
-
-	nakf := func() {
-		if err := nak(); err != nil {
-			log.Error("failed to nak message", "error", err)
+func (m *GitRepoManager) process(ctx context.Context, subject string, headers map[string]string, data []byte, ack, nak func() error) {
+	switch subject {
+	case "pr.changed":
+		repo := headers["repository"]
+		owner := headers["owner"]
+		base := headers["baseSha"]
+		head := headers["headSha"]
+		repoUrl := fmt.Sprintf("https://github.com/%s/%s", owner, repo)
+		r, err := m.getOrCreateRepo(ctx, repoUrl)
+		if err != nil {
+			m.log.Error("failed to find git repo", "error", err)
+			try(m.log, "failed to nak the message", nak)
+			return
 		}
-	}
 
-	var files []string
-	if filesRaw != "" {
-		files = strings.Split(filesRaw, ",")
-	}
+		changes, err := r.ListChangedFiles(base, head)
+		if err != nil {
+			m.log.Error("failed to list changed files")
+			try(m.log, "failed to nak the message", nak)
+			return
+		}
+		var from, to []string
+		for _, change := range changes {
+			from = append(from, change.From)
+			to = append(to, change.To)
+		}
 
-	entry, err := m.getOrCreateRepo(ctx, repoURL)
-	if err != nil {
-		log.Error("failed to initialize repo", "error", err)
-		nakf()
-		return
+		headers["ref"] = base
+		data, err := bus.Marshal(from)
+		if err != nil {
+			m.log.Error("failed to marshal base files", "error", err)
+			try(m.log, "failed to nak the message", nak)
+			return
+		}
+		m.bus.Publish(ctx,
+			"pr.files.resolved",
+			headers,
+			data,
+		)
+		headers["ref"] = head
+		data, err = bus.Marshal(to)
+		if err != nil {
+			m.log.Error("failed to marshal head files", "error", err)
+			try(m.log, "failed to nak the message", nak)
+			return
+		}
+		m.bus.Publish(ctx,
+			"pr.files.resolved",
+			headers,
+			data,
+		)
+	case "pr.enriched":
+		// odrer files snapshot
+	case "app.created":
+		// pull helm chart if repo is git
 	}
-
-	snapshotDir, err := entry.repo.GetOrCreateSnapshot(sha, repoDir, files)
-	if err != nil {
-		log.Error("snapshot failed", "error", err)
-		nakf()
-		return
-	}
-
-	log.Info("snapshot created", "dir", snapshotDir)
-
-	if err := m.bus.Publish(ctx, bus.Message{
-		Subject: snapshotCompletedSubject,
-		Headers: map[string]string{
-			"repo-url":      repoURL,
-			"sha":           sha,
-			"snapshot-dir":  snapshotDir,
-			"snapshot-type": snapshotType,
-		},
-	}); err != nil {
-		log.Error("failed to publish snapshot result", "error", err)
-		nakf()
-		return
-	}
-
-	if err := ack(); err != nil {
-		log.Error("failed to ack message", "error", err)
-	}
+	try(m.log, "failed to ack message", ack)
 }
 
 // getOrCreateRepo returns the entry for a repo URL, initializing it on first access.

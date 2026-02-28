@@ -50,21 +50,22 @@ func (h *MockHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	switch payload.Action {
 	case "closed":
-		err := h.bus.Publish(r.Context(), bus.Message{
-			Subject: "pr.closed",
-			Headers: map[string]string{
+		err := h.bus.Publish(r.Context(),
+			"pr.closed",
+			map[string]string{
 				"repository": payload.Repository,
 				"owner":      payload.Owner,
 				"prNum":      payload.PrNum,
 			},
-		})
+			nil,
+		)
 		if err != nil {
 			h.log.Error("Failed to publish PR event", "error", err)
 		}
 	case "opened", "synchronize", "reopened":
-		err := h.bus.Publish(r.Context(), bus.Message{
-			Subject: "pr.changed",
-			Headers: map[string]string{
+		err := h.bus.Publish(r.Context(),
+			"pr.changed",
+			map[string]string{
 				"repository": payload.Repository,
 				"owner":      payload.Owner,
 				"prNum":      payload.PrNum,
@@ -74,7 +75,8 @@ func (h *MockHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				"baseSha":    payload.BaseSha,
 				"headSha":    payload.HeadSha,
 			},
-		})
+			nil,
+		)
 		if err != nil {
 			h.log.Error("Failed to publish PR event", "error", err)
 		}
