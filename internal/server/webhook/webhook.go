@@ -53,19 +53,32 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		switch action {
-		case "opened", "synchronize", "reopened", "closed":
+		case "closed":
+			pr := event.GetPullRequest()
+			prNum := strconv.Itoa(pr.GetNumber())
+			err = h.bus.Publish(r.Context(), bus.Message{
+				Subject: "pr.closed",
+				Headers: map[string]string{
+					"repository": repoName,
+					"owner":      owner,
+					"prNum":      prNum,
+				},
+			})
+			if err != nil {
+				h.log.Error("Failed to publish PR event", "error", err)
+			}
+		case "opened", "synchronize", "reopened":
 			pr := event.GetPullRequest()
 			prNum := strconv.Itoa(pr.GetNumber())
 			err = h.bus.Publish(r.Context(), bus.Message{
 				Subject: "pr.changed",
 				Headers: map[string]string{
-					"action":     action,
 					"repository": repoName,
 					"owner":      owner,
-					"branch":     pr.GetHead().GetRef(),
 					"prNum":      prNum,
 					"title":      pr.GetTitle(),
 					"author":     pr.GetUser().GetLogin(),
+					"branch":     pr.GetHead().GetRef(),
 					"baseSha":    pr.GetBase().GetSHA(),
 					"headSha":    pr.GetHead().GetSHA(),
 				},
