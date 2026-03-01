@@ -6,7 +6,6 @@ import (
 	"net/http"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/bus"
-	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server"
 )
 
@@ -27,7 +26,7 @@ type MockHandler struct {
 	log *slog.Logger
 }
 
-func Route(cfg config.WebhookConfig, log *slog.Logger, b *bus.Bus) server.Route {
+func Route(log *slog.Logger, b *bus.Bus) server.Route {
 	return func(mux *http.ServeMux) {
 		mux.Handle("/mock", newMockHandler(log, b))
 	}
@@ -41,6 +40,7 @@ func newMockHandler(log *slog.Logger, b *bus.Bus) *MockHandler {
 }
 
 func (h *MockHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.log.Info("something happened")
 	var payload mockPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		h.log.Warn("Failed to parse mock payload", "error", err)

@@ -115,7 +115,7 @@ func (r *Repository) startQueuePoller(ctx context.Context) {
 		case req := <-r.queue:
 			switch req.kind {
 			case kindNameDiff:
-				changes, err := r.fetchAndListChangedFiles(req.diff.base, req.diff.head) 
+				changes, err := r.fetchAndListChangedFiles(req.diff.base, req.diff.head)
 				if err != nil {
 					r.log.Error("failed to list changed files", "error", err)
 				}
@@ -261,7 +261,6 @@ func (r *Repository) getOrCreateSnapshot(ref, repoDir string, files []string) (s
 	}
 	return snapshotDir, nil
 }
-
 
 func (r *Repository) fetchRefSpecs(refSpecs []config.RefSpec) error {
 	httpAuth, err := r.auth.GetBasicHTTPAuth()

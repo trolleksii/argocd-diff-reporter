@@ -17,15 +17,15 @@ type Handler func(ctx context.Context, subject string, headers map[string]string
 // ConsumerConfig describes how to set up a JetStream pull consumer.
 type ConsumerConfig struct {
 	// Durable consumer name
-	Name       string
+	Name string
 	// Subjects to filter
-	Subjects   []string
+	Subjects []string
 	// Max delivery attempts
 	MaxDeliver int
 	// Ack wait time
-	AckWait    time.Duration
+	AckWait time.Duration
 	// Message handle
-	Handle     Handler
+	Handle Handler
 }
 
 // Bus provides both publish and consume capabilities over JetStream.

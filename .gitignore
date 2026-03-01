@@ -1,4 +1,6 @@
 .env
+config.yml
+main
 dist/**
 testdata/**
 storage/**

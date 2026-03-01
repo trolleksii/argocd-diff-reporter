@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 	"log/slog"
+	"sync"
 	"time"
 
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
@@ -19,7 +19,7 @@ import (
 type GithubCredManager struct {
 	tokenSource oauth2.TokenSource
 	basicAuth   *githttp.BasicAuth
-	log			*slog.Logger
+	log         *slog.Logger
 	mu          sync.RWMutex
 }
 
@@ -32,7 +32,7 @@ func NewAuth(ctx context.Context, log *slog.Logger, cfg config.GithubAppConfig) 
 	installationTokenSource := githubauth.NewInstallationTokenSource(cfg.InstallationID, appTokenSource)
 	m := &GithubCredManager{
 		tokenSource: installationTokenSource,
-		log: log.With("module", "githubauth"),
+		log:         log.With("module", "githubauth"),
 	}
 	initialDelay, err := m.refreshToken()
 	if err != nil {
