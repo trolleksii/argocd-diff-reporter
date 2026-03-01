@@ -60,20 +60,19 @@ func try(log *slog.Logger, msg string, fn func() error) {
 
 // process handles one incoming snapshot request.
 func (m *GitRepoManager) process(ctx context.Context, subject string, headers map[string]string, data []byte, ack, nak func() error) {
+	repo := headers["repository"]
+	owner := headers["owner"]
+	base := headers["baseSha"]
+	head := headers["headSha"]
+	repoUrl := fmt.Sprintf("https://github.com/%s/%s", owner, repo)
+	r, err := m.getOrCreateRepo(ctx, repoUrl)
+	if err != nil {
+		m.log.Error("failed to find git repo", "error", err)
+		try(m.log, "failed to nak the message", nak)
+		return
+	}
 	switch subject {
 	case "pr.changed":
-		repo := headers["repository"]
-		owner := headers["owner"]
-		base := headers["baseSha"]
-		head := headers["headSha"]
-		repoUrl := fmt.Sprintf("https://github.com/%s/%s", owner, repo)
-		r, err := m.getOrCreateRepo(ctx, repoUrl)
-		if err != nil {
-			m.log.Error("failed to find git repo", "error", err)
-			try(m.log, "failed to nak the message", nak)
-			return
-		}
-
 		changes, err := r.ListChangedFiles(base, head)
 		if err != nil {
 			m.log.Error("failed to list changed files")
@@ -86,37 +85,47 @@ func (m *GitRepoManager) process(ctx context.Context, subject string, headers ma
 			to = append(to, change.To)
 		}
 
-		headers["ref"] = base
-		data, err := bus.Marshal(FileGlobFilter(from, m.cfg.FileGlobs))
-		if err != nil {
-			m.log.Error("failed to marshal base files", "error", err)
-			try(m.log, "failed to nak the message", nak)
-			return
+		if len(from) > 0 {
+			headers["ref"] = base
+			data, err := bus.Marshal(FileGlobFilter(from, m.cfg.FileGlobs))
+			if err != nil {
+				m.log.Error("failed to marshal base files", "error", err)
+				try(m.log, "failed to nak the message", nak)
+				return
+			}
+			m.bus.Publish(ctx,
+				"pr.files.resolved",
+				headers,
+				data,
+			)
 		}
-		m.bus.Publish(ctx,
-			"pr.files.resolved",
-			headers,
-			data,
-		)
-		headers["ref"] = head
-		data, err = bus.Marshal(FileGlobFilter(to, m.cfg.FileGlobs))
-		if err != nil {
-			m.log.Error("failed to marshal head files", "error", err)
-			try(m.log, "failed to nak the message", nak)
-			return
+		if len(to) > 0 {
+			headers["ref"] = head
+			data, err = bus.Marshal(FileGlobFilter(to, m.cfg.FileGlobs))
+			if err != nil {
+				m.log.Error("failed to marshal head files", "error", err)
+				try(m.log, "failed to nak the message", nak)
+				return
+			}
+			m.bus.Publish(ctx,
+				"pr.files.resolved",
+				headers,
+				data,
+			)
 		}
-		m.bus.Publish(ctx,
-			"pr.files.resolved",
-			headers,
-			data,
-		)
 	case "pr.files.resolved":
-		ch, err := bus.Unmarshal[[]string](data)
+		files, err := bus.Unmarshal[[]string](data)
+		ref := headers["ref"]
+		snapshotDir, err := r.GetOrCreateSnapshot(ref, "", files)
 		if err != nil {
-			m.log.Error("failed to unmarshal data", "error", err)
+			m.log.Error("failed to create snapshot", "error", err)
 		}
-		m.log.Info("changed files", "ref", headers["ref"], "changes", ch)
-		// odrer files snapshot
+		headers["snapshotDir"] = snapshotDir
+		m.bus.Publish(ctx,
+			"repo.snapshot.created",
+			headers,
+			data,
+		)
 	case "app.created":
 		// pull helm chart if repo is git
 	}
