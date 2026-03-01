@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -40,7 +41,7 @@ func NewGitRepoManager(cfg config.GitWorkerConfig, auth *githubauth.GithubCredMa
 func (m *GitRepoManager) Run(ctx context.Context) error {
 	err := m.bus.Consume(ctx, bus.ConsumerConfig{
 		Name:       "gitrepomanager",
-		Subjects:   []string{"pr.changed"},
+		Subjects:   []string{"pr.changed", "pr.files.resolved"},
 		MaxDeliver: 3,
 		AckWait:    3 * time.Second,
 		Handle:     m.process,
@@ -86,7 +87,7 @@ func (m *GitRepoManager) process(ctx context.Context, subject string, headers ma
 		}
 
 		headers["ref"] = base
-		data, err := bus.Marshal(from)
+		data, err := bus.Marshal(FileGlobFilter(from, m.cfg.FileGlobs))
 		if err != nil {
 			m.log.Error("failed to marshal base files", "error", err)
 			try(m.log, "failed to nak the message", nak)
@@ -98,7 +99,7 @@ func (m *GitRepoManager) process(ctx context.Context, subject string, headers ma
 			data,
 		)
 		headers["ref"] = head
-		data, err = bus.Marshal(to)
+		data, err = bus.Marshal(FileGlobFilter(to, m.cfg.FileGlobs))
 		if err != nil {
 			m.log.Error("failed to marshal head files", "error", err)
 			try(m.log, "failed to nak the message", nak)
@@ -109,7 +110,12 @@ func (m *GitRepoManager) process(ctx context.Context, subject string, headers ma
 			headers,
 			data,
 		)
-	case "pr.enriched":
+	case "pr.files.resolved":
+		ch, err := bus.Unmarshal[[]string](data)
+		if err != nil {
+			m.log.Error("failed to unmarshal data", "error", err)
+		}
+		m.log.Info("changed files", "ref", headers["ref"], "changes", ch)
 		// odrer files snapshot
 	case "app.created":
 		// pull helm chart if repo is git
@@ -147,4 +153,18 @@ func (m *GitRepoManager) getOrCreateRepo(ctx context.Context, repoURL string) (*
 
 	m.repos[repoURL] = repo
 	return repo, nil
+}
+
+func FileGlobFilter(files []string, globs []string) []string {
+	var result []string
+	for _, f := range files {
+		for _, g := range globs {
+			res, err := filepath.Match(g, f)
+			if res && err == nil {
+				result = append(result, f)
+				break
+			}
+		}
+	}
+	return result
 }

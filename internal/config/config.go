@@ -28,9 +28,8 @@ type WebhookConfig struct {
 }
 
 type GitRepoFilter struct {
-	Owner     string   `yaml:"owner"`
-	Repo      string   `yaml:"repo"`
-	FileGlobs []string `yaml:"fileGlobs"`
+	Owner string `yaml:"owner"`
+	Repo  string `yaml:"repo"`
 }
 
 type WorkersConfig struct {
@@ -38,8 +37,9 @@ type WorkersConfig struct {
 }
 
 type GitWorkerConfig struct {
-	CloneBaseDir    string `yaml:"cloneBaseDir"`
-	SnapshotBaseDir string `yaml:"snapshotBaseDir"`
+	CloneBaseDir    string   `yaml:"cloneBaseDir"`
+	SnapshotBaseDir string   `yaml:"snapshotBaseDir"`
+	FileGlobs       []string `yaml:"fileGlobs"`
 }
 
 type NatsConfig struct {
