@@ -17,6 +17,7 @@ import (
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/registry"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server"
+	"github.com/trolleksii/argocd-diff-reporter/internal/server/mock"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server/ui"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server/webhook"
 	"github.com/trolleksii/argocd-diff-reporter/internal/store"
@@ -66,6 +67,7 @@ func main() {
 	httpSvc := server.NewServer(cfg.Server, logger,
 		webhook.Route(cfg.Webhook, logger, b),
 		ui.Route(logger, st),
+		mock.Route(logger, b),
 	)
 
 	auth, err := githubauth.NewAuth(ctx, logger, cfg.Github)
