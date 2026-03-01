@@ -16,6 +16,13 @@ type Config struct {
 	Log     LogConfig       `yaml:"log"`
 	Webhook WebhookConfig   `yaml:"webhook"`
 	Workers WorkersConfig   `yaml:"workers"`
+	ArgoCD  ArgoCDConfig    `yaml:"argocd"`
+}
+
+type ArgoCDConfig struct {
+	Namespace            string `yaml:"namespace"`
+	RepoServerAddr       string `yaml:"repoServerAddr"`
+	RepoServerTimeoutSec int    `yaml:"repoServerTimeoutSec"`
 }
 
 type ServerConfig struct {

@@ -82,7 +82,7 @@ Diff workers generate and store Diff Reports.
 
 ## Orchestration
 
- Webhook        Fetcher          Snapshotter                    Argo                                HELM                               Coordinator                     Differ                Coordinator
+ Webhook             Fetcher/Snapshotter                    Argo                                HELM                               Coordinator                     Differ                Coordinator
 pr.changed -> pr.enriched -> repo.snapshot.complete -> appset.render.complete -> helm.fetch.complete -> helm.render.complete--> report.preparation.complete -> report.generate.complete---> pr.processed
                         \                                                    \-> helm.fetch.complete -> helm.render.complete-/                                                           /
                          \-> repo.snapshot.complete -> appset.render.complete -> helm.fetch.complete -> helm.render.complete--> report.preparation.complete -> report.generate.complete-/

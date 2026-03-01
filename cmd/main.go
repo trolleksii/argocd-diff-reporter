@@ -9,6 +9,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/trolleksii/argocd-diff-reporter/internal/argo"
 	"github.com/trolleksii/argocd-diff-reporter/internal/bus"
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 	"github.com/trolleksii/argocd-diff-reporter/internal/githubauth"
@@ -77,11 +78,13 @@ func main() {
 	}
 
 	gitRepoMgr := gitrepomanager.NewGitRepoManager(cfg.Workers.GitWorker, auth, b, logger)
+	argoTemplateEngine := argo.NewTemplateEngine(cfg.ArgoCD, b, logger)
 
 	services := []registry.Service{
 		natsSvc,
 		httpSvc,
 		gitRepoMgr,
+		argoTemplateEngine,
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)
