@@ -3,6 +3,7 @@ package bus
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -15,14 +16,22 @@ type Handler func(ctx context.Context, subject string, headers map[string]string
 
 // ConsumerConfig describes how to set up a JetStream pull consumer.
 type ConsumerConfig struct {
-	StreamName   string
-	ConsumerName string
-	Subject      string
+	// Durable consumer name
+	Name       string
+	// Subjects to filter
+	Subjects   []string
+	// Max delivery attempts
+	MaxDeliver int
+	// Ack wait time
+	AckWait    time.Duration
+	// Message handle
+	Handle     Handler
 }
 
 // Bus provides both publish and consume capabilities over JetStream.
 type Bus struct {
-	js jetstream.JetStream
+	js     jetstream.JetStream
+	stream jetstream.Stream
 }
 
 func NewBus(js jetstream.JetStream) *Bus {
@@ -54,14 +63,17 @@ func Unmarshal[T any](data []byte) (T, error) {
 
 // Consume creates (or updates) a JetStream consumer and starts delivering
 // messages to fn. It blocks until ctx is cancelled, then stops the consumer.
-func (b *Bus) Consume(ctx context.Context, cfg ConsumerConfig, fn Handler) error {
-	cons, err := b.js.CreateOrUpdateConsumer(ctx, cfg.StreamName, jetstream.ConsumerConfig{
-		Name:          cfg.ConsumerName,
-		FilterSubject: cfg.Subject,
-		AckPolicy:     jetstream.AckExplicitPolicy,
+func (b *Bus) Consume(ctx context.Context, cfg ConsumerConfig) error {
+	cons, err := b.stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
+		Durable:        cfg.Name,
+		FilterSubjects: cfg.Subjects,
+		AckPolicy:      jetstream.AckExplicitPolicy,
+		MaxDeliver:     cfg.MaxDeliver,
+		AckWait:        cfg.AckWait,
+		DeliverPolicy:  jetstream.DeliverNewPolicy,
 	})
 	if err != nil {
-		return fmt.Errorf("bus: create consumer %s: %w", cfg.ConsumerName, err)
+		return fmt.Errorf("bus: create consumer %s: %w", cfg.Name, err)
 	}
 
 	cc, err := cons.Consume(func(msg jetstream.Msg) {
@@ -74,11 +86,11 @@ func (b *Bus) Consume(ctx context.Context, cfg ConsumerConfig, fn Handler) error
 				}
 			}
 		}
-		fn(ctx, msg.Subject(), headers, msg.Data(), msg.Ack, msg.Nak)
+		cfg.Handle(ctx, msg.Subject(), headers, msg.Data(), msg.Ack, msg.Nak)
 	})
 
 	if err != nil {
-		return fmt.Errorf("bus: start consuming %s: %w", cfg.ConsumerName, err)
+		return fmt.Errorf("bus: start consuming %s: %w", cfg.Name, err)
 	}
 
 	<-ctx.Done()
@@ -86,13 +98,14 @@ func (b *Bus) Consume(ctx context.Context, cfg ConsumerConfig, fn Handler) error
 	return nil
 }
 
-func EnsureStream(ctx context.Context, js jetstream.JetStream, name string, subjects []string) (jetstream.Stream, error) {
-	stream, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
+func (b *Bus) EnsureStream(ctx context.Context, name string, subjects []string) error {
+	stream, err := b.js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
 		Name:     name,
 		Subjects: subjects,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("bus: create stream %s: %w", name, err)
+		return fmt.Errorf("bus: create stream %s: %w", name, err)
 	}
-	return stream, nil
+	b.stream = stream
+	return nil
 }

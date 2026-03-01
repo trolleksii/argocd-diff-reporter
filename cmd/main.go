@@ -51,6 +51,13 @@ func main() {
 	js := nats.GetJetstream(rg)
 	b := bus.NewBus(js)
 
+	if err := b.EnsureStream(ctx, "pr-diffs", []string{
+		"pr.>", "repo.>", "appset.>", "helm.>", "report.>",
+	}); err != nil {
+		logger.Error("failed to ensure stream", "error", err)
+		os.Exit(1)
+	}
+
 	st := store.NewStore(
 		nats.GetKVStore(rg),
 		nats.GetObjectStore(rg),
@@ -60,13 +67,6 @@ func main() {
 		webhook.Route(cfg.Webhook, logger, b),
 		ui.Route(logger, st),
 	)
-
-	if _, err := bus.EnsureStream(ctx, js, "pr-diffs", []string{
-		"pr.>", "repo.>", "appset.>", "helm.>", "report.>",
-	}); err != nil {
-		logger.Error("failed to ensure stream", "error", err)
-		os.Exit(1)
-	}
 
 	auth, err := githubauth.NewAuth(ctx, logger, cfg.Github)
 	if err != nil {

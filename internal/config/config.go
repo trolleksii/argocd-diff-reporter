@@ -40,9 +40,6 @@ type WorkersConfig struct {
 type GitWorkerConfig struct {
 	CloneBaseDir    string `yaml:"cloneBaseDir"`
 	SnapshotBaseDir string `yaml:"snapshotBaseDir"`
-	StreamName      string `yaml:"streamName"`
-	ConsumerName    string `yaml:"consumerName"`
-	Subject         string `yaml:"subject"`
 }
 
 type NatsConfig struct {

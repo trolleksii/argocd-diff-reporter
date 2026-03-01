@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/bus"
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
@@ -38,10 +39,12 @@ func NewGitRepoManager(cfg config.GitWorkerConfig, auth *githubauth.GithubCredMa
 // Blocks until ctx is cancelled, then shuts down all repos.
 func (m *GitRepoManager) Run(ctx context.Context) error {
 	err := m.bus.Consume(ctx, bus.ConsumerConfig{
-		StreamName:   m.cfg.StreamName,
-		ConsumerName: m.cfg.ConsumerName,
-		Subject:      m.cfg.Subject,
-	}, m.process)
+		Name:       "gitrepomanager",
+		Subjects:   []string{"pr.changed"},
+		MaxDeliver: 3,
+		AckWait:    3 * time.Second,
+		Handle:     m.process,
+	})
 	if err != nil {
 		return fmt.Errorf("gitrepomanager: consume: %w", err)
 	}
