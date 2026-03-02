@@ -89,20 +89,32 @@ func (m *TemplateEngine) process(ctx context.Context, subject string, headers ma
 		}
 		s := headers["snapshotDir"]
 		for _, f := range files {
+			headers["fileName"] = f
 			appSets, err := loadApplicationSetsFromFile(filepath.Join(s, f))
 			if err != nil {
-				if os.IsNotExist(err) {
-					return
-				}
-				// publish error event
+				headers["error"] = err.Error()
+				m.log.Error("failed to load applicationset", "error", err)
+				m.bus.Publish(ctx, "applicationset.load.failed", headers, []byte{})
+				continue
 			}
-			for _, appset := range appSets {
-				apps, reason, err := m.generate(appset)
+			for _, appSet := range appSets {
+				headers["appset"] = appSet.Name
+				apps, reason, err := m.generate(appSet)
 				if err != nil {
+					headers["error"] = err.Error()
 					m.log.Error("failed to generate applications", "reason", reason, "error", err)
+					m.bus.Publish(ctx, "applicationset.render.failed", headers, []byte{})
+					continue
 				}
 				for _, a := range apps {
-					m.log.Info(a.Name)
+					headers["application"] = a.Name
+					data, err := bus.Marshal(a)
+					if err != nil {
+						m.log.Error("failed to marshal application", "error", err)
+						try(m.log, "failed to nak the message", nak)
+						return
+					}
+					m.bus.Publish(ctx, "application.rendered", headers, data)
 				}
 			}
 		}
@@ -169,6 +181,9 @@ func loadApplicationSetsFromFile(filePath string) ([]v1alpha1.ApplicationSet, er
 		if err := yaml.Unmarshal([]byte(doc), &appSet); err != nil {
 			return appSets, err
 		}
+		// TODO: Add support for applications
+		// mb return both list of apps and applicationsets
+		// or first check the kind and proceed accordingly
 
 		appSets = append(appSets, appSet)
 	}
