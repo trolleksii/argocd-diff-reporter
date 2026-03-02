@@ -24,7 +24,6 @@ import (
 	"github.com/argoproj/argo-cd/v3/applicationset/generators"
 	"github.com/argoproj/argo-cd/v3/applicationset/services"
 	"github.com/argoproj/argo-cd/v3/applicationset/utils"
-	"github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
 	appv1alpha1 "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
 	"github.com/argoproj/argo-cd/v3/reposerver/apiclient"
 	"github.com/argoproj/argo-cd/v3/util/db"
@@ -42,7 +41,7 @@ type TemplateEngine struct {
 	generate templateFunc
 }
 
-type templateFunc func(appset v1alpha1.ApplicationSet) ([]v1alpha1.Application, v1alpha1.ApplicationSetReasonType, error)
+type templateFunc func(appset appv1alpha1.ApplicationSet) ([]appv1alpha1.Application, appv1alpha1.ApplicationSetReasonType, error)
 
 func NewTemplateEngine(cfg config.ArgoCDConfig, b *bus.Bus, log *slog.Logger) *TemplateEngine {
 	return &TemplateEngine{
@@ -66,7 +65,7 @@ func (m *TemplateEngine) Run(ctx context.Context) error {
 		Handle:     m.process,
 	})
 	if err != nil {
-		return fmt.Errorf("gitrepomanager: consume: %w", err)
+		return fmt.Errorf("argotemplateengine: consume: %w", err)
 	}
 	return nil
 }
@@ -90,23 +89,23 @@ func (m *TemplateEngine) process(ctx context.Context, subject string, headers ma
 		s := headers["snapshotDir"]
 		for _, f := range files {
 			headers["fileName"] = f
-			appSets, err := loadApplicationSetsFromFile(filepath.Join(s, f))
+			appSets, apps, err := parseFileResources(filepath.Join(s, f))
 			if err != nil {
 				headers["error"] = err.Error()
-				m.log.Error("failed to load applicationset", "error", err)
+				m.log.Error("failed to load file", "error", err)
 				m.bus.Publish(ctx, "applicationset.load.failed", headers, []byte{})
 				continue
 			}
 			for _, appSet := range appSets {
 				headers["appset"] = appSet.Name
-				apps, reason, err := m.generate(appSet)
+				renderedApps, reason, err := m.generate(appSet)
 				if err != nil {
 					headers["error"] = err.Error()
 					m.log.Error("failed to generate applications", "reason", reason, "error", err)
 					m.bus.Publish(ctx, "applicationset.render.failed", headers, []byte{})
 					continue
 				}
-				for _, a := range apps {
+				for _, a := range renderedApps {
 					headers["application"] = a.Name
 					data, err := bus.Marshal(a)
 					if err != nil {
@@ -117,12 +116,22 @@ func (m *TemplateEngine) process(ctx context.Context, subject string, headers ma
 					m.bus.Publish(ctx, "application.rendered", headers, data)
 				}
 			}
+			for _, app := range apps {
+				headers["application"] = app.Name
+				data, err := bus.Marshal(app)
+				if err != nil {
+					m.log.Error("failed to marshal application", "error", err)
+					try(m.log, "failed to nak the message", nak)
+					return
+				}
+				m.bus.Publish(ctx, "application.rendered", headers, data)
+			}
 		}
 	}
 	try(m.log, "failed to ack message", ack)
 }
 
-func getTemplateFunc(ctx context.Context, c config.ArgoCDConfig) (func(v1alpha1.ApplicationSet) ([]v1alpha1.Application, v1alpha1.ApplicationSetReasonType, error), error) {
+func getTemplateFunc(ctx context.Context, c config.ArgoCDConfig) (func(appv1alpha1.ApplicationSet) ([]appv1alpha1.Application, appv1alpha1.ApplicationSetReasonType, error), error) {
 	scheme := runtime.NewScheme()
 	clientgoscheme.AddToScheme(scheme)
 	appv1alpha1.AddToScheme(scheme)
@@ -158,16 +167,17 @@ func getTemplateFunc(ctx context.Context, c config.ArgoCDConfig) (func(v1alpha1.
 	)
 	logctx := logrus.NewEntry(logrus.StandardLogger())
 	logrus.SetOutput(io.Discard)
-	return func(appset v1alpha1.ApplicationSet) ([]v1alpha1.Application, v1alpha1.ApplicationSetReasonType, error) {
+	return func(appset appv1alpha1.ApplicationSet) ([]appv1alpha1.Application, appv1alpha1.ApplicationSetReasonType, error) {
 		return template.GenerateApplications(logctx, appset, gen, &utils.Render{}, ctrlClient)
 	}, nil
 }
 
-func loadApplicationSetsFromFile(filePath string) ([]v1alpha1.ApplicationSet, error) {
+func parseFileResources(filePath string) ([]appv1alpha1.ApplicationSet, []appv1alpha1.Application, error) {
 	appSetBytes, err := os.ReadFile(filePath)
-	var appSets []v1alpha1.ApplicationSet
+	var appSets []appv1alpha1.ApplicationSet
+	var apps []appv1alpha1.Application
 	if err != nil {
-		return appSets, err
+		return appSets, apps, err
 	}
 
 	documents := strings.SplitSeq(string(appSetBytes), "---")
@@ -177,15 +187,27 @@ func loadApplicationSetsFromFile(filePath string) ([]v1alpha1.ApplicationSet, er
 			continue
 		}
 
-		var appSet v1alpha1.ApplicationSet
-		if err := yaml.Unmarshal([]byte(doc), &appSet); err != nil {
-			return appSets, err
+		var meta struct {
+			Kind string `yaml:"kind"`
 		}
-		// TODO: Add support for applications
-		// mb return both list of apps and applicationsets
-		// or first check the kind and proceed accordingly
+		if err := yaml.Unmarshal([]byte(doc), &meta); err != nil {
+			return appSets, apps, err
+		}
 
-		appSets = append(appSets, appSet)
+		switch meta.Kind {
+		case "ApplicationSet":
+			var appSet appv1alpha1.ApplicationSet
+			if err := yaml.Unmarshal([]byte(doc), &appSet); err != nil {
+				return appSets, apps, err
+			}
+			appSets = append(appSets, appSet)
+		case "Application":
+			var app appv1alpha1.Application
+			if err := yaml.Unmarshal([]byte(doc), &app); err != nil {
+				return appSets, apps, err
+			}
+			apps = append(apps, app)
+		}
 	}
-	return appSets, nil
+	return appSets, apps, nil
 }
