@@ -12,20 +12,19 @@ import (
 
 // Handler is the callback invoked for each consumed message.
 // ack and nak are pre-bound to the underlying jetstream.Msg methods.
-type Handler func(ctx context.Context, subject string, headers map[string]string, data []byte, ack, nak func() error)
+type Handler func(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error)
 
 // ConsumerConfig describes how to set up a JetStream pull consumer.
 type ConsumerConfig struct {
 	// Durable consumer name
 	Name string
-	// Subjects to filter
-	Subjects []string
+	// Handlers maps each subject to its handler.
+	// The subjects are used as FilterSubjects on the JetStream consumer.
+	Handlers map[string]Handler
 	// Max delivery attempts
 	MaxDeliver int
 	// Ack wait time
 	AckWait time.Duration
-	// Message handle
-	Handle Handler
 }
 
 // Bus provides both publish and consume capabilities over JetStream.
@@ -64,9 +63,14 @@ func Unmarshal[T any](data []byte) (T, error) {
 // Consume creates (or updates) a JetStream consumer and starts delivering
 // messages to fn. It blocks until ctx is cancelled, then stops the consumer.
 func (b *Bus) Consume(ctx context.Context, cfg ConsumerConfig) error {
+	subjects := make([]string, 0, len(cfg.Handlers))
+	for s := range cfg.Handlers {
+		subjects = append(subjects, s)
+	}
+
 	cons, err := b.stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
 		Durable:        cfg.Name,
-		FilterSubjects: cfg.Subjects,
+		FilterSubjects: subjects,
 		AckPolicy:      jetstream.AckExplicitPolicy,
 		MaxDeliver:     cfg.MaxDeliver,
 		AckWait:        cfg.AckWait,
@@ -77,6 +81,11 @@ func (b *Bus) Consume(ctx context.Context, cfg ConsumerConfig) error {
 	}
 
 	cc, err := cons.Consume(func(msg jetstream.Msg) {
+		handler, ok := cfg.Handlers[msg.Subject()]
+		if !ok {
+			_ = msg.Nak()
+			return
+		}
 		hdrs := msg.Headers()
 		headers := make(map[string]string)
 		if hdrs != nil {
@@ -86,9 +95,8 @@ func (b *Bus) Consume(ctx context.Context, cfg ConsumerConfig) error {
 				}
 			}
 		}
-		cfg.Handle(ctx, msg.Subject(), headers, msg.Data(), msg.Ack, msg.Nak)
+		handler(ctx, headers, msg.Data(), msg.Ack, msg.Nak)
 	})
-
 	if err != nil {
 		return fmt.Errorf("bus: start consuming %s: %w", cfg.Name, err)
 	}

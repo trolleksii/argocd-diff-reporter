@@ -14,8 +14,6 @@ import (
 	"github.com/trolleksii/argocd-diff-reporter/internal/repository"
 )
 
-const snapshotCompletedSubject = "repo.snapshot.completed"
-
 type GitRepoManager struct {
 	cfg  config.GitWorkerConfig
 	auth *githubauth.GithubCredManager
@@ -41,10 +39,12 @@ func NewGitRepoManager(cfg config.GitWorkerConfig, auth *githubauth.GithubCredMa
 func (m *GitRepoManager) Run(ctx context.Context) error {
 	err := m.bus.Consume(ctx, bus.ConsumerConfig{
 		Name:       "gitrepomanager",
-		Subjects:   []string{"pr.changed", "pr.files.resolved"},
 		MaxDeliver: 3,
 		AckWait:    3 * time.Second,
-		Handle:     m.process,
+		Handlers: map[string]bus.Handler{
+			"webhook.pr.changed": m.handlePRChanged,
+			"git.files.resolved": m.handleFilesResolved,
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("gitrepomanager: consume: %w", err)
@@ -58,77 +58,80 @@ func try(log *slog.Logger, msg string, fn func() error) {
 	}
 }
 
-// process handles one incoming snapshot request.
-func (m *GitRepoManager) process(ctx context.Context, subject string, headers map[string]string, data []byte, ack, nak func() error) {
-	repo := headers["repository"]
-	owner := headers["owner"]
-	base := headers["baseSha"]
-	head := headers["headSha"]
-	repoUrl := fmt.Sprintf("https://github.com/%s/%s", owner, repo)
+func (m *GitRepoManager) handlePRChanged(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
+	repoUrl := fmt.Sprintf("https://github.com/%s/%s", headers["owner"], headers["repository"])
 	r, err := m.getOrCreateRepo(ctx, repoUrl)
 	if err != nil {
 		m.log.Error("failed to find git repo", "error", err)
 		try(m.log, "failed to nak the message", nak)
 		return
 	}
-	switch subject {
-	case "pr.changed":
-		changes, err := r.ListChangedFiles(base, head)
+	changes, err := r.ListChangedFiles(headers["baseSha"], headers["headSha"])
+	if err != nil {
+		m.log.Error("failed to list changed files")
+		try(m.log, "failed to nak the message", nak)
+		return
+	}
+	var from, to []string
+	for _, change := range changes {
+		from = append(from, change.From)
+		to = append(to, change.To)
+	}
+	if len(from) > 0 {
+		headers["ref"] = headers["baseSha"]
+		data, err := bus.Marshal(FileGlobFilter(from, m.cfg.FileGlobs))
 		if err != nil {
-			m.log.Error("failed to list changed files")
+			m.log.Error("failed to marshal base files", "error", err)
 			try(m.log, "failed to nak the message", nak)
 			return
 		}
-		var from, to []string
-		for _, change := range changes {
-			from = append(from, change.From)
-			to = append(to, change.To)
-		}
-
-		if len(from) > 0 {
-			headers["ref"] = base
-			data, err := bus.Marshal(FileGlobFilter(from, m.cfg.FileGlobs))
-			if err != nil {
-				m.log.Error("failed to marshal base files", "error", err)
-				try(m.log, "failed to nak the message", nak)
-				return
-			}
-			m.bus.Publish(ctx,
-				"pr.files.resolved",
-				headers,
-				data,
-			)
-		}
-		if len(to) > 0 {
-			headers["ref"] = head
-			data, err = bus.Marshal(FileGlobFilter(to, m.cfg.FileGlobs))
-			if err != nil {
-				m.log.Error("failed to marshal head files", "error", err)
-				try(m.log, "failed to nak the message", nak)
-				return
-			}
-			m.bus.Publish(ctx,
-				"pr.files.resolved",
-				headers,
-				data,
-			)
-		}
-	case "pr.files.resolved":
-		files, err := bus.Unmarshal[[]string](data)
-		ref := headers["ref"]
-		snapshotDir, err := r.GetOrCreateSnapshot(ref, "", files)
-		if err != nil {
-			m.log.Error("failed to create snapshot", "error", err)
-		}
-		headers["snapshotDir"] = snapshotDir
-		m.bus.Publish(ctx,
-			"repo.snapshot.created",
-			headers,
-			data,
-		)
-	case "app.created":
-		// pull helm chart if repo is git
+		m.bus.Publish(ctx, "git.files.resolved", headers, data)
 	}
+	if len(to) > 0 {
+		headers["ref"] = headers["headSha"]
+		data, err = bus.Marshal(FileGlobFilter(to, m.cfg.FileGlobs))
+		if err != nil {
+			m.log.Error("failed to marshal head files", "error", err)
+			try(m.log, "failed to nak the message", nak)
+			return
+		}
+		m.bus.Publish(ctx, "git.files.resolved", headers, data)
+	}
+	try(m.log, "failed to ack message", ack)
+}
+
+func (m *GitRepoManager) handleFilesResolved(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
+	repoUrl := fmt.Sprintf("https://github.com/%s/%s", headers["owner"], headers["repository"])
+	r, err := m.getOrCreateRepo(ctx, repoUrl)
+	if err != nil {
+		m.log.Error("failed to find git repo", "error", err)
+		try(m.log, "failed to nak the message", nak)
+		return
+	}
+	files, err := bus.Unmarshal[[]string](data)
+	snapshotDir, err := r.GetOrCreateSnapshot(headers["ref"], "", files)
+	if err != nil {
+		m.log.Error("failed to create snapshot", "error", err)
+	}
+	headers["snapshotDir"] = snapshotDir
+	m.bus.Publish(ctx, "git.files.snapshotted", headers, data)
+	try(m.log, "failed to ack message", ack)
+}
+
+func (m *GitRepoManager) handleChartFetch(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
+	repoUrl := fmt.Sprintf("https://github.com/%s/%s", headers["owner"], headers["repository"])
+	r, err := m.getOrCreateRepo(ctx, repoUrl)
+	if err != nil {
+		m.log.Error("failed to find git repo", "error", err)
+		try(m.log, "failed to nak the message", nak)
+		return
+	}
+	snapshotDir, err := r.GetOrCreateSnapshot(headers["ref"], headers["path"], nil)
+	if err != nil {
+		m.log.Error("failed to create snapshot", "error", err)
+	}
+	headers["snapshotDir"] = snapshotDir
+	m.bus.Publish(ctx, "git.chart.snapshotted", headers, data)
 	try(m.log, "failed to ack message", ack)
 }
 

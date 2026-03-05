@@ -34,6 +34,10 @@ import (
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 )
 
+const (
+	repoSnapshotSubject = "repo.snapshot.created"
+)
+
 type TemplateEngine struct {
 	cfg      config.ArgoCDConfig
 	log      *slog.Logger
@@ -59,10 +63,11 @@ func (m *TemplateEngine) Run(ctx context.Context) error {
 	m.generate = fn
 	err = m.bus.Consume(ctx, bus.ConsumerConfig{
 		Name:       "argotemplateengine",
-		Subjects:   []string{"repo.snapshot.created"},
 		MaxDeliver: 3,
 		AckWait:    3 * time.Second,
-		Handle:     m.process,
+		Handlers: map[string]bus.Handler{
+			repoSnapshotSubject: m.process,
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("argotemplateengine: consume: %w", err)
@@ -76,56 +81,52 @@ func try(log *slog.Logger, msg string, fn func() error) {
 	}
 }
 
-// process handles one incoming snapshot request.
-func (m *TemplateEngine) process(ctx context.Context, subject string, headers map[string]string, data []byte, ack, nak func() error) {
-	switch subject {
-	case "repo.snapshot.created":
-		files, err := bus.Unmarshal[[]string](data)
+func (m *TemplateEngine) process(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
+	files, err := bus.Unmarshal[[]string](data)
+	if err != nil {
+		m.log.Error("failed to unmarshal files", "error", err)
+		try(m.log, "failed to nak the message", nak)
+		return
+	}
+	s := headers["snapshotDir"]
+	for _, f := range files {
+		headers["fileName"] = f
+		appSets, apps, err := parseFileResources(filepath.Join(s, f))
 		if err != nil {
-			m.log.Error("failed to unmarshal files", "error", err)
-			try(m.log, "failed to nak the message", nak)
-			return
+			headers["error"] = err.Error()
+			m.log.Error("failed to load file", "error", err)
+			m.bus.Publish(ctx, "argo.parsing.failed", headers, []byte{})
+			continue
 		}
-		s := headers["snapshotDir"]
-		for _, f := range files {
-			headers["fileName"] = f
-			appSets, apps, err := parseFileResources(filepath.Join(s, f))
+		for _, appSet := range appSets {
+			headers["appset"] = appSet.Name
+			renderedApps, reason, err := m.generate(appSet)
 			if err != nil {
 				headers["error"] = err.Error()
-				m.log.Error("failed to load file", "error", err)
-				m.bus.Publish(ctx, "applicationset.load.failed", headers, []byte{})
+				m.log.Error("failed to generate applications", "reason", reason, "error", err)
+				m.bus.Publish(ctx, "applicationset.render.failed", headers, []byte{})
 				continue
 			}
-			for _, appSet := range appSets {
-				headers["appset"] = appSet.Name
-				renderedApps, reason, err := m.generate(appSet)
-				if err != nil {
-					headers["error"] = err.Error()
-					m.log.Error("failed to generate applications", "reason", reason, "error", err)
-					m.bus.Publish(ctx, "applicationset.render.failed", headers, []byte{})
-					continue
-				}
-				for _, a := range renderedApps {
-					headers["application"] = a.Name
-					data, err := bus.Marshal(a)
-					if err != nil {
-						m.log.Error("failed to marshal application", "error", err)
-						try(m.log, "failed to nak the message", nak)
-						return
-					}
-					m.bus.Publish(ctx, "application.rendered", headers, data)
-				}
-			}
-			for _, app := range apps {
-				headers["application"] = app.Name
-				data, err := bus.Marshal(app)
+			for _, a := range renderedApps {
+				headers["application"] = a.Name
+				data, err := bus.Marshal(a)
 				if err != nil {
 					m.log.Error("failed to marshal application", "error", err)
 					try(m.log, "failed to nak the message", nak)
 					return
 				}
-				m.bus.Publish(ctx, "application.rendered", headers, data)
+				m.bus.Publish(ctx, "argo.helmappset.rendered", headers, data)
 			}
+		}
+		for _, app := range apps {
+			headers["application"] = app.Name
+			data, err := bus.Marshal(app)
+			if err != nil {
+				m.log.Error("failed to marshal application", "error", err)
+				try(m.log, "failed to nak the message", nak)
+				return
+			}
+			m.bus.Publish(ctx, "argo.helmappset.rendered", headers, data)
 		}
 	}
 	try(m.log, "failed to ack message", ack)

@@ -262,7 +262,7 @@ func FetchChartOCI(chartRef, chartVersion string, credsProvider CredsProvider, c
 	}
 
 	// Set up registry authentication if credentials are available
-	if credsProvider.IsReady() {
+	if credsProvider != nil && credsProvider.IsReady() {
 		registryClient := installClient.GetRegistryClient()
 		if registryClient != nil {
 			err := registryClient.Login(chartRef, registry.LoginOptBasicAuth(credsProvider.GetUsername(), credsProvider.GetPassword()))

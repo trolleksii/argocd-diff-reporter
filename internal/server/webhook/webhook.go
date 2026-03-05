@@ -57,7 +57,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			pr := event.GetPullRequest()
 			prNum := strconv.Itoa(pr.GetNumber())
 			err = h.bus.Publish(r.Context(),
-				"pr.closed",
+				"webhook.pr.closed",
 				map[string]string{
 					"repository": repoName,
 					"owner":      owner,
@@ -72,7 +72,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			pr := event.GetPullRequest()
 			prNum := strconv.Itoa(pr.GetNumber())
 			err = h.bus.Publish(r.Context(),
-				"pr.changed",
+				"webhook.pr.changed",
 				map[string]string{
 					"repository": repoName,
 					"owner":      owner,
