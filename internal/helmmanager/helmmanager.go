@@ -13,12 +13,6 @@ import (
 	"github.com/trolleksii/argocd-diff-reporter/internal/store"
 )
 
-const (
-	chartFetchOCISubject  = "chart.fetch.oci"
-	chartFetchHTTPSubject = "chart.fetch.http"
-	chartRenderSubject    = "chart.render.complete"
-)
-
 type HelmManager struct {
 	cfg   config.GitWorkerConfig
 	auth  *githubauth.GithubCredManager
@@ -47,9 +41,9 @@ func (m *HelmManager) Run(ctx context.Context) error {
 		MaxDeliver: 3,
 		AckWait:    3 * time.Second,
 		Handlers: map[string]bus.Handler{
-			chartFetchOCISubject:  m.handleChartFetchOCI,
-			chartFetchHTTPSubject: m.handleChartFetchHTTP,
-			chartRenderSubject:    m.handleChartRender,
+			"argo.helm.oci.parsed":   m.handleChartFetch(helm.FetchChartOCI),
+			"argo.helm.http.parsed":  m.handleChartFetch(helm.FetchChartHTTPS),
+			"helm.manifest.rendered": m.handleChartRender,
 		},
 	})
 	if err != nil {
@@ -64,36 +58,22 @@ func try(log *slog.Logger, msg string, fn func() error) {
 	}
 }
 
-func (m *HelmManager) handleChartFetchOCI(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
-	chartRef := headers["ref"]
-	chartVersion := headers["version"]
-	chartLocation, err := helm.FetchChartOCI(chartRef, chartVersion, nil, m.cache)
-	if err != nil {
-		try(m.log, "failed to nak the message", nak)
-		return
+func (m *HelmManager) handleChartFetch(fetchFn func(string, string, helm.CredsProvider, *helm.HelmChartCache) (string, error)) bus.Handler {
+	return func(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
+		chartRef := headers["ref"]
+		chartVersion := headers["version"]
+		chartLocation, err := fetchFn(chartRef, chartVersion, nil, m.cache)
+		if err != nil {
+			try(m.log, "failed to nak the message", nak)
+			return
+		}
+		headers["chartLocation"] = chartLocation
+		if err := m.bus.Publish(ctx, "helm.chart.fetched", headers, data); err != nil {
+			try(m.log, "failed to nak the message", nak)
+			return
+		}
+		try(m.log, "failed to ack the message", ack)
 	}
-	headers["chartLocation"] = chartLocation
-	if err := m.bus.Publish(ctx, "helm.chart.fetched", headers, data); err != nil {
-		try(m.log, "failed to nak the message", nak)
-		return
-	}
-	try(m.log, "failed to ack the message", ack)
-}
-
-func (m *HelmManager) handleChartFetchHTTP(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
-	chartRef := headers["ref"]
-	chartVersion := headers["version"]
-	chartLocation, err := helm.FetchChartHTTPS(chartRef, chartVersion, nil, m.cache)
-	if err != nil {
-		try(m.log, "failed to nak the message", nak)
-		return
-	}
-	headers["chartLocation"] = chartLocation
-	if err := m.bus.Publish(ctx, "helm.chart.fetched", headers, data); err != nil {
-		try(m.log, "failed to nak the message", nak)
-		return
-	}
-	try(m.log, "failed to ack the message", ack)
 }
 
 func (m *HelmManager) handleChartRender(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {

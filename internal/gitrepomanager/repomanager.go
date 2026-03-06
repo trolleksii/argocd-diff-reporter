@@ -42,8 +42,9 @@ func (m *GitRepoManager) Run(ctx context.Context) error {
 		MaxDeliver: 3,
 		AckWait:    3 * time.Second,
 		Handlers: map[string]bus.Handler{
-			"webhook.pr.changed": m.handlePRChanged,
-			"git.files.resolved": m.handleFilesResolved,
+			"webhook.pr.changed":   m.handlePRChanged,
+			"git.files.resolved":   m.handleFilesResolved,
+			"argo.helm.git.parsed": m.handleChartFetch,
 		},
 	})
 	if err != nil {

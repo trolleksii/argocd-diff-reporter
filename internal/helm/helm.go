@@ -24,7 +24,6 @@ import (
 	"helm.sh/helm/v3/pkg/repo"
 )
 
-// initActionConfig initializes the Helm action configuration with proper error handling and logging.
 func initActionConfig(settings *cli.EnvSettings) (*action.Configuration, error) {
 	if settings == nil {
 		return nil, fmt.Errorf("CLI settings cannot be nil")
@@ -51,7 +50,6 @@ func initActionConfig(settings *cli.EnvSettings) (*action.Configuration, error) 
 	return actionConfig, nil
 }
 
-// createRegistryClient creates a registry client with appropriate TLS configuration.
 func createRegistryClient(settings *cli.EnvSettings, logger *slog.Logger, installClient *action.Install) (*registry.Client, error) {
 	if settings == nil {
 		return nil, fmt.Errorf("CLI settings cannot be nil")
@@ -75,7 +73,6 @@ func createRegistryClient(settings *cli.EnvSettings, logger *slog.Logger, instal
 	return createBasicRegistryClient(settings, installClient.PlainHTTP)
 }
 
-// createBasicRegistryClient creates a basic registry client without TLS configuration.
 func createBasicRegistryClient(settings *cli.EnvSettings, plainHTTP bool) (*registry.Client, error) {
 	opts := []registry.ClientOption{
 		registry.ClientOptDebug(settings.Debug),
@@ -167,7 +164,6 @@ func resolveDependencies(ctx context.Context, chart *chart.Chart, chartPath stri
 	return nil
 }
 
-// updateDependenciesWithContext updates dependencies with context support.
 func updateDependenciesWithContext(ctx context.Context, manager *downloader.Manager) error {
 	// Create a channel to handle the dependency update
 	done := make(chan error, 1)
@@ -184,7 +180,6 @@ func updateDependenciesWithContext(ctx context.Context, manager *downloader.Mana
 	}
 }
 
-// ensureRepository ensures a repository is added before chart operations
 func ensureRepository(settings *cli.EnvSettings, name, url string) error {
 	if f, err := repo.LoadFile(settings.RepositoryConfig); err != nil || !f.Has(name) {
 		repoFile := settings.RepositoryConfig
@@ -255,71 +250,56 @@ func FetchChartOCI(chartRef, chartVersion string, credsProvider CredsProvider, c
 
 	cacheKey := GenerateCacheKey(chartRef, chartVersion)
 
-	// Check cache first
-	if chartLocation, found := cache.Get(cacheKey); found {
-		slog.Info("Using cached OCI chart: %s", chartLocation)
-		return chartLocation, nil
-	}
-
-	// Set up registry authentication if credentials are available
-	if credsProvider != nil && credsProvider.IsReady() {
-		registryClient := installClient.GetRegistryClient()
-		if registryClient != nil {
-			err := registryClient.Login(chartRef, registry.LoginOptBasicAuth(credsProvider.GetUsername(), credsProvider.GetPassword()))
-			if err != nil {
-				slog.Error("OCI registry login failed", "error", err)
+	return cache.GetOrFetch(cacheKey, func() (string, error) {
+		// Set up registry authentication if credentials are available
+		if credsProvider != nil && credsProvider.IsReady() {
+			registryClient := installClient.GetRegistryClient()
+			if registryClient != nil {
+				err := registryClient.Login(chartRef, registry.LoginOptBasicAuth(credsProvider.GetUsername(), credsProvider.GetPassword()))
+				if err != nil {
+					slog.Error("OCI registry login failed", "error", err)
+				}
 			}
 		}
-	}
 
-	// Use Helm's built-in OCI support to pull the chart
-	chartPath, err := installClient.ChartPathOptions.LocateChart(chartRef, settings)
-	if err != nil {
-		return "", fmt.Errorf("failed to pull OCI chart: %w", err)
-	}
+		// Use Helm's built-in OCI support to pull the chart
+		chartPath, err := installClient.ChartPathOptions.LocateChart(chartRef, settings)
+		if err != nil {
+			return "", fmt.Errorf("failed to pull OCI chart: %w", err)
+		}
 
-	// Handle both .tgz files and directories for caching
-	finalChartPath, err := cacheHelmChart(chartPath, cacheKey, cache)
-	if err != nil {
-		slog.Error("Failed to cache OCI chart", "error", err)
-		// Return the original path if caching fails
-		return chartPath, nil
-	}
-
-	return finalChartPath, nil
+		finalChartPath, err := cacheHelmChart(chartPath, cacheKey, cache)
+		if err != nil {
+			slog.Error("Failed to cache OCI chart", "error", err)
+			return chartPath, nil
+		}
+		return finalChartPath, nil
+	})
 }
 
-// fetchHTTPChart handles HTTP/HTTPS registry chart references with caching
 func fetchHTTPChart(chartRef, chartVersion string, installClient *action.Install, settings *cli.EnvSettings, chartCache *HelmChartCache) (string, error) {
 	cacheKey := GenerateCacheKey(chartRef, chartVersion)
 
-	if chartLocation, found := chartCache.Get(cacheKey); found {
-		slog.Info("Using cached HTTP chart", "location", chartLocation)
-		return chartLocation, nil
-	}
+	return chartCache.GetOrFetch(cacheKey, func() (string, error) {
+		resolvedChartRef, err := loadHelmRepository(settings, chartRef)
+		if err != nil {
+			return "", fmt.Errorf("Failed to update repository index: %w", err)
+		}
 
-	resolvedChartRef, err := loadHelmRepository(settings, chartRef)
-	if err != nil {
-		return "", fmt.Errorf("Failed to update repository index: %w", err)
-	}
+		chartPath, err := installClient.ChartPathOptions.LocateChart(resolvedChartRef, settings)
+		if err != nil {
+			return "", fmt.Errorf("failed to download HTTP chart: %w", err)
+		}
 
-	chartPath, err := installClient.ChartPathOptions.LocateChart(resolvedChartRef, settings)
-	if err != nil {
-		return "", fmt.Errorf("failed to download HTTP chart: %w", err)
-	}
-
-	// Handle both .tgz files and directories for caching
-	finalChartPath, err := cacheHelmChart(chartPath, cacheKey, chartCache)
-	if err != nil {
-		slog.Error("Failed to cache HTTP chart", "error", err)
-		// Return the original path if caching fails
-		return chartPath, nil
-	}
-
-	return finalChartPath, nil
+		finalChartPath, err := cacheHelmChart(chartPath, cacheKey, chartCache)
+		if err != nil {
+			slog.Error("Failed to cache HTTP chart", "error", err)
+			return chartPath, nil
+		}
+		return finalChartPath, nil
+	})
 }
 
-// updateRepositoryIndex updates the repository index for HTTP/HTTPS charts
 func loadHelmRepository(settings *cli.EnvSettings, chartURL string) (string, error) {
 	u, err := url.Parse(chartURL)
 	if err != nil {
@@ -373,7 +353,6 @@ func loadHelmRepository(settings *cli.EnvSettings, chartURL string) (string, err
 	return fmt.Sprintf("%s/%s", repoName, chartName), nil
 }
 
-// cacheHelmChart handles both .tgz files and directories for caching
 func cacheHelmChart(chartPath, cacheKey string, chartCache *HelmChartCache) (string, error) {
 	// Check if the chart path is a .tgz file or directory
 	stat, err := os.Stat(chartPath)
@@ -452,7 +431,6 @@ func cacheHelmChart(chartPath, cacheKey string, chartCache *HelmChartCache) (str
 	return chartPath, nil
 }
 
-// extractChartArchive extracts a chart tarball to a destination directory
 func extractChartArchive(archivePath, destDir string) error {
 	file, err := os.Open(archivePath)
 	if err != nil {

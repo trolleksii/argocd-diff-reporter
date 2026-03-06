@@ -2,15 +2,18 @@ package helm
 
 import (
 	"fmt"
-	"github.com/cespare/xxhash/v2"
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/cespare/xxhash/v2"
+	"golang.org/x/sync/singleflight"
 )
 
 // HelmChartCache implements ChartCache using the filesystem
 type HelmChartCache struct {
 	cacheDir string
+	inflight singleflight.Group
 }
 
 // NewChartDiskCache creates a new file-based chart cache
@@ -26,6 +29,24 @@ func NewChartDiskCache(cacheDir string) (*HelmChartCache, error) {
 // GenerateCacheKey creates a unique cache key for a chart reference and version
 func GenerateCacheKey(chartRef, version string) string {
 	return fmt.Sprintf("%x", xxhash.Sum64String(chartRef+version))
+}
+
+// GetOrFetch returns a cached chart path if it exists, otherwise calls fetch to populate the cache.
+// Concurrent calls with the same key are deduplicated — only one fetch runs, the rest wait and share the result.
+func (c *HelmChartCache) GetOrFetch(key string, fetch func() (string, error)) (string, error) {
+	if path, ok := c.Get(key); ok {
+		return path, nil
+	}
+	result, err, _ := c.inflight.Do(key, func() (any, error) {
+		if path, ok := c.Get(key); ok {
+			return path, nil
+		}
+		return fetch()
+	})
+	if err != nil {
+		return "", err
+	}
+	return result.(string), nil
 }
 
 // Get retrieves a cached chart path if it exists
