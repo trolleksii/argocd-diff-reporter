@@ -49,6 +49,7 @@ func (m *HelmWorker) Run(ctx context.Context) error {
 
 func (m *HelmWorker) handleChartFetch(fetchFn func(string, string, helm.CredsProvider, *helm.HelmChartCache) (string, error)) nats.Handler {
 	return func(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
+		m.log.Info("helm worker got a helm fetch event")
 		chartRef := headers["ref"]
 		chartVersion := headers["version"]
 		chartLocation, err := fetchFn(chartRef, chartVersion, nil, m.cache)
@@ -66,6 +67,7 @@ func (m *HelmWorker) handleChartFetch(fetchFn func(string, string, helm.CredsPro
 }
 
 func (m *HelmWorker) handleChartRender(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
+	m.log.Info("helm worker got a helm render event")
 	namespace := headers["namespace"]
 	releaseName := headers["releaseName"]
 	chartPath := headers["chartPath"]

@@ -53,6 +53,7 @@ func (m *GitWorker) Run(ctx context.Context) error {
 }
 
 func (m *GitWorker) handlePRChanged(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
+	m.log.Info("git worker got an pr.changed event")
 	repoUrl := fmt.Sprintf("https://github.com/%s/%s", headers["owner"], headers["repository"])
 	r, err := m.getOrCreateRepo(ctx, repoUrl)
 	if err != nil {
@@ -99,6 +100,7 @@ func (m *GitWorker) handlePRChanged(ctx context.Context, headers map[string]stri
 }
 
 func (m *GitWorker) handleFilesResolved(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
+	m.log.Info("git worker got a file snapshot event")
 	repoUrl := fmt.Sprintf("https://github.com/%s/%s", headers["owner"], headers["repository"])
 	r, err := m.getOrCreateRepo(ctx, repoUrl)
 	if err != nil {
@@ -119,6 +121,7 @@ func (m *GitWorker) handleFilesResolved(ctx context.Context, headers map[string]
 }
 
 func (m *GitWorker) handleChartFetch(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
+	m.log.Info("git worker got a helm snapshot event")
 	repoUrl := fmt.Sprintf("https://github.com/%s/%s", headers["owner"], headers["repository"])
 	r, err := m.getOrCreateRepo(ctx, repoUrl)
 	if err != nil {

@@ -63,7 +63,7 @@ func (m *ArgoWorker) Run(ctx context.Context) error {
 		MaxDeliver: 3,
 		AckWait:    3 * time.Second,
 		Handlers: map[string]nats.Handler{
-			"repo.snapshot.created": m.process,
+			"git.files.snapshotted": m.process,
 		},
 	})
 	if err != nil {
@@ -73,6 +73,7 @@ func (m *ArgoWorker) Run(ctx context.Context) error {
 }
 
 func (m *ArgoWorker) process(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
+	m.log.Info("argo worker got an event")
 	files, err := nats.Unmarshal[[]string](data)
 	if err != nil {
 		m.log.Error("failed to unmarshal files", "error", err)
@@ -117,6 +118,7 @@ func (m *ArgoWorker) process(ctx context.Context, headers map[string]string, dat
 				nak()
 				return
 			}
+			// TODO: identify source type (helm/kustomize/dir) and publish a corresponding event
 			m.bus.Publish(ctx, "argo.helmappset.rendered", headers, data)
 		}
 	}
