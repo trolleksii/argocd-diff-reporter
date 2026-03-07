@@ -80,6 +80,7 @@ func New(log *slog.Logger, b *nats.Bus, s *nats.Store) *Coordinator {
 }
 
 func (c *Coordinator) Run(ctx context.Context) error {
+	c.log.Info("starting coordinator...")
 	err := c.bus.Consume(ctx, nats.ConsumerConfig{
 		Name:       "coordinator",
 		MaxDeliver: 3,

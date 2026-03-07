@@ -8,8 +8,8 @@ import (
 
 	"github.com/google/go-github/v82/github"
 
-	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
+	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 )
 
 type WebhookHandler struct {

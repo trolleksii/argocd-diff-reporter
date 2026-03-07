@@ -96,6 +96,7 @@ type Nats struct {
 }
 
 func (n *Nats) Run(ctx context.Context) error {
+	n.log.Info("nats started")
 	<-ctx.Done()
 	n.log.Debug("nats: draining connections...")
 	n.nc.Drain()
@@ -111,7 +112,6 @@ func (n *Nats) Run(ctx context.Context) error {
 func (n *Nats) NewBus() *Bus {
 	return &Bus{js: n.js}
 }
-
 
 func (n *Nats) NewStore() *Store {
 	return &Store{kvStore: n.kv, objStore: n.obj}

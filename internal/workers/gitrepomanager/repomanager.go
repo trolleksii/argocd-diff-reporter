@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 	"github.com/trolleksii/argocd-diff-reporter/internal/githubauth"
+	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/repository"
 )
 
@@ -37,6 +37,7 @@ func New(cfg config.GitWorkerConfig, log *slog.Logger, auth *githubauth.GithubCr
 // Run starts consuming snapshot requests.
 // Blocks until ctx is cancelled, then shuts down all repos.
 func (m *GitRepoManager) Run(ctx context.Context) error {
+	m.log.Info("starting git worker...")
 	err := m.bus.Consume(ctx, nats.ConsumerConfig{
 		Name:       "gitrepomanager",
 		MaxDeliver: 3,

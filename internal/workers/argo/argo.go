@@ -50,12 +50,13 @@ type templateFunc func(appset appv1alpha1.ApplicationSet) ([]appv1alpha1.Applica
 func New(cfg config.ArgoCDConfig, log *slog.Logger, b *nats.Bus) *TemplateEngine {
 	return &TemplateEngine{
 		cfg: cfg,
-		log: log.With("component", "argotemplateengine"),
+		log: log.With("component", "argo"),
 		bus: b,
 	}
 }
 
 func (m *TemplateEngine) Run(ctx context.Context) error {
+	m.log.Info("starting argo worker...")
 	fn, err := getTemplateFunc(ctx, m.cfg)
 	if err != nil {
 		return err

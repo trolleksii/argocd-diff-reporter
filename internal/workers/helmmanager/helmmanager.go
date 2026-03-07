@@ -6,9 +6,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 	"github.com/trolleksii/argocd-diff-reporter/internal/helm"
+	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 )
 
 type HelmManager struct {
@@ -32,6 +32,7 @@ func New(cfg config.HelmWorkerConfig, log *slog.Logger, b *nats.Bus, s *nats.Sto
 // Run starts consuming snapshot requests.
 // Blocks until ctx is cancelled, then shuts down all repos.
 func (m *HelmManager) Run(ctx context.Context) error {
+	m.log.Info("starting helm worker...")
 	err := m.bus.Consume(ctx, nats.ConsumerConfig{
 		Name:       "helmmanager",
 		MaxDeliver: 3,
