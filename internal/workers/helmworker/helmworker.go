@@ -1,4 +1,4 @@
-package helmmanager
+package helmworker
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 )
 
-type HelmManager struct {
+type HelmWorker struct {
 	cfg   config.HelmWorkerConfig
 	log   *slog.Logger
 	bus   *nats.Bus
@@ -20,10 +20,10 @@ type HelmManager struct {
 	creds *helm.CredsProvider
 }
 
-func New(cfg config.HelmWorkerConfig, log *slog.Logger, b *nats.Bus, s *nats.Store) *HelmManager {
-	return &HelmManager{
+func New(cfg config.HelmWorkerConfig, log *slog.Logger, b *nats.Bus, s *nats.Store) *HelmWorker {
+	return &HelmWorker{
 		cfg:   cfg,
-		log:   log.With("component", "helmmanager"),
+		log:   log.With("worker", "helm"),
 		bus:   b,
 		store: s,
 	}
@@ -31,10 +31,10 @@ func New(cfg config.HelmWorkerConfig, log *slog.Logger, b *nats.Bus, s *nats.Sto
 
 // Run starts consuming snapshot requests.
 // Blocks until ctx is cancelled, then shuts down all repos.
-func (m *HelmManager) Run(ctx context.Context) error {
+func (m *HelmWorker) Run(ctx context.Context) error {
 	m.log.Info("starting helm worker...")
 	err := m.bus.Consume(ctx, nats.ConsumerConfig{
-		Name:       "helmmanager",
+		Name:       "helmworker",
 		MaxDeliver: 3,
 		AckWait:    3 * time.Second,
 		Handlers: map[string]nats.Handler{
@@ -55,7 +55,7 @@ func try(log *slog.Logger, msg string, fn func() error) {
 	}
 }
 
-func (m *HelmManager) handleChartFetch(fetchFn func(string, string, helm.CredsProvider, *helm.HelmChartCache) (string, error)) nats.Handler {
+func (m *HelmWorker) handleChartFetch(fetchFn func(string, string, helm.CredsProvider, *helm.HelmChartCache) (string, error)) nats.Handler {
 	return func(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
 		chartRef := headers["ref"]
 		chartVersion := headers["version"]
@@ -73,7 +73,7 @@ func (m *HelmManager) handleChartFetch(fetchFn func(string, string, helm.CredsPr
 	}
 }
 
-func (m *HelmManager) handleChartRender(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
+func (m *HelmWorker) handleChartRender(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
 	namespace := headers["namespace"]
 	releaseName := headers["releaseName"]
 	chartPath := headers["chartPath"]

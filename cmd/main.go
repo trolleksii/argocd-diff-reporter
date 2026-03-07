@@ -18,10 +18,10 @@ import (
 	"github.com/trolleksii/argocd-diff-reporter/internal/server/ui"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server/webhook"
 	wrk "github.com/trolleksii/argocd-diff-reporter/internal/workers"
-	"github.com/trolleksii/argocd-diff-reporter/internal/workers/argo"
+	"github.com/trolleksii/argocd-diff-reporter/internal/workers/argoworker"
 	coord "github.com/trolleksii/argocd-diff-reporter/internal/workers/coordinator"
-	"github.com/trolleksii/argocd-diff-reporter/internal/workers/gitrepomanager"
-	"github.com/trolleksii/argocd-diff-reporter/internal/workers/helmmanager"
+	"github.com/trolleksii/argocd-diff-reporter/internal/workers/gitworker"
+	"github.com/trolleksii/argocd-diff-reporter/internal/workers/helmworker"
 )
 
 func main() {
@@ -76,9 +76,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	gitWorker := gitrepomanager.New(cfg.Workers.GitWorker, logger, auth, bus)
-	argoWorker := argo.New(cfg.ArgoCD, logger, bus)
-	helmWorker := helmmanager.New(cfg.Workers.HelmWorker, logger, bus, store)
+	gitWorker := gitworker.New(cfg.Workers.GitWorker, logger, auth, bus)
+	argoWorker := argoworker.New(cfg.ArgoCD, logger, bus)
+	helmWorker := helmworker.New(cfg.Workers.HelmWorker, logger, bus, store)
 	coordinator := coord.New(logger, bus, store)
 
 	workers := []wrk.Worker{

@@ -1,4 +1,4 @@
-package argo
+package argoworker
 
 import (
 	"context"
@@ -34,11 +34,7 @@ import (
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 )
 
-const (
-	repoSnapshotSubject = "repo.snapshot.created"
-)
-
-type TemplateEngine struct {
+type ArgoWorker struct {
 	cfg      config.ArgoCDConfig
 	log      *slog.Logger
 	bus      *nats.Bus
@@ -47,15 +43,15 @@ type TemplateEngine struct {
 
 type templateFunc func(appset appv1alpha1.ApplicationSet) ([]appv1alpha1.Application, appv1alpha1.ApplicationSetReasonType, error)
 
-func New(cfg config.ArgoCDConfig, log *slog.Logger, b *nats.Bus) *TemplateEngine {
-	return &TemplateEngine{
+func New(cfg config.ArgoCDConfig, log *slog.Logger, b *nats.Bus) *ArgoWorker {
+	return &ArgoWorker{
 		cfg: cfg,
-		log: log.With("component", "argo"),
+		log: log.With("worker", "argo"),
 		bus: b,
 	}
 }
 
-func (m *TemplateEngine) Run(ctx context.Context) error {
+func (m *ArgoWorker) Run(ctx context.Context) error {
 	m.log.Info("starting argo worker...")
 	fn, err := getTemplateFunc(ctx, m.cfg)
 	if err != nil {
@@ -67,7 +63,7 @@ func (m *TemplateEngine) Run(ctx context.Context) error {
 		MaxDeliver: 3,
 		AckWait:    3 * time.Second,
 		Handlers: map[string]nats.Handler{
-			repoSnapshotSubject: m.process,
+			"repo.snapshot.created": m.process,
 		},
 	})
 	if err != nil {
@@ -82,7 +78,7 @@ func try(log *slog.Logger, msg string, fn func() error) {
 	}
 }
 
-func (m *TemplateEngine) process(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
+func (m *ArgoWorker) process(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
 	files, err := nats.Unmarshal[[]string](data)
 	if err != nil {
 		m.log.Error("failed to unmarshal files", "error", err)

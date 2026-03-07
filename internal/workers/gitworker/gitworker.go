@@ -1,4 +1,4 @@
-package gitrepomanager
+package gitworker
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 	"github.com/trolleksii/argocd-diff-reporter/internal/repository"
 )
 
-type GitRepoManager struct {
+type GitWorker struct {
 	cfg  config.GitWorkerConfig
 	auth *githubauth.GithubCredManager
 	log  *slog.Logger
@@ -24,11 +24,11 @@ type GitRepoManager struct {
 	repos map[string]*repository.Repository
 }
 
-func New(cfg config.GitWorkerConfig, log *slog.Logger, auth *githubauth.GithubCredManager, b *nats.Bus) *GitRepoManager {
-	return &GitRepoManager{
+func New(cfg config.GitWorkerConfig, log *slog.Logger, auth *githubauth.GithubCredManager, b *nats.Bus) *GitWorker {
+	return &GitWorker{
 		cfg:   cfg,
 		auth:  auth,
-		log:   log.With("component", "gitrepomanager"),
+		log:   log.With("worker", "git"),
 		bus:   b,
 		repos: make(map[string]*repository.Repository),
 	}
@@ -36,7 +36,7 @@ func New(cfg config.GitWorkerConfig, log *slog.Logger, auth *githubauth.GithubCr
 
 // Run starts consuming snapshot requests.
 // Blocks until ctx is cancelled, then shuts down all repos.
-func (m *GitRepoManager) Run(ctx context.Context) error {
+func (m *GitWorker) Run(ctx context.Context) error {
 	m.log.Info("starting git worker...")
 	err := m.bus.Consume(ctx, nats.ConsumerConfig{
 		Name:       "gitrepomanager",
@@ -60,7 +60,7 @@ func try(log *slog.Logger, msg string, fn func() error) {
 	}
 }
 
-func (m *GitRepoManager) handlePRChanged(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
+func (m *GitWorker) handlePRChanged(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
 	repoUrl := fmt.Sprintf("https://github.com/%s/%s", headers["owner"], headers["repository"])
 	r, err := m.getOrCreateRepo(ctx, repoUrl)
 	if err != nil {
@@ -102,7 +102,7 @@ func (m *GitRepoManager) handlePRChanged(ctx context.Context, headers map[string
 	try(m.log, "failed to ack message", ack)
 }
 
-func (m *GitRepoManager) handleFilesResolved(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
+func (m *GitWorker) handleFilesResolved(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
 	repoUrl := fmt.Sprintf("https://github.com/%s/%s", headers["owner"], headers["repository"])
 	r, err := m.getOrCreateRepo(ctx, repoUrl)
 	if err != nil {
@@ -120,7 +120,7 @@ func (m *GitRepoManager) handleFilesResolved(ctx context.Context, headers map[st
 	try(m.log, "failed to ack message", ack)
 }
 
-func (m *GitRepoManager) handleChartFetch(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
+func (m *GitWorker) handleChartFetch(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
 	repoUrl := fmt.Sprintf("https://github.com/%s/%s", headers["owner"], headers["repository"])
 	r, err := m.getOrCreateRepo(ctx, repoUrl)
 	if err != nil {
@@ -138,7 +138,7 @@ func (m *GitRepoManager) handleChartFetch(ctx context.Context, headers map[strin
 }
 
 // getOrCreateRepo returns the entry for a repo URL, initializing it on first access.
-func (m *GitRepoManager) getOrCreateRepo(ctx context.Context, repoURL string) (*repository.Repository, error) {
+func (m *GitWorker) getOrCreateRepo(ctx context.Context, repoURL string) (*repository.Repository, error) {
 	m.mu.RLock()
 	repo, ok := m.repos[repoURL]
 	m.mu.RUnlock()
