@@ -72,17 +72,11 @@ func (m *ArgoWorker) Run(ctx context.Context) error {
 	return nil
 }
 
-func try(log *slog.Logger, msg string, fn func() error) {
-	if err := fn(); err != nil {
-		log.Error(msg, "error", err)
-	}
-}
-
 func (m *ArgoWorker) process(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
 	files, err := nats.Unmarshal[[]string](data)
 	if err != nil {
 		m.log.Error("failed to unmarshal files", "error", err)
-		try(m.log, "failed to nak the message", nak)
+		nak()
 		return
 	}
 	s := headers["snapshotDir"]
@@ -92,7 +86,7 @@ func (m *ArgoWorker) process(ctx context.Context, headers map[string]string, dat
 		if err != nil {
 			headers["error"] = err.Error()
 			m.log.Error("failed to load file", "error", err)
-			m.bus.Publish(ctx, "argo.parsing.failed", headers, []byte{})
+			m.bus.Publish(ctx, "argo.file.parsing.failed", headers, []byte{})
 			continue
 		}
 		for _, appSet := range appSets {
@@ -101,7 +95,7 @@ func (m *ArgoWorker) process(ctx context.Context, headers map[string]string, dat
 			if err != nil {
 				headers["error"] = err.Error()
 				m.log.Error("failed to generate applications", "reason", reason, "error", err)
-				m.bus.Publish(ctx, "applicationset.render.failed", headers, []byte{})
+				m.bus.Publish(ctx, "argo.app.generation.failed", headers, nil)
 				continue
 			}
 			for _, a := range renderedApps {
@@ -109,7 +103,7 @@ func (m *ArgoWorker) process(ctx context.Context, headers map[string]string, dat
 				data, err := nats.Marshal(a)
 				if err != nil {
 					m.log.Error("failed to marshal application", "error", err)
-					try(m.log, "failed to nak the message", nak)
+					nak()
 					return
 				}
 				m.bus.Publish(ctx, "argo.helmappset.rendered", headers, data)
@@ -120,13 +114,13 @@ func (m *ArgoWorker) process(ctx context.Context, headers map[string]string, dat
 			data, err := nats.Marshal(app)
 			if err != nil {
 				m.log.Error("failed to marshal application", "error", err)
-				try(m.log, "failed to nak the message", nak)
+				nak()
 				return
 			}
 			m.bus.Publish(ctx, "argo.helmappset.rendered", headers, data)
 		}
 	}
-	try(m.log, "failed to ack message", ack)
+	ack()
 }
 
 func getTemplateFunc(ctx context.Context, c config.ArgoCDConfig) (func(appv1alpha1.ApplicationSet) ([]appv1alpha1.Application, appv1alpha1.ApplicationSetReasonType, error), error) {

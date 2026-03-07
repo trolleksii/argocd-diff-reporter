@@ -29,8 +29,6 @@ func New(cfg config.HelmWorkerConfig, log *slog.Logger, b *nats.Bus, s *nats.Sto
 	}
 }
 
-// Run starts consuming snapshot requests.
-// Blocks until ctx is cancelled, then shuts down all repos.
 func (m *HelmWorker) Run(ctx context.Context) error {
 	m.log.Info("starting helm worker...")
 	err := m.bus.Consume(ctx, nats.ConsumerConfig{
@@ -49,27 +47,21 @@ func (m *HelmWorker) Run(ctx context.Context) error {
 	return nil
 }
 
-func try(log *slog.Logger, msg string, fn func() error) {
-	if err := fn(); err != nil {
-		log.Error(msg, "error", err)
-	}
-}
-
 func (m *HelmWorker) handleChartFetch(fetchFn func(string, string, helm.CredsProvider, *helm.HelmChartCache) (string, error)) nats.Handler {
 	return func(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
 		chartRef := headers["ref"]
 		chartVersion := headers["version"]
 		chartLocation, err := fetchFn(chartRef, chartVersion, nil, m.cache)
 		if err != nil {
-			try(m.log, "failed to nak the message", nak)
+			headers["error"] = err.Error()
+			m.log.Error("failed to feth the chart", "error", err)
+			m.bus.Publish(ctx, "helm.chart.fetch.failed", headers, nil)
+			ack()
 			return
 		}
 		headers["chartLocation"] = chartLocation
-		if err := m.bus.Publish(ctx, "helm.chart.fetched", headers, data); err != nil {
-			try(m.log, "failed to nak the message", nak)
-			return
-		}
-		try(m.log, "failed to ack the message", ack)
+		m.bus.Publish(ctx, "helm.chart.fetched", headers, data)
+		ack()
 	}
 }
 
@@ -83,7 +75,10 @@ func (m *HelmWorker) handleChartRender(ctx context.Context, headers map[string]s
 
 	manifest, err := helm.RenderChart(ctx, namespace, releaseName, chartPath, chartVersion, releaseValues)
 	if err != nil {
-		try(m.log, "failed to nak the message", nak)
+		headers["error"] = err.Error()
+		m.log.Error("failed to render the manifest", "error", err)
+		m.bus.Publish(ctx, "helm.manifest.render.failed", headers, nil)
+		ack()
 		return
 	}
 	sha := headers["sha"]
@@ -91,14 +86,10 @@ func (m *HelmWorker) handleChartRender(ctx context.Context, headers map[string]s
 	appName := headers["application"]
 	id := fmt.Sprintf("%s/%s/%s", sha, fileName, appName)
 	if err := m.store.StoreObject(ctx, id, manifest); err != nil {
-		try(m.log, "failed to nak the message", nak)
+		nak()
 		return
 	}
-	m.log.Info(manifest)
 	headers["manifestLocation"] = id
-	if err := m.bus.Publish(ctx, "helm.manifest.rendered", headers, data); err != nil {
-		try(m.log, "failed to nak the message", nak)
-		return
-	}
-	try(m.log, "failed to ack the message", ack)
+	m.bus.Publish(ctx, "helm.manifest.rendered", headers, data)
+	ack()
 }

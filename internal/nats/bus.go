@@ -38,11 +38,14 @@ func (b *Bus) Publish(ctx context.Context, subject string, headers map[string]st
 	for k, v := range headers {
 		h[k] = []string{v}
 	}
-	_, err := b.js.PublishMsg(ctx, &nats.Msg{
+	msg := nats.Msg{
 		Subject: subject,
 		Header:  h,
-		Data:    data,
-	})
+	}
+	if data != nil {
+		msg.Data = data
+	}
+	_, err := b.js.PublishMsg(ctx, &msg)
 	return err
 }
 

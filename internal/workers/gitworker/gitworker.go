@@ -34,8 +34,6 @@ func New(cfg config.GitWorkerConfig, log *slog.Logger, auth *githubauth.GithubCr
 	}
 }
 
-// Run starts consuming snapshot requests.
-// Blocks until ctx is cancelled, then shuts down all repos.
 func (m *GitWorker) Run(ctx context.Context) error {
 	m.log.Info("starting git worker...")
 	err := m.bus.Consume(ctx, nats.ConsumerConfig{
@@ -54,24 +52,20 @@ func (m *GitWorker) Run(ctx context.Context) error {
 	return nil
 }
 
-func try(log *slog.Logger, msg string, fn func() error) {
-	if err := fn(); err != nil {
-		log.Error(msg, "error", err)
-	}
-}
-
 func (m *GitWorker) handlePRChanged(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
 	repoUrl := fmt.Sprintf("https://github.com/%s/%s", headers["owner"], headers["repository"])
 	r, err := m.getOrCreateRepo(ctx, repoUrl)
 	if err != nil {
 		m.log.Error("failed to find git repo", "error", err)
-		try(m.log, "failed to nak the message", nak)
+		// we don't report this because if the webhook event came in the first place it means repo exists
+		// and the reason might be related to network, lag, credentials issue, etc
+		nak()
 		return
 	}
 	changes, err := r.ListChangedFiles(headers["baseSha"], headers["headSha"])
 	if err != nil {
 		m.log.Error("failed to list changed files")
-		try(m.log, "failed to nak the message", nak)
+		nak()
 		return
 	}
 	var from, to []string
@@ -79,12 +73,14 @@ func (m *GitWorker) handlePRChanged(ctx context.Context, headers map[string]stri
 		from = append(from, change.From)
 		to = append(to, change.To)
 	}
+	// TODO: files that are created/deleted/moved will lack the counterpart for the diff to run
+	// we need to do something about it
 	if len(from) > 0 {
 		headers["ref"] = headers["baseSha"]
 		data, err := nats.Marshal(FileGlobFilter(from, m.cfg.FileGlobs))
 		if err != nil {
 			m.log.Error("failed to marshal base files", "error", err)
-			try(m.log, "failed to nak the message", nak)
+			nak()	
 			return
 		}
 		m.bus.Publish(ctx, "git.files.resolved", headers, data)
@@ -94,12 +90,12 @@ func (m *GitWorker) handlePRChanged(ctx context.Context, headers map[string]stri
 		data, err = nats.Marshal(FileGlobFilter(to, m.cfg.FileGlobs))
 		if err != nil {
 			m.log.Error("failed to marshal head files", "error", err)
-			try(m.log, "failed to nak the message", nak)
+			nak()
 			return
 		}
 		m.bus.Publish(ctx, "git.files.resolved", headers, data)
 	}
-	try(m.log, "failed to ack message", ack)
+	ack()
 }
 
 func (m *GitWorker) handleFilesResolved(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
@@ -107,34 +103,42 @@ func (m *GitWorker) handleFilesResolved(ctx context.Context, headers map[string]
 	r, err := m.getOrCreateRepo(ctx, repoUrl)
 	if err != nil {
 		m.log.Error("failed to find git repo", "error", err)
-		try(m.log, "failed to nak the message", nak)
+		nak()
 		return
 	}
 	files, err := nats.Unmarshal[[]string](data)
 	snapshotDir, err := r.GetOrCreateSnapshot(headers["ref"], "", files)
 	if err != nil {
 		m.log.Error("failed to create snapshot", "error", err)
+		nak()
+		return
 	}
 	headers["snapshotDir"] = snapshotDir
 	m.bus.Publish(ctx, "git.files.snapshotted", headers, data)
-	try(m.log, "failed to ack message", ack)
+	ack()
 }
 
 func (m *GitWorker) handleChartFetch(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
 	repoUrl := fmt.Sprintf("https://github.com/%s/%s", headers["owner"], headers["repository"])
 	r, err := m.getOrCreateRepo(ctx, repoUrl)
 	if err != nil {
+		headers["error"] = err.Error()
 		m.log.Error("failed to find git repo", "error", err)
-		try(m.log, "failed to nak the message", nak)
+		m.bus.Publish(ctx, "helm.chart.fetch.failed", headers, nil)
+		ack()
 		return
 	}
 	snapshotDir, err := r.GetOrCreateSnapshot(headers["ref"], headers["path"], nil)
 	if err != nil {
+		headers["error"] = err.Error()
 		m.log.Error("failed to create snapshot", "error", err)
+		m.bus.Publish(ctx, "helm.chart.fetch.failed", headers, nil)
+		ack()
+		return
 	}
 	headers["snapshotDir"] = snapshotDir
 	m.bus.Publish(ctx, "git.chart.snapshotted", headers, data)
-	try(m.log, "failed to ack message", ack)
+	ack()
 }
 
 // getOrCreateRepo returns the entry for a repo URL, initializing it on first access.
