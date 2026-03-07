@@ -1,4 +1,4 @@
-package bus
+package nats
 
 import (
 	"context"
@@ -31,10 +31,6 @@ type ConsumerConfig struct {
 type Bus struct {
 	js     jetstream.JetStream
 	stream jetstream.Stream
-}
-
-func NewBus(js jetstream.JetStream) *Bus {
-	return &Bus{js: js}
 }
 
 func (b *Bus) Publish(ctx context.Context, subject string, headers map[string]string, data []byte) error {

@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/trolleksii/argocd-diff-reporter/internal/bus"
+	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 	"github.com/trolleksii/argocd-diff-reporter/internal/githubauth"
 	"github.com/trolleksii/argocd-diff-reporter/internal/repository"
@@ -18,13 +18,13 @@ type GitRepoManager struct {
 	cfg  config.GitWorkerConfig
 	auth *githubauth.GithubCredManager
 	log  *slog.Logger
-	bus  *bus.Bus
+	bus  *nats.Bus
 
 	mu    sync.RWMutex
 	repos map[string]*repository.Repository
 }
 
-func NewGitRepoManager(cfg config.GitWorkerConfig, auth *githubauth.GithubCredManager, b *bus.Bus, log *slog.Logger) *GitRepoManager {
+func New(cfg config.GitWorkerConfig, auth *githubauth.GithubCredManager, b *nats.Bus, log *slog.Logger) *GitRepoManager {
 	return &GitRepoManager{
 		cfg:   cfg,
 		auth:  auth,
@@ -37,11 +37,11 @@ func NewGitRepoManager(cfg config.GitWorkerConfig, auth *githubauth.GithubCredMa
 // Run starts consuming snapshot requests.
 // Blocks until ctx is cancelled, then shuts down all repos.
 func (m *GitRepoManager) Run(ctx context.Context) error {
-	err := m.bus.Consume(ctx, bus.ConsumerConfig{
+	err := m.bus.Consume(ctx, nats.ConsumerConfig{
 		Name:       "gitrepomanager",
 		MaxDeliver: 3,
 		AckWait:    3 * time.Second,
-		Handlers: map[string]bus.Handler{
+		Handlers: map[string]nats.Handler{
 			"webhook.pr.changed":   m.handlePRChanged,
 			"git.files.resolved":   m.handleFilesResolved,
 			"argo.helm.git.parsed": m.handleChartFetch,
@@ -80,7 +80,7 @@ func (m *GitRepoManager) handlePRChanged(ctx context.Context, headers map[string
 	}
 	if len(from) > 0 {
 		headers["ref"] = headers["baseSha"]
-		data, err := bus.Marshal(FileGlobFilter(from, m.cfg.FileGlobs))
+		data, err := nats.Marshal(FileGlobFilter(from, m.cfg.FileGlobs))
 		if err != nil {
 			m.log.Error("failed to marshal base files", "error", err)
 			try(m.log, "failed to nak the message", nak)
@@ -90,7 +90,7 @@ func (m *GitRepoManager) handlePRChanged(ctx context.Context, headers map[string
 	}
 	if len(to) > 0 {
 		headers["ref"] = headers["headSha"]
-		data, err = bus.Marshal(FileGlobFilter(to, m.cfg.FileGlobs))
+		data, err = nats.Marshal(FileGlobFilter(to, m.cfg.FileGlobs))
 		if err != nil {
 			m.log.Error("failed to marshal head files", "error", err)
 			try(m.log, "failed to nak the message", nak)
@@ -109,7 +109,7 @@ func (m *GitRepoManager) handleFilesResolved(ctx context.Context, headers map[st
 		try(m.log, "failed to nak the message", nak)
 		return
 	}
-	files, err := bus.Unmarshal[[]string](data)
+	files, err := nats.Unmarshal[[]string](data)
 	snapshotDir, err := r.GetOrCreateSnapshot(headers["ref"], "", files)
 	if err != nil {
 		m.log.Error("failed to create snapshot", "error", err)

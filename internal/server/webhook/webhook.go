@@ -8,24 +8,24 @@ import (
 
 	"github.com/google/go-github/v82/github"
 
-	"github.com/trolleksii/argocd-diff-reporter/internal/bus"
+	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server"
 )
 
 type WebhookHandler struct {
 	cfg config.WebhookConfig
-	bus *bus.Bus
+	bus *nats.Bus
 	log *slog.Logger
 }
 
-func Route(cfg config.WebhookConfig, log *slog.Logger, b *bus.Bus) server.Route {
+func Route(cfg config.WebhookConfig, log *slog.Logger, b *nats.Bus) server.Route {
 	return func(mux *http.ServeMux) {
 		mux.Handle("/webhook", newWebhookHandler(cfg, log, b))
 	}
 }
 
-func newWebhookHandler(cfg config.WebhookConfig, log *slog.Logger, b *bus.Bus) *WebhookHandler {
+func newWebhookHandler(cfg config.WebhookConfig, log *slog.Logger, b *nats.Bus) *WebhookHandler {
 	return &WebhookHandler{
 		cfg: cfg,
 		log: log.With("module", "server", "handler", "webhook"),

@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/trolleksii/argocd-diff-reporter/internal/bus"
+	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server"
 )
 
@@ -22,17 +22,17 @@ type mockPayload struct {
 }
 
 type MockHandler struct {
-	bus *bus.Bus
+	bus *nats.Bus
 	log *slog.Logger
 }
 
-func Route(log *slog.Logger, b *bus.Bus) server.Route {
+func Route(log *slog.Logger, b *nats.Bus) server.Route {
 	return func(mux *http.ServeMux) {
 		mux.Handle("/mock", newMockHandler(log, b))
 	}
 }
 
-func newMockHandler(log *slog.Logger, b *bus.Bus) *MockHandler {
+func newMockHandler(log *slog.Logger, b *nats.Bus) *MockHandler {
 	return &MockHandler{
 		log: log.With("module", "server", "handler", "mock"),
 		bus: b,

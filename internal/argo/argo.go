@@ -30,7 +30,7 @@ import (
 	"github.com/argoproj/argo-cd/v3/util/github_app"
 	argosettings "github.com/argoproj/argo-cd/v3/util/settings"
 
-	"github.com/trolleksii/argocd-diff-reporter/internal/bus"
+	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 )
 
@@ -41,13 +41,13 @@ const (
 type TemplateEngine struct {
 	cfg      config.ArgoCDConfig
 	log      *slog.Logger
-	bus      *bus.Bus
+	bus      *nats.Bus
 	generate templateFunc
 }
 
 type templateFunc func(appset appv1alpha1.ApplicationSet) ([]appv1alpha1.Application, appv1alpha1.ApplicationSetReasonType, error)
 
-func NewTemplateEngine(cfg config.ArgoCDConfig, b *bus.Bus, log *slog.Logger) *TemplateEngine {
+func New(cfg config.ArgoCDConfig, b *nats.Bus, log *slog.Logger) *TemplateEngine {
 	return &TemplateEngine{
 		cfg: cfg,
 		log: log.With("component", "argotemplateengine"),
@@ -61,11 +61,11 @@ func (m *TemplateEngine) Run(ctx context.Context) error {
 		return err
 	}
 	m.generate = fn
-	err = m.bus.Consume(ctx, bus.ConsumerConfig{
+	err = m.bus.Consume(ctx, nats.ConsumerConfig{
 		Name:       "argotemplateengine",
 		MaxDeliver: 3,
 		AckWait:    3 * time.Second,
-		Handlers: map[string]bus.Handler{
+		Handlers: map[string]nats.Handler{
 			repoSnapshotSubject: m.process,
 		},
 	})
@@ -82,7 +82,7 @@ func try(log *slog.Logger, msg string, fn func() error) {
 }
 
 func (m *TemplateEngine) process(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
-	files, err := bus.Unmarshal[[]string](data)
+	files, err := nats.Unmarshal[[]string](data)
 	if err != nil {
 		m.log.Error("failed to unmarshal files", "error", err)
 		try(m.log, "failed to nak the message", nak)
@@ -109,7 +109,7 @@ func (m *TemplateEngine) process(ctx context.Context, headers map[string]string,
 			}
 			for _, a := range renderedApps {
 				headers["application"] = a.Name
-				data, err := bus.Marshal(a)
+				data, err := nats.Marshal(a)
 				if err != nil {
 					m.log.Error("failed to marshal application", "error", err)
 					try(m.log, "failed to nak the message", nak)
@@ -120,7 +120,7 @@ func (m *TemplateEngine) process(ctx context.Context, headers map[string]string,
 		}
 		for _, app := range apps {
 			headers["application"] = app.Name
-			data, err := bus.Marshal(app)
+			data, err := nats.Marshal(app)
 			if err != nil {
 				m.log.Error("failed to marshal application", "error", err)
 				try(m.log, "failed to nak the message", nak)

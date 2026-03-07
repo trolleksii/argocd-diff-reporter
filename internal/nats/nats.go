@@ -11,10 +11,9 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
-	"github.com/trolleksii/argocd-diff-reporter/internal/registry"
 )
 
-func New(cfg config.NatsConfig, ctx context.Context, log *slog.Logger, r *registry.Registry) (registry.Service, error) {
+func New(cfg config.NatsConfig, ctx context.Context, log *slog.Logger) (*Nats, error) {
 	var nc *nats.Conn
 	var srv *server.Server
 
@@ -62,7 +61,6 @@ func New(cfg config.NatsConfig, ctx context.Context, log *slog.Logger, r *regist
 		nc.Drain()
 		return nil, err
 	}
-	r.Set("jetstream", js)
 
 	kvStore, err := js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{
 		Bucket:      "orchestration",
@@ -73,7 +71,6 @@ func New(cfg config.NatsConfig, ctx context.Context, log *slog.Logger, r *regist
 		nc.Drain()
 		return nil, err
 	}
-	r.Set("kvstore", kvStore)
 
 	objs, err := js.CreateOrUpdateObjectStore(ctx, jetstream.ObjectStoreConfig{
 		Bucket:      "reports",
@@ -84,14 +81,16 @@ func New(cfg config.NatsConfig, ctx context.Context, log *slog.Logger, r *regist
 		nc.Drain()
 		return nil, err
 	}
-	r.Set("objectstore", objs)
 
-	return &Nats{nc: nc, srv: srv, log: log.With("component", "nats"), closedCh: closedCh}, nil
+	return &Nats{nc: nc, srv: srv, js: js, kv: kvStore, obj: objs, log: log.With("component", "nats"), closedCh: closedCh}, nil
 }
 
 type Nats struct {
 	nc       *nats.Conn
 	srv      *server.Server
+	js       jetstream.JetStream
+	kv       jetstream.KeyValue
+	obj      jetstream.ObjectStore
 	log      *slog.Logger
 	closedCh chan struct{}
 }
@@ -109,17 +108,11 @@ func (n *Nats) Run(ctx context.Context) error {
 	return nil
 }
 
-func GetJetstream(r *registry.Registry) jetstream.JetStream {
-	js, _ := registry.Get[jetstream.JetStream](r, "jetstream")
-	return js
+func (n *Nats) NewBus() *Bus {
+	return &Bus{js: n.js}
 }
 
-func GetKVStore(r *registry.Registry) jetstream.KeyValue {
-	kv, _ := registry.Get[jetstream.KeyValue](r, "kvstore")
-	return kv
-}
 
-func GetObjectStore(r *registry.Registry) jetstream.ObjectStore {
-	obj, _ := registry.Get[jetstream.ObjectStore](r, "objectstore")
-	return obj
+func (n *Nats) NewStore() *Store {
+	return &Store{kvStore: n.kv, objStore: n.obj}
 }

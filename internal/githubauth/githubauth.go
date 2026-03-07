@@ -23,7 +23,7 @@ type GithubCredManager struct {
 	mu          sync.RWMutex
 }
 
-func NewAuth(ctx context.Context, log *slog.Logger, cfg config.GithubAppConfig) (*GithubCredManager, error) {
+func New(ctx context.Context, log *slog.Logger, cfg config.GithubAppConfig) (*GithubCredManager, error) {
 	appTokenSource, err := githubauth.NewApplicationTokenSource(cfg.AppID, []byte(cfg.PrivateKey))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create application token source: %w", err)

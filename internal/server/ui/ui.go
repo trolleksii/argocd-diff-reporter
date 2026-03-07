@@ -10,16 +10,16 @@ import (
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/server"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server/templates"
-	"github.com/trolleksii/argocd-diff-reporter/internal/store"
+	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 )
 
 type UIHandler struct {
 	log             *slog.Logger
 	templateManager templates.Manager
-	store           *store.Store
+	store           *nats.Store
 }
 
-func NewUIHandler(log *slog.Logger, store *store.Store) *UIHandler {
+func NewUIHandler(log *slog.Logger, store *nats.Store) *UIHandler {
 	return &UIHandler{
 		log:             log.With("module", "server", "handler", "ui"),
 		templateManager: templates.NewManager(),
@@ -27,7 +27,7 @@ func NewUIHandler(log *slog.Logger, store *store.Store) *UIHandler {
 	}
 }
 
-func Route(log *slog.Logger, store *store.Store) server.Route {
+func Route(log *slog.Logger, store *nats.Store) server.Route {
 	uh := NewUIHandler(log, store)
 	return func(mux *http.ServeMux) {
 		mux.HandleFunc("GET /{$}", uh.ServeIndex)

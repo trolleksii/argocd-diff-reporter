@@ -6,24 +6,23 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/trolleksii/argocd-diff-reporter/internal/bus"
+	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 	"github.com/trolleksii/argocd-diff-reporter/internal/githubauth"
 	"github.com/trolleksii/argocd-diff-reporter/internal/helm"
-	"github.com/trolleksii/argocd-diff-reporter/internal/store"
 )
 
 type HelmManager struct {
 	cfg   config.GitWorkerConfig
 	auth  *githubauth.GithubCredManager
 	log   *slog.Logger
-	bus   *bus.Bus
-	store *store.Store
+	bus   *nats.Bus
+	store *nats.Store
 	cache *helm.HelmChartCache
 	creds *helm.CredsProvider
 }
 
-func NewHelmManager(cfg config.GitWorkerConfig, auth *githubauth.GithubCredManager, b *bus.Bus, s *store.Store, log *slog.Logger) *HelmManager {
+func NewHelmManager(cfg config.GitWorkerConfig, auth *githubauth.GithubCredManager, b *nats.Bus, s *nats.Store, log *slog.Logger) *HelmManager {
 	return &HelmManager{
 		cfg:   cfg,
 		auth:  auth,
@@ -36,11 +35,11 @@ func NewHelmManager(cfg config.GitWorkerConfig, auth *githubauth.GithubCredManag
 // Run starts consuming snapshot requests.
 // Blocks until ctx is cancelled, then shuts down all repos.
 func (m *HelmManager) Run(ctx context.Context) error {
-	err := m.bus.Consume(ctx, bus.ConsumerConfig{
+	err := m.bus.Consume(ctx, nats.ConsumerConfig{
 		Name:       "helmmanager",
 		MaxDeliver: 3,
 		AckWait:    3 * time.Second,
-		Handlers: map[string]bus.Handler{
+		Handlers: map[string]nats.Handler{
 			"argo.helm.oci.parsed":   m.handleChartFetch(helm.FetchChartOCI),
 			"argo.helm.http.parsed":  m.handleChartFetch(helm.FetchChartHTTPS),
 			"helm.manifest.rendered": m.handleChartRender,
@@ -58,7 +57,7 @@ func try(log *slog.Logger, msg string, fn func() error) {
 	}
 }
 
-func (m *HelmManager) handleChartFetch(fetchFn func(string, string, helm.CredsProvider, *helm.HelmChartCache) (string, error)) bus.Handler {
+func (m *HelmManager) handleChartFetch(fetchFn func(string, string, helm.CredsProvider, *helm.HelmChartCache) (string, error)) nats.Handler {
 	return func(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
 		chartRef := headers["ref"]
 		chartVersion := headers["version"]
@@ -82,7 +81,7 @@ func (m *HelmManager) handleChartRender(ctx context.Context, headers map[string]
 	chartPath := headers["chartPath"]
 	chartVersion := headers["chartVersion"]
 
-	releaseValues, err := bus.Unmarshal[map[string]any](data)
+	releaseValues, err := nats.Unmarshal[map[string]any](data)
 
 	manifest, err := helm.RenderChart(ctx, namespace, releaseName, chartPath, chartVersion, releaseValues)
 	if err != nil {

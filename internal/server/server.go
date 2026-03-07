@@ -8,19 +8,17 @@ import (
 	"log/slog"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
-	"github.com/trolleksii/argocd-diff-reporter/internal/registry"
 )
 
 type Server struct {
 	log        *slog.Logger
 	httpServer *http.Server
 	mux        *http.ServeMux
-	registry   *registry.Registry
 }
 
 type Route func(*http.ServeMux)
 
-func NewServer(cfg config.ServerConfig, log *slog.Logger, routes ...Route) *Server {
+func New(cfg config.ServerConfig, log *slog.Logger, routes ...Route) *Server {
 	mux := http.NewServeMux()
 
 	for _, r := range routes {
