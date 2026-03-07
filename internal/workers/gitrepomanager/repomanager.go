@@ -24,7 +24,7 @@ type GitRepoManager struct {
 	repos map[string]*repository.Repository
 }
 
-func New(cfg config.GitWorkerConfig, auth *githubauth.GithubCredManager, b *nats.Bus, log *slog.Logger) *GitRepoManager {
+func New(cfg config.GitWorkerConfig, log *slog.Logger, auth *githubauth.GithubCredManager, b *nats.Bus) *GitRepoManager {
 	return &GitRepoManager{
 		cfg:   cfg,
 		auth:  auth,

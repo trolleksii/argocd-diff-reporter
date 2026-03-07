@@ -6,7 +6,6 @@ import (
 	"net/http"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
-	"github.com/trolleksii/argocd-diff-reporter/internal/server"
 )
 
 type mockPayload struct {
@@ -26,8 +25,9 @@ type MockHandler struct {
 	log *slog.Logger
 }
 
-func Route(log *slog.Logger, b *nats.Bus) server.Route {
-	return func(mux *http.ServeMux) {
+// NewRouteFunc returns a function that registers the webhook handler on the provided mux.
+func NewRouteFunc(b *nats.Bus) func(*http.ServeMux, *slog.Logger) {
+	return func(mux *http.ServeMux, log *slog.Logger) {
 		mux.Handle("/mock", newMockHandler(log, b))
 	}
 }

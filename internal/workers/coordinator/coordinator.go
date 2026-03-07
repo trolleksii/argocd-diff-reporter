@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/models"
+	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 )
 
 // Coordinator is the reactive event loop that watches artifact completion and
@@ -70,7 +70,7 @@ type appState struct {
 	diffError     string
 }
 
-func NewCoordinator(b *nats.Bus, s *nats.Store, log *slog.Logger) *Coordinator {
+func New(log *slog.Logger, b *nats.Bus, s *nats.Store) *Coordinator {
 	return &Coordinator{
 		bus:   b,
 		store: s,

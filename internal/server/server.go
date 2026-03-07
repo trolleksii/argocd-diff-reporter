@@ -13,16 +13,16 @@ import (
 type Server struct {
 	log        *slog.Logger
 	httpServer *http.Server
-	mux        *http.ServeMux
 }
 
-type Route func(*http.ServeMux)
+// MuxOption configures the http.ServeMux.
+type MuxOption func(*http.ServeMux, *slog.Logger)
 
-func New(cfg config.ServerConfig, log *slog.Logger, routes ...Route) *Server {
+func New(cfg config.ServerConfig, log *slog.Logger, opts ...MuxOption) *Server {
 	mux := http.NewServeMux()
 
-	for _, r := range routes {
-		r(mux)
+	for _, fn := range opts {
+		fn(mux, log)
 	}
 
 	return &Server{
@@ -34,7 +34,6 @@ func New(cfg config.ServerConfig, log *slog.Logger, routes ...Route) *Server {
 			WriteTimeout: 15 * time.Second,
 			IdleTimeout:  60 * time.Second,
 		},
-		mux: mux,
 	}
 }
 

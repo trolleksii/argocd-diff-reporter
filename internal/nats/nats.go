@@ -13,7 +13,7 @@ import (
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 )
 
-func New(cfg config.NatsConfig, ctx context.Context, log *slog.Logger) (*Nats, error) {
+func New(ctx context.Context, cfg config.NatsConfig, log *slog.Logger) (*Nats, error) {
 	var nc *nats.Conn
 	var srv *server.Server
 

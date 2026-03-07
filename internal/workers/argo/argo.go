@@ -30,8 +30,8 @@ import (
 	"github.com/argoproj/argo-cd/v3/util/github_app"
 	argosettings "github.com/argoproj/argo-cd/v3/util/settings"
 
-	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
+	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 )
 
 const (
@@ -47,7 +47,7 @@ type TemplateEngine struct {
 
 type templateFunc func(appset appv1alpha1.ApplicationSet) ([]appv1alpha1.Application, appv1alpha1.ApplicationSetReasonType, error)
 
-func New(cfg config.ArgoCDConfig, b *nats.Bus, log *slog.Logger) *TemplateEngine {
+func New(cfg config.ArgoCDConfig, log *slog.Logger, b *nats.Bus) *TemplateEngine {
 	return &TemplateEngine{
 		cfg: cfg,
 		log: log.With("component", "argotemplateengine"),

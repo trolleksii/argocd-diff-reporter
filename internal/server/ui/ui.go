@@ -8,9 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/trolleksii/argocd-diff-reporter/internal/server"
-	"github.com/trolleksii/argocd-diff-reporter/internal/server/templates"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
+	"github.com/trolleksii/argocd-diff-reporter/internal/server/templates"
 )
 
 type UIHandler struct {
@@ -27,9 +26,10 @@ func NewUIHandler(log *slog.Logger, store *nats.Store) *UIHandler {
 	}
 }
 
-func Route(log *slog.Logger, store *nats.Store) server.Route {
-	uh := NewUIHandler(log, store)
-	return func(mux *http.ServeMux) {
+// NewRouteFunc returns a function that registers the webhook handler on the provided mux.
+func NewRouteFunc(store *nats.Store) func(*http.ServeMux, *slog.Logger) {
+	return func(mux *http.ServeMux, log *slog.Logger) {
+		uh := NewUIHandler(log, store)
 		mux.HandleFunc("GET /{$}", uh.ServeIndex)
 		mux.HandleFunc("GET /pulls/{pr}", uh.ServeSummary)
 		mux.HandleFunc("GET /reports/{pr}/{id...}", uh.ServeReport)

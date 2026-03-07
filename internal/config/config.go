@@ -40,13 +40,18 @@ type GitRepoFilter struct {
 }
 
 type WorkersConfig struct {
-	GitWorker GitWorkerConfig `yaml:"gitWorker"`
+	GitWorker  GitWorkerConfig  `yaml:"gitWorker"`
+	HelmWorker HelmWorkerConfig `yaml:"helmWorker"`
 }
 
 type GitWorkerConfig struct {
 	CloneBaseDir    string   `yaml:"cloneBaseDir"`
 	SnapshotBaseDir string   `yaml:"snapshotBaseDir"`
 	FileGlobs       []string `yaml:"fileGlobs"`
+}
+
+type HelmWorkerConfig struct {
+	ChartCacheDir string `yaml:"cloneBaseDir"`
 }
 
 type NatsConfig struct {

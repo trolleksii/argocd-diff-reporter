@@ -9,17 +9,19 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/trolleksii/argocd-diff-reporter/internal/argo"
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
-	"github.com/trolleksii/argocd-diff-reporter/internal/coordinator"
 	"github.com/trolleksii/argocd-diff-reporter/internal/githubauth"
-	"github.com/trolleksii/argocd-diff-reporter/internal/gitrepomanager"
 	"github.com/trolleksii/argocd-diff-reporter/internal/logging"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server/mock"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server/ui"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server/webhook"
+	wrk "github.com/trolleksii/argocd-diff-reporter/internal/workers"
+	"github.com/trolleksii/argocd-diff-reporter/internal/workers/argo"
+	coord "github.com/trolleksii/argocd-diff-reporter/internal/workers/coordinator"
+	"github.com/trolleksii/argocd-diff-reporter/internal/workers/gitrepomanager"
+	"github.com/trolleksii/argocd-diff-reporter/internal/workers/helmmanager"
 )
 
 func main() {
@@ -40,15 +42,15 @@ func main() {
 		syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	natsSrv, err := nats.New(cfg.Nats, ctx, logger)
+	natsSrv, err := nats.New(ctx, cfg.Nats, logger)
 	if err != nil {
 		logger.Error("failed to start NATS", "error", err)
 		os.Exit(1)
 	}
-	b := natsSrv.NewBus()
-	st := natsSrv.NewStore()
+	bus := natsSrv.NewBus()
+	store := natsSrv.NewStore()
 
-	if err := b.EnsureStream(ctx, "pr-diffs", []string{
+	if err := bus.EnsureStream(ctx, "pr-diffs", []string{
 		"webhook.>",
 		"git.>",
 		"argo.>",
@@ -63,39 +65,37 @@ func main() {
 	}
 
 	httpSrv := server.New(cfg.Server, logger,
-		webhook.Route(cfg.Webhook, logger, b),
-		ui.Route(logger, st),
-		mock.Route(logger, b),
+		webhook.NewRouteFunc(cfg.Webhook, bus),
+		ui.NewRouteFunc(store),
+		mock.NewRouteFunc(bus),
 	)
 
-	auth, err := githubauth.New(ctx, logger, cfg.Github)
+	auth, err := githubauth.New(ctx, cfg.Github, logger)
 	if err != nil {
 		logger.Error("failed to create github auth", "error", err)
 		os.Exit(1)
 	}
 
-	gitWorker := gitrepomanager.New(cfg.Workers.GitWorker, auth, b, logger)
-	argoWorker := argo.New(cfg.ArgoCD, b, logger)
-	coord := coordinator.NewCoordinator(b, st, logger)
+	gitWorker := gitrepomanager.New(cfg.Workers.GitWorker, logger, auth, bus)
+	argoWorker := argo.New(cfg.ArgoCD, logger, bus)
+	helmWorker := helmmanager.New(cfg.Workers.HelmWorker, logger, bus, store)
+	coordinator := coord.New(logger, bus, store)
 
-	services := []Worker{
+	workers := []wrk.Worker{
 		natsSrv,
 		httpSrv,
 		gitWorker,
 		argoWorker,
-		coord,
+		helmWorker,
+		coordinator,
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)
-	for _, svc := range services {
-		g.Go(func() error { return svc.Run(gCtx) })
+	for _, w := range workers {
+		g.Go(func() error { return w.Run(gCtx) })
 	}
 	if err := g.Wait(); err != nil {
 		logger.Error("app error", "error", err)
 		os.Exit(1)
 	}
-}
-
-type Worker interface {
-	Run(ctx context.Context) error
 }

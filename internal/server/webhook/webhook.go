@@ -10,17 +10,17 @@ import (
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
-	"github.com/trolleksii/argocd-diff-reporter/internal/server"
 )
 
 type WebhookHandler struct {
 	cfg config.WebhookConfig
-	bus *nats.Bus
 	log *slog.Logger
+	bus *nats.Bus
 }
 
-func Route(cfg config.WebhookConfig, log *slog.Logger, b *nats.Bus) server.Route {
-	return func(mux *http.ServeMux) {
+// NewRouteFunc returns a function that registers the webhook handler on the provided mux.
+func NewRouteFunc(cfg config.WebhookConfig, b *nats.Bus) func(*http.ServeMux, *slog.Logger) {
+	return func(mux *http.ServeMux, log *slog.Logger) {
 		mux.Handle("/webhook", newWebhookHandler(cfg, log, b))
 	}
 }

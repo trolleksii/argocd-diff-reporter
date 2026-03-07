@@ -8,13 +8,11 @@ import (
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
-	"github.com/trolleksii/argocd-diff-reporter/internal/githubauth"
 	"github.com/trolleksii/argocd-diff-reporter/internal/helm"
 )
 
 type HelmManager struct {
-	cfg   config.GitWorkerConfig
-	auth  *githubauth.GithubCredManager
+	cfg   config.HelmWorkerConfig
 	log   *slog.Logger
 	bus   *nats.Bus
 	store *nats.Store
@@ -22,10 +20,9 @@ type HelmManager struct {
 	creds *helm.CredsProvider
 }
 
-func NewHelmManager(cfg config.GitWorkerConfig, auth *githubauth.GithubCredManager, b *nats.Bus, s *nats.Store, log *slog.Logger) *HelmManager {
+func New(cfg config.HelmWorkerConfig, log *slog.Logger, b *nats.Bus, s *nats.Store) *HelmManager {
 	return &HelmManager{
 		cfg:   cfg,
-		auth:  auth,
 		log:   log.With("component", "helmmanager"),
 		bus:   b,
 		store: s,

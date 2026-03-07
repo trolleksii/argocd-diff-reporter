@@ -82,11 +82,8 @@ Diff workers generate and store Diff Reports.
 
 ## Orchestration
 
- Webhook             Fetcher/Snapshotter                    Argo                                HELM                               Coordinator                     Differ                Coordinator
-pr.changed -> pr.enriched -> repo.snapshot.complete -> appset.render.complete -> helm.fetch.complete -> helm.render.complete--> report.preparation.complete -> report.generate.complete---> pr.processed
-                        \                                                    \-> helm.fetch.complete -> helm.render.complete-/                                                           /
-                         \-> repo.snapshot.complete -> appset.render.complete -> helm.fetch.complete -> helm.render.complete--> report.preparation.complete -> report.generate.complete-/
-                                                                             \-> helm.fetch.complete -> helm.render.complete-/
+ Webhook                Fetcher/Snapshotter                         Argo                                HELM                               Coordinator                     Differ                Coordinator
+pr.changed -> pr.files.resolved -> repo.snapshot.created -> application.rendered -> helm.fetch.complete -> helm.render.complete--> report.preparation.complete -> report.generate.complete---> pr.processed
 
 Stages.
 1. Raw event data; filtration according to config. 
@@ -171,3 +168,29 @@ In this context worker is always aware of commit shas it needs to fetch and a pr
 ### Snapshot of a directory(ArgoCD Application source)
 
 In this context source is a directory in a git repo. The main challenge is that `targetRevision` in ArgoCD manifests can be either of branch, tag, or commit sha. The worker has to detect which type is it, and then fetch the associated commit and make a snapshot of that directory.
+
+
+### Subject naming
+
+<worker>.<entity>.<state>
+
+webhook.pr.changed               -> git
+webhook.pr.closed                -> coordinator
+
+git.chart.snapshotted            -> helm
+git.files.snapshotted            -> argo
+
+argo.githelmappset.parsed        -> helm fetch (git)
+argo.helmappset.parsed           -> helm fetch (oci or https)
+argo.kustomizeappset.parsed      -> kustomize
+argo.dirappset.parsed            -> dir
+
+helm.manifest.rendered           -> coordinator
+kustomize.manifest.rendered      -> coordinator
+dir.manifest.rendered            -> coordinator
+
+coordinator.app.ready            -> diff
+
+diff.report.created              -> coordinator
+
+coordinator.pr.evaluated         -> upstream (GitHub etc.)
