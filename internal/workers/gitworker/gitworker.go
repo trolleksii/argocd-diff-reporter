@@ -129,7 +129,7 @@ func (m *GitWorker) handleChartFetch(ctx context.Context, headers map[string]str
 	if err != nil {
 		headers["error"] = err.Error()
 		m.log.Error("failed to find git repo", "error", err)
-		m.bus.Publish(ctx, "helm.chart.fetch.failed", headers, nil)
+		m.bus.Publish(ctx, "git.chart.fetch.failed", headers, nil)
 		ack()
 		return
 	}
@@ -137,12 +137,12 @@ func (m *GitWorker) handleChartFetch(ctx context.Context, headers map[string]str
 	if err != nil {
 		headers["error"] = err.Error()
 		m.log.Error("failed to create snapshot", "error", err)
-		m.bus.Publish(ctx, "helm.chart.fetch.failed", headers, nil)
+		m.bus.Publish(ctx, "git.chart.fetch.failed", headers, nil)
 		ack()
 		return
 	}
 	headers["snapshotDir"] = snapshotDir
-	m.bus.Publish(ctx, "git.chart.snapshotted", headers, data)
+	m.bus.Publish(ctx, "git.chart.fetched", headers, data)
 	ack()
 }
 

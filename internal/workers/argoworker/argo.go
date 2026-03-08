@@ -107,20 +107,23 @@ func (m *ArgoWorker) process(ctx context.Context, headers map[string]string, dat
 		}
 		for _, app := range apps {
 			headers["application"] = app.Name
-			data, err := nats.Marshal(app)
-			if err != nil {
-				m.log.Error("failed to marshal application", "error", err)
-				nak()
-				return
-			}
-
 			if app.Spec.Source.Helm == nil {
 				m.log.Debug("skipping non helm application")
 				// TODO: add support for kustomize/dir
 				continue
 			}
-			headers["chartRepo"] = app.Spec.Source.RepoURL 
+
+			// TODO: check values and valueFiles and add support if necessary
+			data, err := nats.Marshal(app.Spec.Source.Helm.ValuesObject)
+			if err != nil {
+				m.log.Error("failed to marshal application", "error", err)
+				nak()
+				return
+			}
+			headers["chartRepo"] = app.Spec.Source.RepoURL
 			headers["chartRevision"] = app.Spec.Source.TargetRevision
+			headers["releaseName"] = app.Spec.Source.Helm.ReleaseName
+			headers["namespace"] = app.Spec.Destination.Namespace
 			switch {
 			// Spec with git reference will have non empty path
 			case app.Spec.Source.Path != "":

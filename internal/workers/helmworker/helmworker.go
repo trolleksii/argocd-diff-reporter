@@ -41,9 +41,10 @@ func (m *HelmWorker) Run(ctx context.Context) error {
 		MaxDeliver: 3,
 		AckWait:    3 * time.Second,
 		Handlers: map[string]nats.Handler{
-			"argo.helm.oci.parsed":   m.handleChartFetch(helm.FetchChartOCI),
-			"argo.helm.http.parsed":  m.handleChartFetch(helm.FetchChartHTTPS),
-			"helm.manifest.rendered": m.handleChartRender,
+			"argo.helm.oci.parsed":  m.handleChartFetch(helm.FetchChartOCI),
+			"argo.helm.http.parsed": m.handleChartFetch(helm.FetchChartHTTPS),
+			"helm.chart.fetched":    m.handleChartRender,
+			"git.chart.fetched":     m.handleChartRender,
 		},
 	})
 	if err != nil {
@@ -78,8 +79,8 @@ func (m *HelmWorker) handleChartRender(ctx context.Context, headers map[string]s
 	m.log.Info("helm worker got a helm render event")
 	namespace := headers["namespace"]
 	releaseName := headers["releaseName"]
-	chartPath := headers["chartPath"]
-	chartVersion := headers["chartVersion"]
+	chartPath := headers["chartLocation"]
+	chartVersion := headers["chartRevision"]
 
 	releaseValues, err := nats.Unmarshal[map[string]any](data)
 
@@ -91,7 +92,7 @@ func (m *HelmWorker) handleChartRender(ctx context.Context, headers map[string]s
 		ack()
 		return
 	}
-	sha := headers["sha"]
+	sha := headers["ref"]
 	fileName := headers["fileName"]
 	appName := headers["application"]
 	id := fmt.Sprintf("%s/%s/%s", sha, fileName, appName)
