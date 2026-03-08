@@ -31,7 +31,12 @@ func New(cfg config.HelmWorkerConfig, log *slog.Logger, b *nats.Bus, s *nats.Sto
 
 func (m *HelmWorker) Run(ctx context.Context) error {
 	m.log.Info("starting helm worker...")
-	err := m.bus.Consume(ctx, nats.ConsumerConfig{
+	c, err := helm.NewChartDiskCache(m.cfg.ChartCacheDir)
+	if err != nil {
+		return err
+	}
+	m.cache = c
+	err = m.bus.Consume(ctx, nats.ConsumerConfig{
 		Name:       "helmworker",
 		MaxDeliver: 3,
 		AckWait:    3 * time.Second,
@@ -42,17 +47,19 @@ func (m *HelmWorker) Run(ctx context.Context) error {
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("gitrepomanager: consume: %w", err)
+		return fmt.Errorf("helm worker failed to consume: %w", err)
 	}
 	return nil
 }
 
 func (m *HelmWorker) handleChartFetch(fetchFn func(string, string, helm.CredsProvider, *helm.HelmChartCache) (string, error)) nats.Handler {
 	return func(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
-		m.log.Info("helm worker got a helm fetch event")
-		chartRef := headers["ref"]
-		chartVersion := headers["version"]
-		chartLocation, err := fetchFn(chartRef, chartVersion, nil, m.cache)
+		chartRepo := headers["chartRepo"]
+		chartRevision := headers["chartRevision"]
+		chartName := headers["chartName"]
+		chartRef := fmt.Sprintf("%s/%s", chartRepo, chartName)
+		m.log.Info("helm worker got a helm fetch event", "ref", chartRef, "version", chartRevision)
+		chartLocation, err := fetchFn(chartRef, chartRevision, nil, m.cache)
 		if err != nil {
 			headers["error"] = err.Error()
 			m.log.Error("failed to feth the chart", "error", err)
@@ -61,6 +68,7 @@ func (m *HelmWorker) handleChartFetch(fetchFn func(string, string, helm.CredsPro
 			return
 		}
 		headers["chartLocation"] = chartLocation
+		m.log.Info("helm worker successfully fetched the chart", "location", chartLocation)
 		m.bus.Publish(ctx, "helm.chart.fetched", headers, data)
 		ack()
 	}

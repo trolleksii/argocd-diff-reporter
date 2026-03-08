@@ -88,6 +88,7 @@ func (m *ArgoWorker) process(ctx context.Context, headers map[string]string, dat
 			headers["error"] = err.Error()
 			m.log.Error("failed to load file", "error", err)
 			m.bus.Publish(ctx, "argo.file.parsing.failed", headers, []byte{})
+			delete(headers, "error")
 			continue
 		}
 		for _, appSet := range appSets {
@@ -97,17 +98,11 @@ func (m *ArgoWorker) process(ctx context.Context, headers map[string]string, dat
 				headers["error"] = err.Error()
 				m.log.Error("failed to generate applications", "reason", reason, "error", err)
 				m.bus.Publish(ctx, "argo.app.generation.failed", headers, nil)
+				delete(headers, "error")
 				continue
 			}
 			for _, a := range renderedApps {
-				headers["application"] = a.Name
-				data, err := nats.Marshal(a)
-				if err != nil {
-					m.log.Error("failed to marshal application", "error", err)
-					nak()
-					return
-				}
-				m.bus.Publish(ctx, "argo.helmappset.rendered", headers, data)
+				apps = append(apps, a)
 			}
 		}
 		for _, app := range apps {
@@ -118,8 +113,26 @@ func (m *ArgoWorker) process(ctx context.Context, headers map[string]string, dat
 				nak()
 				return
 			}
-			// TODO: identify source type (helm/kustomize/dir) and publish a corresponding event
-			m.bus.Publish(ctx, "argo.helmappset.rendered", headers, data)
+
+			if app.Spec.Source.Helm == nil {
+				m.log.Debug("skipping non helm application")
+				// TODO: add support for kustomize/dir
+				continue
+			}
+			headers["chartRepo"] = app.Spec.Source.RepoURL 
+			headers["chartRevision"] = app.Spec.Source.TargetRevision
+			switch {
+			// Spec with git reference will have non empty path
+			case app.Spec.Source.Path != "":
+				headers["chartPath"] = app.Spec.Source.Path
+				m.bus.Publish(ctx, "argo.helm.git.parsed", headers, data)
+			case strings.HasPrefix(app.Spec.Source.RepoURL, "http://") || strings.HasPrefix(app.Spec.Source.RepoURL, "https://"):
+				headers["chartName"] = app.Spec.Source.Chart
+				m.bus.Publish(ctx, "argo.helm.http.parsed", headers, data)
+			default:
+				headers["chartName"] = app.Spec.Source.Chart
+				m.bus.Publish(ctx, "argo.helm.oci.parsed", headers, data)
+			}
 		}
 	}
 	ack()

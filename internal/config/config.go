@@ -51,7 +51,7 @@ type GitWorkerConfig struct {
 }
 
 type HelmWorkerConfig struct {
-	ChartCacheDir string `yaml:"cloneBaseDir"`
+	ChartCacheDir string `yaml:"chartCacheDir"`
 }
 
 type NatsConfig struct {
@@ -87,6 +87,9 @@ func Load(path string) (*Config, error) {
 			GitWorker: GitWorkerConfig{
 				CloneBaseDir:    "repositories",
 				SnapshotBaseDir: "snapshots",
+			},
+			HelmWorker: HelmWorkerConfig{
+				ChartCacheDir: "charts",
 			},
 		},
 	}

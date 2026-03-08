@@ -81,7 +81,7 @@ func (m *GitWorker) handlePRChanged(ctx context.Context, headers map[string]stri
 		data, err := nats.Marshal(FileGlobFilter(from, m.cfg.FileGlobs))
 		if err != nil {
 			m.log.Error("failed to marshal base files", "error", err)
-			nak()	
+			nak()
 			return
 		}
 		m.bus.Publish(ctx, "git.files.resolved", headers, data)
@@ -122,8 +122,10 @@ func (m *GitWorker) handleFilesResolved(ctx context.Context, headers map[string]
 
 func (m *GitWorker) handleChartFetch(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
 	m.log.Info("git worker got a helm snapshot event")
-	repoUrl := fmt.Sprintf("https://github.com/%s/%s", headers["owner"], headers["repository"])
-	r, err := m.getOrCreateRepo(ctx, repoUrl)
+	chartRepo := headers["chartRepo"]
+	chartRevision := headers["chartRevision"]
+	chartPath := headers["chartPath"]
+	r, err := m.getOrCreateRepo(ctx, chartRepo)
 	if err != nil {
 		headers["error"] = err.Error()
 		m.log.Error("failed to find git repo", "error", err)
@@ -131,7 +133,7 @@ func (m *GitWorker) handleChartFetch(ctx context.Context, headers map[string]str
 		ack()
 		return
 	}
-	snapshotDir, err := r.GetOrCreateSnapshot(headers["ref"], headers["path"], nil)
+	snapshotDir, err := r.GetOrCreateSnapshot(chartRevision, chartPath, nil)
 	if err != nil {
 		headers["error"] = err.Error()
 		m.log.Error("failed to create snapshot", "error", err)

@@ -40,7 +40,6 @@ func newMockHandler(log *slog.Logger, b *nats.Bus) *MockHandler {
 }
 
 func (h *MockHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h.log.Info("webhook got a new event")
 	var payload mockPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		h.log.Warn("Failed to parse mock payload", "error", err)
