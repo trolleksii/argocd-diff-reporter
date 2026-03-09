@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -66,6 +67,7 @@ func (m *ArgoWorker) Run(ctx context.Context) error {
 		Name:       "argotemplateengine",
 		MaxDeliver: 3,
 		AckWait:    3 * time.Second,
+		Concurrency: 4,
 		Handlers: map[string]nats.Handler{
 			"git.files.snapshotted": m.handleSnapshottedFiles,
 		},
@@ -125,8 +127,13 @@ func (m *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.He
 				continue
 			}
 
-			// TODO: check values and valueFiles and add support if necessary
-			data, err := nats.Marshal(app.Spec.Source.Helm.ValuesObject)
+			// TODO: check values and valueFiles and add support if necessay
+			var values map[string]any
+			if err := json.Unmarshal(app.Spec.Source.Helm.ValuesObject.Raw, &values); err != nil {
+				m.log.Error("failed to unmarshal helm values", "error", err)
+			}
+
+			data, err := nats.Marshal(values)
 			if err != nil {
 				m.log.Error("failed to marshal application", "error", err)
 				span.SetStatus(codes.Error, err.Error())

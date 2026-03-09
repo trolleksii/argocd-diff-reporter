@@ -6,7 +6,6 @@ require (
 	github.com/argoproj/argo-cd/v3 v3.3.2
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/go-git/go-git/v5 v5.16.5
-	github.com/google/go-github/v74 v74.0.0
 	github.com/google/go-github/v82 v82.0.0
 	github.com/jferrl/go-githubauth v1.5.1
 	github.com/nats-io/nats-server/v2 v2.12.4

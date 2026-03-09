@@ -523,7 +523,7 @@ func RenderChart(ctx context.Context, namespace, releaseName, chartPath, chartVe
 	}
 
 	// Parse Kubernetes version with error handling
-	kubeVersion, err := chartutil.ParseKubeVersion("1.32")
+	kubeVersion, err := chartutil.ParseKubeVersion("1.33")
 	if err != nil {
 		return "", fmt.Errorf("failed to parse Kubernetes version: %w", err)
 	}

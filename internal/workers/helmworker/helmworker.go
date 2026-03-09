@@ -42,9 +42,10 @@ func (m *HelmWorker) Run(ctx context.Context) error {
 	}
 	m.cache = c
 	err = m.bus.Consume(ctx, nats.ConsumerConfig{
-		Name:       "helmworker",
-		MaxDeliver: 3,
-		AckWait:    3 * time.Second,
+		Name:        "helmworker",
+		MaxDeliver:  3,
+		AckWait:     3 * time.Second,
+		Concurrency: 4,
 		Handlers: map[string]nats.Handler{
 			"argo.helm.oci.parsed":  m.handleChartFetch(helm.FetchChartOCI),
 			"argo.helm.http.parsed": m.handleChartFetch(helm.FetchChartHTTPS),
@@ -70,6 +71,7 @@ func (m *HelmWorker) handleChartFetch(fetchFn func(string, string, helm.CredsPro
 		chartRevision := headers["chartRevision"]
 		chartName := headers["chartName"]
 		chartRef := fmt.Sprintf("%s/%s", chartRepo, chartName)
+		headers["Nats-Msg-Id"] = fmt.Sprintf("%s/%s/%s/%s/%s", headers["ref"], headers["fileName"], headers["application"], chartRef, chartRevision)
 		m.log.Info("helm worker got a helm fetch event", "ref", chartRef, "version", chartRevision)
 		chartLocation, err := fetchFn(chartRef, chartRevision, nil, m.cache)
 		if err != nil {
@@ -100,7 +102,6 @@ func (m *HelmWorker) handleChartRender(ctx context.Context, headers nats.Headers
 	chartVersion := headers["chartRevision"]
 
 	releaseValues, err := nats.Unmarshal[map[string]any](data)
-
 	manifest, err := helm.RenderChart(ctx, namespace, releaseName, chartPath, chartVersion, releaseValues)
 	if err != nil {
 		headers["error"] = err.Error()
@@ -110,6 +111,8 @@ func (m *HelmWorker) handleChartRender(ctx context.Context, headers nats.Headers
 		ack()
 		return
 	}
+
+	delete(headers, "Nats-Msg-Id")
 	sha := headers["ref"]
 	fileName := headers["fileName"]
 	appName := headers["application"]

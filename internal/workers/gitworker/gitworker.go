@@ -42,9 +42,10 @@ func New(cfg config.GitWorkerConfig, log *slog.Logger, auth *githubauth.GithubCr
 func (m *GitWorker) Run(ctx context.Context) error {
 	m.log.Info("starting git worker...")
 	err := m.bus.Consume(ctx, nats.ConsumerConfig{
-		Name:       "gitrepomanager",
-		MaxDeliver: 3,
-		AckWait:    3 * time.Second,
+		Name:        "gitrepomanager",
+		MaxDeliver:  3,
+		AckWait:     3 * time.Second,
+		Concurrency: 2,
 		Handlers: map[string]nats.Handler{
 			"webhook.pr.changed":   m.handlePRChanged,
 			"git.files.resolved":   m.handleFilesResolved,
@@ -67,6 +68,7 @@ func (m *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 
 	m.log.Info("git worker got an pr.changed event")
 	repoUrl := fmt.Sprintf("https://github.com/%s/%s", headers["owner"], headers["repository"])
+	_, leafSpan := tracer.Start(ctx, "getOrCreateRepo")
 	r, err := m.getOrCreateRepo(ctx, repoUrl)
 	if err != nil {
 		m.log.Error("failed to find git repo", "error", err)
@@ -74,23 +76,33 @@ func (m *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 		// and the reason might be related to network, lag, credentials issue, etc
 		span.SetStatus(codes.Error, err.Error())
 		nak()
+		leafSpan.End()
 		return
 	}
+	leafSpan.End()
+	_, leafSpan = tracer.Start(ctx, "ListChangedFiles")
 	changes, err := r.ListChangedFiles(headers["baseSha"], headers["headSha"])
 	if err != nil {
 		m.log.Error("failed to list changed files")
 		span.SetStatus(codes.Error, err.Error())
 		nak()
+		leafSpan.End()
 		return
 	}
+	leafSpan.End()
 	var from, to []string
-	for _, change := range changes {
-		from = append(from, change.From)
-		to = append(to, change.To)
-	}
-
 	// TODO: files that are created/deleted/moved will lack the counterpart for the diff to run
 	// we need to do something about it
+	for _, change := range changes {
+		if change.From != "" {
+			from = append(from, change.From)
+		}
+		if change.To != "" {
+			to = append(to, change.To)
+		}
+	}
+
+	_, leafSpan = tracer.Start(ctx, "PublishBases")
 	if len(from) > 0 {
 		headers["ref"] = headers["baseSha"]
 		data, err := nats.Marshal(FileGlobFilter(from, m.cfg.FileGlobs))
@@ -103,6 +115,8 @@ func (m *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 		span.SetStatus(codes.Ok, "files resolved")
 		m.bus.Publish(ctx, "git.files.resolved", headers, data)
 	}
+	leafSpan.End()
+	_, leafSpan = tracer.Start(ctx, "PublishHeads")
 	if len(to) > 0 {
 		headers["ref"] = headers["headSha"]
 		data, err = nats.Marshal(FileGlobFilter(to, m.cfg.FileGlobs))
@@ -115,6 +129,7 @@ func (m *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 		span.SetStatus(codes.Ok, "files resolved")
 		m.bus.Publish(ctx, "git.files.resolved", headers, data)
 	}
+	leafSpan.End()
 	ack()
 }
 

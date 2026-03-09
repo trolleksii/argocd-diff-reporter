@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -33,6 +34,9 @@ type ConsumerConfig struct {
 	MaxDeliver int
 	// Ack wait time
 	AckWait time.Duration
+	// Concurrency is the max number of handlers that may run in parallel.
+	// 0 or 1 means serial (default behaviour).
+	Concurrency int
 }
 
 // Bus provides both publish and consume capabilities over JetStream.
@@ -87,7 +91,15 @@ func (b *Bus) Consume(ctx context.Context, cfg ConsumerConfig) error {
 		return fmt.Errorf("bus: create consumer %s: %w", cfg.Name, err)
 	}
 
-	cc, err := cons.Consume(func(msg jetstream.Msg) {
+	var (
+		sem chan struct{}
+		wg  sync.WaitGroup
+	)
+	if cfg.Concurrency > 1 {
+		sem = make(chan struct{}, cfg.Concurrency)
+	}
+
+	dispatch := func(msg jetstream.Msg) {
 		handler, ok := cfg.Handlers[msg.Subject()]
 		if !ok {
 			_ = msg.Nak()
@@ -102,14 +114,27 @@ func (b *Bus) Consume(ctx context.Context, cfg ConsumerConfig) error {
 				}
 			}
 		}
-		handler(ctx, headers, msg.Data(), msg.Ack, msg.Nak)
-	})
+		if sem != nil {
+			sem <- struct{}{} // blocks until a slot is free
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer func() { <-sem }()
+				handler(ctx, headers, msg.Data(), msg.Ack, msg.Nak)
+			}()
+		} else {
+			handler(ctx, headers, msg.Data(), msg.Ack, msg.Nak)
+		}
+	}
+
+	cc, err := cons.Consume(dispatch)
 	if err != nil {
 		return fmt.Errorf("bus: start consuming %s: %w", cfg.Name, err)
 	}
 
 	<-ctx.Done()
 	cc.Stop()
+	wg.Wait() // drain in-flight handlers before returning
 	return nil
 }
 
