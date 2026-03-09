@@ -17,6 +17,7 @@ import (
 	"github.com/trolleksii/argocd-diff-reporter/internal/server/mock"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server/ui"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server/webhook"
+	"github.com/trolleksii/argocd-diff-reporter/internal/tracing"
 	wrk "github.com/trolleksii/argocd-diff-reporter/internal/workers"
 	"github.com/trolleksii/argocd-diff-reporter/internal/workers/argoworker"
 	coord "github.com/trolleksii/argocd-diff-reporter/internal/workers/coordinator"
@@ -42,6 +43,11 @@ func main() {
 		syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	trCleanup, err := tracing.InitTracer(ctx, cfg.Tracing, logger)
+	if err != nil {
+		log.Error("failed to init tracer", "error", err)
+	}
+	defer trCleanup()
 	natsSrv, err := nats.New(ctx, cfg.Nats, logger)
 	if err != nil {
 		logger.Error("failed to start NATS", "error", err)

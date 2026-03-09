@@ -8,11 +8,16 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 	"github.com/trolleksii/argocd-diff-reporter/internal/githubauth"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/repository"
 )
+
+var tracer = otel.Tracer("argocd-diff-reporter/internal/workers/gitworker")
 
 type GitWorker struct {
 	cfg  config.GitWorkerConfig
@@ -52,7 +57,14 @@ func (m *GitWorker) Run(ctx context.Context) error {
 	return nil
 }
 
-func (m *GitWorker) handlePRChanged(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
+func (m *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
+	ctx, span := tracer.Start(
+		otel.GetTextMapPropagator().Extract(ctx, headers),
+		"handlePRChanged",
+	)
+	otel.GetTextMapPropagator().Inject(ctx, headers)
+	defer span.End()
+
 	m.log.Info("git worker got an pr.changed event")
 	repoUrl := fmt.Sprintf("https://github.com/%s/%s", headers["owner"], headers["repository"])
 	r, err := m.getOrCreateRepo(ctx, repoUrl)
@@ -60,12 +72,14 @@ func (m *GitWorker) handlePRChanged(ctx context.Context, headers map[string]stri
 		m.log.Error("failed to find git repo", "error", err)
 		// we don't report this because if the webhook event came in the first place it means repo exists
 		// and the reason might be related to network, lag, credentials issue, etc
+		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
 	}
 	changes, err := r.ListChangedFiles(headers["baseSha"], headers["headSha"])
 	if err != nil {
 		m.log.Error("failed to list changed files")
+		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
 	}
@@ -74,6 +88,7 @@ func (m *GitWorker) handlePRChanged(ctx context.Context, headers map[string]stri
 		from = append(from, change.From)
 		to = append(to, change.To)
 	}
+
 	// TODO: files that are created/deleted/moved will lack the counterpart for the diff to run
 	// we need to do something about it
 	if len(from) > 0 {
@@ -81,9 +96,11 @@ func (m *GitWorker) handlePRChanged(ctx context.Context, headers map[string]stri
 		data, err := nats.Marshal(FileGlobFilter(from, m.cfg.FileGlobs))
 		if err != nil {
 			m.log.Error("failed to marshal base files", "error", err)
+			span.SetStatus(codes.Error, err.Error())
 			nak()
 			return
 		}
+		span.SetStatus(codes.Ok, "files resolved")
 		m.bus.Publish(ctx, "git.files.resolved", headers, data)
 	}
 	if len(to) > 0 {
@@ -91,20 +108,30 @@ func (m *GitWorker) handlePRChanged(ctx context.Context, headers map[string]stri
 		data, err = nats.Marshal(FileGlobFilter(to, m.cfg.FileGlobs))
 		if err != nil {
 			m.log.Error("failed to marshal head files", "error", err)
+			span.SetStatus(codes.Error, err.Error())
 			nak()
 			return
 		}
+		span.SetStatus(codes.Ok, "files resolved")
 		m.bus.Publish(ctx, "git.files.resolved", headers, data)
 	}
 	ack()
 }
 
-func (m *GitWorker) handleFilesResolved(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
+func (m *GitWorker) handleFilesResolved(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
+	ctx, span := tracer.Start(
+		otel.GetTextMapPropagator().Extract(ctx, headers),
+		"handleFilesResolved",
+	)
+	otel.GetTextMapPropagator().Inject(ctx, headers)
+	defer span.End()
+
 	m.log.Info("git worker got a file snapshot event")
 	repoUrl := fmt.Sprintf("https://github.com/%s/%s", headers["owner"], headers["repository"])
 	r, err := m.getOrCreateRepo(ctx, repoUrl)
 	if err != nil {
 		m.log.Error("failed to find git repo", "error", err)
+		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
 	}
@@ -112,15 +139,24 @@ func (m *GitWorker) handleFilesResolved(ctx context.Context, headers map[string]
 	snapshotDir, err := r.GetOrCreateSnapshot(headers["ref"], "", files)
 	if err != nil {
 		m.log.Error("failed to create snapshot", "error", err)
+		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
 	}
+	span.SetStatus(codes.Ok, "files snapshotted")
 	headers["snapshotDir"] = snapshotDir
 	m.bus.Publish(ctx, "git.files.snapshotted", headers, data)
 	ack()
 }
 
-func (m *GitWorker) handleChartFetch(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
+func (m *GitWorker) handleChartFetch(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
+	ctx, span := tracer.Start(
+		otel.GetTextMapPropagator().Extract(ctx, headers),
+		"handleChartFetch",
+	)
+	otel.GetTextMapPropagator().Inject(ctx, headers)
+	defer span.End()
+
 	m.log.Info("git worker got a helm snapshot event")
 	chartRepo := headers["chartRepo"]
 	chartRevision := headers["chartRevision"]
@@ -129,6 +165,7 @@ func (m *GitWorker) handleChartFetch(ctx context.Context, headers map[string]str
 	if err != nil {
 		headers["error"] = err.Error()
 		m.log.Error("failed to find git repo", "error", err)
+		span.SetStatus(codes.Error, err.Error())
 		m.bus.Publish(ctx, "git.chart.fetch.failed", headers, nil)
 		ack()
 		return
@@ -137,11 +174,13 @@ func (m *GitWorker) handleChartFetch(ctx context.Context, headers map[string]str
 	if err != nil {
 		headers["error"] = err.Error()
 		m.log.Error("failed to create snapshot", "error", err)
+		span.SetStatus(codes.Error, err.Error())
 		m.bus.Publish(ctx, "git.chart.fetch.failed", headers, nil)
 		ack()
 		return
 	}
 	headers["snapshotDir"] = snapshotDir
+	span.SetStatus(codes.Ok, "helm fetched")
 	m.bus.Publish(ctx, "git.chart.fetched", headers, data)
 	ack()
 }

@@ -11,6 +11,8 @@ import (
 	"time"
 
 	logrus "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -33,6 +35,8 @@ import (
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 )
+
+var tracer = otel.Tracer("argocd-diff-reporter/internal/workers/argoworker")
 
 type ArgoWorker struct {
 	cfg      config.ArgoCDConfig
@@ -63,7 +67,7 @@ func (m *ArgoWorker) Run(ctx context.Context) error {
 		MaxDeliver: 3,
 		AckWait:    3 * time.Second,
 		Handlers: map[string]nats.Handler{
-			"git.files.snapshotted": m.process,
+			"git.files.snapshotted": m.handleSnapshottedFiles,
 		},
 	})
 	if err != nil {
@@ -72,11 +76,19 @@ func (m *ArgoWorker) Run(ctx context.Context) error {
 	return nil
 }
 
-func (m *ArgoWorker) process(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
+func (m *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
+	ctx, span := tracer.Start(
+		otel.GetTextMapPropagator().Extract(ctx, headers), 
+		"handleSnapshottedFiles",
+	)
+	otel.GetTextMapPropagator().Inject(ctx, headers)
+	defer span.End()
+
 	m.log.Info("argo worker got an event")
 	files, err := nats.Unmarshal[[]string](data)
 	if err != nil {
 		m.log.Error("failed to unmarshal files", "error", err)
+		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
 	}
@@ -117,6 +129,7 @@ func (m *ArgoWorker) process(ctx context.Context, headers map[string]string, dat
 			data, err := nats.Marshal(app.Spec.Source.Helm.ValuesObject)
 			if err != nil {
 				m.log.Error("failed to marshal application", "error", err)
+				span.SetStatus(codes.Error, err.Error())
 				nak()
 				return
 			}

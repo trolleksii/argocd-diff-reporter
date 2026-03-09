@@ -1,16 +1,22 @@
 package webhook
 
 import (
-	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
 
 	"github.com/google/go-github/v82/github"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 )
+
+var tracer = otel.Tracer("argocd-diff-reporter/internal/server/webhook")
 
 type WebhookHandler struct {
 	cfg config.WebhookConfig
@@ -34,9 +40,23 @@ func newWebhookHandler(cfg config.WebhookConfig, log *slog.Logger, b *nats.Bus) 
 }
 
 func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	event, err := parseWebhookRequest(r, h.cfg.Secret)
+	trCtx, span := tracer.Start(
+		otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header)),
+		"webhook",
+	)
+	defer span.End()
+
+	payload, err := github.ValidatePayload(r, []byte(h.cfg.Secret))
 	if err != nil {
-		h.log.Warn("Failed to parse webhook")
+		h.log.Error("invalid webhook signature", "error", err)
+		span.SetStatus(codes.Error, err.Error())
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+	event, err := github.ParseWebHook(github.WebHookType(r), payload)
+	if err != nil {
+		h.log.Error("Failed to parse webhook", "error", err)
+		span.SetStatus(codes.Error, err.Error())
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
 	}
@@ -48,21 +68,32 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		repo := event.GetRepo()
 		owner := repo.GetOwner().GetLogin()
 		repoName := repo.GetName()
+		span.SetAttributes(
+			attribute.String("pr.owner", owner),
+			attribute.String("pr.repo", repoName),
+		)
 		if !MatchesRepoFilters(repoName, owner, h.cfg.AllowedRepos) {
+			h.log.Info("event blocked by repo filters", "repo", repoName, "owner", owner, "allowedRepos", h.cfg.AllowedRepos)
+			span.SetStatus(codes.Ok, "")
 			return
 		}
-
+		span.SetStatus(codes.Ok, "event parsed")
 		switch action {
 		case "closed":
 			pr := event.GetPullRequest()
 			prNum := strconv.Itoa(pr.GetNumber())
+			var headers nats.Headers = map[string]string{
+				"repository": repoName,
+				"owner":      owner,
+				"prNum":      prNum,
+			}
+			span.SetAttributes(
+				attribute.String("pr.number", prNum),
+			)
+			otel.GetTextMapPropagator().Inject(trCtx, headers)
 			err = h.bus.Publish(r.Context(),
 				"webhook.pr.closed",
-				map[string]string{
-					"repository": repoName,
-					"owner":      owner,
-					"prNum":      prNum,
-				},
+				headers,
 				nil,
 			)
 			if err != nil {
@@ -71,41 +102,43 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case "opened", "synchronize", "reopened":
 			pr := event.GetPullRequest()
 			prNum := strconv.Itoa(pr.GetNumber())
+			title := pr.GetTitle()
+			author := pr.GetUser().GetLogin()
+			branch := pr.GetHead().GetRef()
+			baseSha := pr.GetBase().GetSHA()
+			headSha := pr.GetHead().GetSHA()
+
+			var headers nats.Headers = map[string]string{
+				"repository": repoName,
+				"owner":      owner,
+				"prNum":      prNum,
+				"title":      title,
+				"author":     author,
+				"branch":     branch,
+				"baseSha":    baseSha,
+				"headSha":    headSha,
+			}
+			span.SetAttributes(
+				attribute.String("pr.number", prNum),
+				attribute.String("pr.title", title),
+				attribute.String("pr.author", author),
+				attribute.String("pr.branch", branch),
+				attribute.String("pr.baseSha", baseSha),
+				attribute.String("pr.headSha", headSha),
+			)
+			otel.GetTextMapPropagator().Inject(trCtx, headers)
 			err = h.bus.Publish(r.Context(),
 				"webhook.pr.changed",
-				map[string]string{
-					"repository": repoName,
-					"owner":      owner,
-					"prNum":      prNum,
-					"title":      pr.GetTitle(),
-					"author":     pr.GetUser().GetLogin(),
-					"branch":     pr.GetHead().GetRef(),
-					"baseSha":    pr.GetBase().GetSHA(),
-					"headSha":    pr.GetHead().GetSHA(),
-				},
+				headers,
 				nil,
 			)
 			if err != nil {
 				h.log.Error("Failed to publish PR event", "error", err)
 			}
-			h.log.Debug("new request enqued", "pr", prNum)
 		}
+	default:
+		h.log.Warn("unknown event type", "etype", github.WebHookType(r))
 	}
-}
-
-// parseWebhookRequest takes a request and a webhook config and returns a github event if no errors occured
-func parseWebhookRequest(r *http.Request, secret string) (any, error) {
-	payload, err := github.ValidatePayload(r, []byte(secret))
-	if err != nil {
-		return nil, fmt.Errorf("invalid webhook signature: %w", err)
-	}
-
-	event, err := github.ParseWebHook(github.WebHookType(r), payload)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse webhook payload: %w", err)
-	}
-
-	return event, nil
 }
 
 func MatchesRepoFilters(repo, owner string, allowedRepos []config.GitRepoFilter) bool {

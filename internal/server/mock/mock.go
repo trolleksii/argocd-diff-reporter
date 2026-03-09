@@ -5,8 +5,15 @@ import (
 	"log/slog"
 	"net/http"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 )
+
+var tracer = otel.Tracer("argocd-diff-reporter/internal/server/mock")
 
 type mockPayload struct {
 	Action     string `json:"action"`
@@ -40,40 +47,67 @@ func newMockHandler(log *slog.Logger, b *nats.Bus) *MockHandler {
 }
 
 func (h *MockHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	trCtx, span := tracer.Start(
+		otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header)),
+		"ServeHTTP",
+	)
+	defer span.End()
 	var payload mockPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		h.log.Warn("Failed to parse mock payload", "error", err)
+		span.SetStatus(codes.Error, err.Error())
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
 	}
+
+	span.SetStatus(codes.Ok, "event parsed")
 	w.WriteHeader(http.StatusOK)
 	switch payload.Action {
 	case "closed":
+		var headers nats.Headers = map[string]string{
+			"repository": payload.Repository,
+			"owner":      payload.Owner,
+			"prNum":      payload.PrNum,
+		}
+		span.SetAttributes(
+			attribute.String("pr.repo", payload.Repository),
+			attribute.String("pr.owner", payload.Owner),
+			attribute.String("pr.number", payload.PrNum),
+		)
+		otel.GetTextMapPropagator().Inject(trCtx, headers)
 		err := h.bus.Publish(r.Context(),
 			"pr.closed",
-			map[string]string{
-				"repository": payload.Repository,
-				"owner":      payload.Owner,
-				"prNum":      payload.PrNum,
-			},
+			headers,
 			nil,
 		)
 		if err != nil {
 			h.log.Error("Failed to publish PR event", "error", err)
 		}
 	case "opened", "synchronize", "reopened":
+		var headers nats.Headers = map[string]string{
+			"repository": payload.Repository,
+			"owner":      payload.Owner,
+			"prNum":      payload.PrNum,
+			"title":      payload.Title,
+			"author":     payload.Author,
+			"branch":     payload.Branch,
+			"baseSha":    payload.BaseSha,
+			"headSha":    payload.HeadSha,
+		}
+		span.SetAttributes(
+			attribute.String("pr.repo", payload.Repository),
+			attribute.String("pr.owner", payload.Owner),
+			attribute.String("pr.number", payload.PrNum),
+			attribute.String("pr.title", payload.Title),
+			attribute.String("pr.author", payload.Author),
+			attribute.String("pr.branch", payload.Branch),
+			attribute.String("pr.baseSha", payload.BaseSha),
+			attribute.String("pr.headSha", payload.HeadSha),
+		)
+		otel.GetTextMapPropagator().Inject(trCtx, headers)
 		err := h.bus.Publish(r.Context(),
 			"webhook.pr.changed",
-			map[string]string{
-				"repository": payload.Repository,
-				"owner":      payload.Owner,
-				"prNum":      payload.PrNum,
-				"title":      payload.Title,
-				"author":     payload.Author,
-				"branch":     payload.Branch,
-				"baseSha":    payload.BaseSha,
-				"headSha":    payload.HeadSha,
-			},
+			headers,
 			nil,
 		)
 		if err != nil {

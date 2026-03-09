@@ -30,12 +30,12 @@ func (c *Coordinator) Run(ctx context.Context) error {
 		MaxDeliver: 3,
 		AckWait:    10 * time.Second,
 		Handlers: map[string]nats.Handler{
-			"helm.manifest.rendered": c.logDetails,
+			"helm.manifest.rendered":      c.logDetails,
 			"helm.manifest.render.failed": c.logDetails,
-			"helm.chart.fetch.failed": c.logDetails,
-			"git.chart.fetch.failed": c.logDetails,
-			"argo.file.parsing.failed": c.logDetails,
-			"argo.app.genreation.failed": c.logDetails,
+			"helm.chart.fetch.failed":     c.logDetails,
+			"git.chart.fetch.failed":      c.logDetails,
+			"argo.file.parsing.failed":    c.logDetails,
+			"argo.app.genreation.failed":  c.logDetails,
 		},
 	})
 	if err != nil {
@@ -44,7 +44,7 @@ func (c *Coordinator) Run(ctx context.Context) error {
 	return nil
 }
 
-func (c *Coordinator) logDetails(ctx context.Context, headers map[string]string, _ []byte, ack, nak func() error) {
+func (c *Coordinator) logDetails(ctx context.Context, headers nats.Headers, _ []byte, ack, nak func() error) {
 	c.log.Info("coordinator got a message", "headers", headers)
 	ack()
 }

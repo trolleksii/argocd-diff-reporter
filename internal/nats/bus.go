@@ -3,6 +3,8 @@ package nats
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -12,7 +14,13 @@ import (
 
 // Handler is the callback invoked for each consumed message.
 // ack and nak are pre-bound to the underlying jetstream.Msg methods.
-type Handler func(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error)
+type Handler func(ctx context.Context, headers Headers, data []byte, ack, nak func() error)
+
+type Headers map[string]string
+
+func (c Headers) Get(key string) string { return c[key] }
+func (c Headers) Set(key, val string)   { c[key] = val }
+func (c Headers) Keys() []string        { return slices.Collect(maps.Keys(c)) }
 
 // ConsumerConfig describes how to set up a JetStream pull consumer.
 type ConsumerConfig struct {
@@ -33,7 +41,7 @@ type Bus struct {
 	stream jetstream.Stream
 }
 
-func (b *Bus) Publish(ctx context.Context, subject string, headers map[string]string, data []byte) error {
+func (b *Bus) Publish(ctx context.Context, subject string, headers Headers, data []byte) error {
 	h := nats.Header{}
 	for k, v := range headers {
 		h[k] = []string{v}
@@ -86,7 +94,7 @@ func (b *Bus) Consume(ctx context.Context, cfg ConsumerConfig) error {
 			return
 		}
 		hdrs := msg.Headers()
-		headers := make(map[string]string)
+		var headers Headers = make(map[string]string)
 		if hdrs != nil {
 			for k, vs := range hdrs {
 				if len(vs) > 0 {

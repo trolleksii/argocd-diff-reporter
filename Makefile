@@ -8,6 +8,12 @@ FULL_IMAGE = $(REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
 
 .PHONY: deploy build push restart
 
+local:
+	@echo "Building the binary"
+	rm -fr storage
+	go build -o argocd-diff-reporter ./cmd/main.go
+	./argocd-diff-reporter
+
 deploy: build push restart
 	@echo "Deployment complete: $(FULL_IMAGE)"
 

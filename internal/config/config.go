@@ -5,7 +5,7 @@ import (
 	"os"
 	"strconv"
 
-	"sigs.k8s.io/yaml"
+	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
@@ -17,6 +17,7 @@ type Config struct {
 	Webhook WebhookConfig   `yaml:"webhook"`
 	Workers WorkersConfig   `yaml:"workers"`
 	ArgoCD  ArgoCDConfig    `yaml:"argocd"`
+	Tracing TracingConfig   `yaml:"tracing"`
 }
 
 type ArgoCDConfig struct {
@@ -73,6 +74,12 @@ type LogConfig struct {
 	Format string `yaml:"format"`
 }
 
+type TracingConfig struct {
+	Endpoint string `yaml:"endpoint"`
+	Service  string `yaml:"service"`
+	Version  string `yaml:"version"`
+}
+
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -91,6 +98,9 @@ func Load(path string) (*Config, error) {
 			HelmWorker: HelmWorkerConfig{
 				ChartCacheDir: "charts",
 			},
+		},
+		Tracing: TracingConfig{
+			Service: "argocd-diff-reporter",
 		},
 	}
 	if err := yaml.Unmarshal(data, cfg); err != nil {
@@ -118,6 +128,15 @@ func (c *Config) ApplyEnv() error {
 	}
 	if v := os.Getenv("GITHUB_APP_PRIVATE_KEY"); v != "" {
 		c.Github.PrivateKey = v
+	}
+	if v := os.Getenv("OTEL_ENDPOINT"); v != "" {
+		c.Tracing.Endpoint = v
+	}
+	if v := os.Getenv("OTEL_SERVICE"); v != "" {
+		c.Tracing.Service = v
+	}
+	if v := os.Getenv("OTEL_VERSION"); v != "" {
+		c.Tracing.Version = v
 	}
 	return nil
 }

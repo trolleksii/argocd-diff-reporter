@@ -6,10 +6,15 @@ import (
 	"log/slog"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 	"github.com/trolleksii/argocd-diff-reporter/internal/helm"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 )
+
+var tracer = otel.Tracer("argocd-diff-reporter/internal/workers/helmworker")
 
 type HelmWorker struct {
 	cfg   config.HelmWorkerConfig
@@ -54,7 +59,13 @@ func (m *HelmWorker) Run(ctx context.Context) error {
 }
 
 func (m *HelmWorker) handleChartFetch(fetchFn func(string, string, helm.CredsProvider, *helm.HelmChartCache) (string, error)) nats.Handler {
-	return func(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
+	return func(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
+		ctx, span := tracer.Start(
+			otel.GetTextMapPropagator().Extract(ctx, headers),
+			"handleChartFetch",
+		)
+		otel.GetTextMapPropagator().Inject(ctx, headers)
+		defer span.End()
 		chartRepo := headers["chartRepo"]
 		chartRevision := headers["chartRevision"]
 		chartName := headers["chartName"]
@@ -75,7 +86,13 @@ func (m *HelmWorker) handleChartFetch(fetchFn func(string, string, helm.CredsPro
 	}
 }
 
-func (m *HelmWorker) handleChartRender(ctx context.Context, headers map[string]string, data []byte, ack, nak func() error) {
+func (m *HelmWorker) handleChartRender(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
+	ctx, span := tracer.Start(
+		otel.GetTextMapPropagator().Extract(ctx, headers),
+		"handleChartRender",
+	)
+	otel.GetTextMapPropagator().Inject(ctx, headers)
+	defer span.End()
 	m.log.Info("helm worker got a helm render event")
 	namespace := headers["namespace"]
 	releaseName := headers["releaseName"]
@@ -88,6 +105,7 @@ func (m *HelmWorker) handleChartRender(ctx context.Context, headers map[string]s
 	if err != nil {
 		headers["error"] = err.Error()
 		m.log.Error("failed to render the manifest", "error", err)
+		span.SetStatus(codes.Error, err.Error())
 		m.bus.Publish(ctx, "helm.manifest.render.failed", headers, nil)
 		ack()
 		return
@@ -97,6 +115,7 @@ func (m *HelmWorker) handleChartRender(ctx context.Context, headers map[string]s
 	appName := headers["application"]
 	id := fmt.Sprintf("%s/%s/%s", sha, fileName, appName)
 	if err := m.store.StoreObject(ctx, id, manifest); err != nil {
+		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
 	}
