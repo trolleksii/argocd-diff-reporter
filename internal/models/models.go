@@ -85,3 +85,8 @@ type DiffDetail struct {
 	FromContent string
 	ToContent   string
 }
+
+type FileChange struct {
+	FileName    string
+	Counterpart string
+}

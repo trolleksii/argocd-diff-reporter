@@ -34,6 +34,7 @@ import (
 	argosettings "github.com/argoproj/argo-cd/v3/util/settings"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
+	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 )
 
@@ -86,18 +87,23 @@ func (m *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.He
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
 
-	m.log.Debug("new git.files.snapshotted event", headers["prNum"], "owner", headers["owner"], "repo", headers["repo"], "sha", headers["ref"])
-	files, err := nats.Unmarshal[[]string](data)
+	m.log.Debug("new git.files.snapshotted event", "number", headers["prNum"], "owner", headers["owner"], "repo", headers["repo"], "sha", headers["ref"])
+	files, err := nats.Unmarshal[[]models.FileChange](data)
 	if err != nil {
 		m.log.Error("failed to unmarshal files", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
 	}
+	isBase := headers["ref"] == headers["baseSha"]
 	s := headers["snapshotDir"]
 	for _, f := range files {
-		headers["fileName"] = f
-		appSets, apps, err := parseFileResources(filepath.Join(s, f))
+		headers["fileName"] = f.FileName
+		if isBase && f.FileName != f.Counterpart && f.Counterpart != "" {
+			// when processing base file that was renamed, use the new name to store rendering results
+			headers["fileName"] = f.Counterpart
+		}
+		appSets, apps, err := parseFileResources(filepath.Join(s, f.FileName))
 		if err != nil {
 			headers["error"] = err.Error()
 			m.log.Error("failed to load file", "error", err)
@@ -155,6 +161,17 @@ func (m *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.He
 			default:
 				headers["chartName"] = app.Spec.Source.Chart
 				m.bus.Publish(ctx, "argo.helm.oci.parsed", headers, data)
+			}
+			// if the other half is empty it's either new file or deleted file
+			// we must generate an empty manifest
+			if f.Counterpart == "" {
+				headers["fileName"] = f.FileName
+				if isBase {
+					headers["ref"] = headers["headSha"]
+				} else {
+					headers["ref"] = headers["baseSha"]
+				}
+				m.bus.Publish(ctx, "argo.helm.empty.parsed", headers, nil)
 			}
 		}
 	}

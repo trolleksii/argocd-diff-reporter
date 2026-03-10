@@ -47,10 +47,11 @@ func (m *HelmWorker) Run(ctx context.Context) error {
 		AckWait:     3 * time.Second,
 		Concurrency: 4,
 		Handlers: map[string]nats.Handler{
-			"argo.helm.oci.parsed":  m.handleChartFetch(helm.FetchChartOCI),
-			"argo.helm.http.parsed": m.handleChartFetch(helm.FetchChartHTTPS),
-			"helm.chart.fetched":    m.handleChartRender,
-			"git.chart.fetched":     m.handleChartRender,
+			"argo.helm.oci.parsed":   m.handleChartFetch(helm.FetchChartOCI),
+			"argo.helm.http.parsed":  m.handleChartFetch(helm.FetchChartHTTPS),
+			"argo.helm.empty.parsed": m.handleEmptyManifest,
+			"helm.chart.fetched":     m.handleChartRender,
+			"git.chart.fetched":      m.handleChartRender,
 		},
 	})
 	if err != nil {
@@ -122,6 +123,33 @@ func (m *HelmWorker) handleChartRender(ctx context.Context, headers nats.Headers
 	key := fmt.Sprintf("%s.%s.%s.%s", number, sha, fileName, appName)
 	m.log.Debug("stored manifest", "key", key)
 	if err := m.store.StoreObject(ctx, key, manifest); err != nil {
+		m.log.Error("failed to store the manifest", "error", err)
+		span.SetStatus(codes.Error, err.Error())
+		nak()
+		return
+	}
+	headers["manifestLocation"] = key
+	m.bus.Publish(ctx, "helm.manifest.rendered", headers, nil)
+	ack()
+}
+
+func (m *HelmWorker) handleEmptyManifest(ctx context.Context, headers nats.Headers, _ []byte, ack, nak func() error) {
+	ctx, span := tracer.Start(
+		otel.GetTextMapPropagator().Extract(ctx, headers),
+		"handleChartRender",
+	)
+	otel.GetTextMapPropagator().Inject(ctx, headers)
+	defer span.End()
+
+	number := headers["prNum"]
+	sha := headers["ref"]
+	fileName := headers["fileName"]
+	appName := headers["application"]
+	delete(headers, "Nats-Msg-Id")
+
+	key := fmt.Sprintf("%s.%s.%s.%s", number, sha, fileName, appName)
+	m.log.Debug("stored manifest", "key", key)
+	if err := m.store.StoreObject(ctx, key, "---"); err != nil {
 		m.log.Error("failed to store the manifest", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
