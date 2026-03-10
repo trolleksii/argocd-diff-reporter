@@ -419,7 +419,7 @@ func cacheHelmChart(chartPath, cacheKey string, chartCache *HelmChartCache) (str
 		// Clean up the temporary directory since we've cached it
 		os.RemoveAll(tempDir)
 
-		slog.Info("Extracted and cached chart", "key", cacheKey)
+		slog.Debug("Extracted and cached chart", "key", cacheKey)
 		return chartLocation, nil
 	}
 

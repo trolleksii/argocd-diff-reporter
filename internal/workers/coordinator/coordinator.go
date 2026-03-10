@@ -61,6 +61,7 @@ func (c *Coordinator) handleRenderedManifest(ctx context.Context, headers nats.H
 	)
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
+
 	number := headers.Get("prNum")
 	baseSha := headers.Get("baseSha")
 	headSha := headers.Get("headSha")
@@ -68,21 +69,21 @@ func (c *Coordinator) handleRenderedManifest(ctx context.Context, headers nats.H
 	fileName := headers.Get("fileName")
 	appName := headers.Get("application")
 	manifestLocation := headers.Get("manifestLocation")
-	headKey := fmt.Sprintf("%s.%s.%s.%s", number, headSha, fileName, appName)
+	c.log.Debug("new helm.manifest.rendered event", "appName", appName, "sha", ref)
 	baseKey := fmt.Sprintf("%s.%s.%s.%s", number, baseSha, fileName, appName)
-	headers.Set("Nats-Msg-Id", baseSha+headSha)
+	headKey := fmt.Sprintf("%s.%s.%s.%s", number, headSha, fileName, appName)
+	headers.Set("Nats-Msg-Id", baseSha+headKey)
 	if ref == headSha {
-		if baseManifestLocation, err := nats.GetValue[string](ctx, c.store, baseKey); err == nil {
-			c.log.Info("debug", manifestLocation, baseManifestLocation)
-			headers["before"] = baseManifestLocation
+		c.store.SetValue(ctx, headKey, manifestLocation)
+		if _, err := nats.GetValue[string](ctx, c.store, baseKey); err == nil {
+			headers["before"] = baseKey
 			headers["after"] = manifestLocation
 			c.bus.Publish(ctx, "coordinator.app.ready", headers, nil)
 		}
-		c.store.SetValue(ctx, headKey, manifestLocation)
 	} else {
-		if headManifestLocation, err := nats.GetValue[string](ctx, c.store, headKey); err == nil {
+		if _, err := nats.GetValue[string](ctx, c.store, headKey); err == nil {
 			headers["before"] = manifestLocation
-			headers["after"] = headManifestLocation
+			headers["after"] = headKey
 			c.bus.Publish(ctx, "coordinator.app.ready", headers, nil)
 		}
 		c.store.SetValue(ctx, baseKey, manifestLocation)

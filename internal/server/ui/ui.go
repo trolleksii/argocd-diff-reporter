@@ -9,19 +9,19 @@ import (
 	"strings"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
-	"github.com/trolleksii/argocd-diff-reporter/internal/server/templates"
+	"github.com/trolleksii/argocd-diff-reporter/internal/templates"
 )
 
 type UIHandler struct {
 	log             *slog.Logger
-	templateManager templates.Manager
+	templateManager templates.Catalog
 	store           *nats.Store
 }
 
 func NewUIHandler(log *slog.Logger, store *nats.Store) *UIHandler {
 	return &UIHandler{
 		log:             log.With("module", "server", "handler", "ui"),
-		templateManager: templates.NewManager(),
+		templateManager: templates.NewCatalog(),
 		store:           store,
 	}
 }
@@ -91,7 +91,7 @@ func ParseReportId(r *http.Request) (string, error) {
 func (h *UIHandler) ServeReport(w http.ResponseWriter, r *http.Request) {
 	id, err := ParseReportId(r)
 	if err != nil {
-		h.log.Error("invalid pr number or report id")
+		h.log.Error("invalid pr number or report id", "error", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}

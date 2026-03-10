@@ -30,11 +30,11 @@ func (s *Store) PutSummary(ctx context.Context, id string, pr models.PullRequest
 }
 
 func (s *Store) GetReport(ctx context.Context, id string) (models.Report, error) {
-	return GetValue[models.Report](ctx, s, id)
+	return GetObject[models.Report](ctx, s, id)
 }
 
 func (s *Store) PutReport(ctx context.Context, id string, report models.Report) error {
-	return s.SetValue(ctx, id, report)
+	return s.StoreObject(ctx, id, report)
 }
 
 func (s *Store) SetValue(ctx context.Context, key string, value any) error {
@@ -64,18 +64,18 @@ func (s *Store) StoreObject(ctx context.Context, key string, value any) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.kvStore.Put(ctx, key, data)
+	_, err = s.objStore.PutBytes(ctx, key, data)
 	return err
 }
 
 func GetObject[T any](ctx context.Context, s *Store, key string) (T, error) {
 	var zero T
-	entry, err := s.kvStore.Get(ctx, key)
+	entry, err := s.objStore.GetBytes(ctx, key)
 	if err != nil {
 		return zero, err
 	}
 	var result T
-	if err := msgpack.Unmarshal(entry.Value(), &result); err != nil {
+	if err := msgpack.Unmarshal(entry, &result); err != nil {
 		return zero, err
 	}
 	return result, nil

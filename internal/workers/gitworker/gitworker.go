@@ -66,14 +66,12 @@ func (m *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
 
-	m.log.Info("git worker got an pr.changed event")
+	m.log.Debug("new webhook.pr.changed event", "prNum", headers["prNum"], "owner", headers["owner"], "repo", headers["repository"] )
 	repoUrl := fmt.Sprintf("https://github.com/%s/%s", headers["owner"], headers["repository"])
 	_, leafSpan := tracer.Start(ctx, "getOrCreateRepo")
 	r, err := m.getOrCreateRepo(ctx, repoUrl)
 	if err != nil {
 		m.log.Error("failed to find git repo", "error", err)
-		// we don't report this because if the webhook event came in the first place it means repo exists
-		// and the reason might be related to network, lag, credentials issue, etc
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		leafSpan.End()
@@ -102,7 +100,8 @@ func (m *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 		}
 	}
 
-	_, leafSpan = tracer.Start(ctx, "PublishBases")
+	_, leafSpan = tracer.Start(ctx, "PublishFiles")
+	defer leafSpan.End()
 	if len(from) > 0 {
 		headers["ref"] = headers["baseSha"]
 		data, err := nats.Marshal(FileGlobFilter(from, m.cfg.FileGlobs))
@@ -115,8 +114,6 @@ func (m *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 		span.SetStatus(codes.Ok, "files resolved")
 		m.bus.Publish(ctx, "git.files.resolved", headers, data)
 	}
-	leafSpan.End()
-	_, leafSpan = tracer.Start(ctx, "PublishHeads")
 	if len(to) > 0 {
 		headers["ref"] = headers["headSha"]
 		data, err = nats.Marshal(FileGlobFilter(to, m.cfg.FileGlobs))
@@ -129,7 +126,6 @@ func (m *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 		span.SetStatus(codes.Ok, "files resolved")
 		m.bus.Publish(ctx, "git.files.resolved", headers, data)
 	}
-	leafSpan.End()
 	ack()
 }
 
@@ -141,7 +137,7 @@ func (m *GitWorker) handleFilesResolved(ctx context.Context, headers nats.Header
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
 
-	m.log.Info("git worker got a file snapshot event")
+	m.log.Debug("new git.files.resolved event", "prNum", headers["prNum"], "owner", headers["owner"], "repo", headers["repository"], "sha", headers["ref"])
 	repoUrl := fmt.Sprintf("https://github.com/%s/%s", headers["owner"], headers["repository"])
 	r, err := m.getOrCreateRepo(ctx, repoUrl)
 	if err != nil {
@@ -172,7 +168,7 @@ func (m *GitWorker) handleChartFetch(ctx context.Context, headers nats.Headers, 
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
 
-	m.log.Info("git worker got a helm snapshot event")
+	m.log.Debug("new argo.helm.git.parsed event", "app", headers["application"], "repo", headers["chartRepo"], "revision", headers["chartRevision"])
 	chartRepo := headers["chartRepo"]
 	chartRevision := headers["chartRevision"]
 	chartPath := headers["chartPath"]

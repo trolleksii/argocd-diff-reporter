@@ -67,12 +67,13 @@ func (m *HelmWorker) handleChartFetch(fetchFn func(string, string, helm.CredsPro
 		)
 		otel.GetTextMapPropagator().Inject(ctx, headers)
 		defer span.End()
+
 		chartRepo := headers["chartRepo"]
 		chartRevision := headers["chartRevision"]
 		chartName := headers["chartName"]
 		chartRef := fmt.Sprintf("%s/%s", chartRepo, chartName)
 		headers["Nats-Msg-Id"] = fmt.Sprintf("%s/%s/%s/%s/%s", headers["ref"], headers["fileName"], headers["application"], chartRef, chartRevision)
-		m.log.Info("helm worker got a helm fetch event", "ref", chartRef, "version", chartRevision)
+		m.log.Debug("new argo.helm.(oci|http}.parsed event", "ref", chartRef, "version", chartRevision)
 		chartLocation, err := fetchFn(chartRef, chartRevision, nil, m.cache)
 		if err != nil {
 			headers["error"] = err.Error()
@@ -82,7 +83,7 @@ func (m *HelmWorker) handleChartFetch(fetchFn func(string, string, helm.CredsPro
 			return
 		}
 		headers["chartLocation"] = chartLocation
-		m.log.Info("helm worker successfully fetched the chart", "location", chartLocation)
+		m.log.Debug("fetched the chart", "location", chartLocation)
 		m.bus.Publish(ctx, "helm.chart.fetched", headers, data)
 		ack()
 	}
@@ -95,11 +96,16 @@ func (m *HelmWorker) handleChartRender(ctx context.Context, headers nats.Headers
 	)
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
-	m.log.Info("helm worker got a helm render event")
+
 	namespace := headers["namespace"]
 	releaseName := headers["releaseName"]
 	chartPath := headers["chartLocation"]
 	chartVersion := headers["chartRevision"]
+	number := headers["prNum"]
+	sha := headers["ref"]
+	fileName := headers["fileName"]
+	appName := headers["application"]
+	m.log.Debug("new (git|helm).chart.fetched event", "application", appName)
 
 	releaseValues, err := nats.Unmarshal[map[string]any](data)
 	manifest, err := helm.RenderChart(ctx, namespace, releaseName, chartPath, chartVersion, releaseValues)
@@ -113,16 +119,15 @@ func (m *HelmWorker) handleChartRender(ctx context.Context, headers nats.Headers
 	}
 
 	delete(headers, "Nats-Msg-Id")
-	sha := headers["ref"]
-	fileName := headers["fileName"]
-	appName := headers["application"]
-	id := fmt.Sprintf("%s/%s/%s", sha, fileName, appName)
-	if err := m.store.StoreObject(ctx, id, manifest); err != nil {
+	key := fmt.Sprintf("%s.%s.%s.%s", number, sha, fileName, appName)
+	m.log.Debug("stored manifest", "key", key)
+	if err := m.store.StoreObject(ctx, key, manifest); err != nil {
+		m.log.Error("failed to store the manifest", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
 	}
-	headers["manifestLocation"] = id
-	m.bus.Publish(ctx, "helm.manifest.rendered", headers, data)
+	headers["manifestLocation"] = key
+	m.bus.Publish(ctx, "helm.manifest.rendered", headers, nil)
 	ack()
 }

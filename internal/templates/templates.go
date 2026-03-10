@@ -20,12 +20,11 @@ var templates map[string]string = map[string]string{
 	"diff-detail": "html/partials/diff-detail.html",
 }
 
-// Manager handles template loading and execution
-type Manager map[string]*template.Template
+// Catalog is a map of available templates keyed by name.
+type Catalog map[string]*template.Template
 
-// NewManager creates a new template manager
-func NewManager() Manager {
-	m := Manager{}
+func NewCatalog() Catalog {
+	m := Catalog{}
 	for name, file := range templates {
 		content, err := templateFS.ReadFile(file)
 		if err != nil {

@@ -2,12 +2,12 @@ package argoworker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"encoding/json"
 	"strings"
 	"time"
 
@@ -64,9 +64,9 @@ func (m *ArgoWorker) Run(ctx context.Context) error {
 	}
 	m.generate = fn
 	err = m.bus.Consume(ctx, nats.ConsumerConfig{
-		Name:       "argotemplateengine",
-		MaxDeliver: 3,
-		AckWait:    3 * time.Second,
+		Name:        "argotemplateengine",
+		MaxDeliver:  3,
+		AckWait:     3 * time.Second,
 		Concurrency: 4,
 		Handlers: map[string]nats.Handler{
 			"git.files.snapshotted": m.handleSnapshottedFiles,
@@ -80,13 +80,13 @@ func (m *ArgoWorker) Run(ctx context.Context) error {
 
 func (m *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
 	ctx, span := tracer.Start(
-		otel.GetTextMapPropagator().Extract(ctx, headers), 
+		otel.GetTextMapPropagator().Extract(ctx, headers),
 		"handleSnapshottedFiles",
 	)
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
 
-	m.log.Info("argo worker got an event")
+	m.log.Debug("new git.files.snapshotted event", headers["prNum"], "owner", headers["owner"], "repo", headers["repo"], "sha", headers["ref"])
 	files, err := nats.Unmarshal[[]string](data)
 	if err != nil {
 		m.log.Error("failed to unmarshal files", "error", err)
