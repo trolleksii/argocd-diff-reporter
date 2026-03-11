@@ -17,6 +17,7 @@ import (
 	"github.com/trolleksii/argocd-diff-reporter/internal/server/mock"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server/ui"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server/webhook"
+	"github.com/trolleksii/argocd-diff-reporter/internal/server/notifications"
 	"github.com/trolleksii/argocd-diff-reporter/internal/tracing"
 	wrk "github.com/trolleksii/argocd-diff-reporter/internal/workers"
 	"github.com/trolleksii/argocd-diff-reporter/internal/workers/argoworker"
@@ -71,10 +72,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	notifier := notifications.NewNotificationServer(logger)
 	httpSrv := server.New(cfg.Server, logger,
 		webhook.NewRouteFunc(cfg.Webhook, bus),
 		ui.NewRouteFunc(store),
 		mock.NewRouteFunc(bus),
+		notifications.NewRouteFunc(notifier),
 	)
 
 	auth, err := githubauth.New(ctx, cfg.Github, logger)
@@ -87,7 +90,7 @@ func main() {
 	argoWorker := argoworker.New(cfg.ArgoCD, logger, bus)
 	helmWorker := helmworker.New(cfg.Workers.HelmWorker, logger, bus, store)
 	diffWorker := diffworker.New(logger, bus, store)
-	coordinator := coord.New(logger, bus, store)
+	coordinator := coord.New(logger, bus, store, notifier)
 
 	workers := []wrk.Worker{
 		natsSrv,

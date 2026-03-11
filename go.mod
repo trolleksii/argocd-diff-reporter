@@ -10,6 +10,7 @@ require (
 	github.com/gonvenience/neat v1.3.17
 	github.com/gonvenience/ytbx v1.4.8
 	github.com/google/go-github/v82 v82.0.0
+	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/jferrl/go-githubauth v1.5.1
 	github.com/mitchellh/hashstructure v1.1.0
 	github.com/nats-io/nats-server/v2 v2.12.4
@@ -119,7 +120,6 @@ require (
 	github.com/google/go-querystring v1.2.0 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
 	github.com/google/uuid v1.6.1-0.20241114170450-2d3c2a9cc518 // indirect
-	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
 	github.com/gosimple/slug v1.15.0 // indirect
 	github.com/gosimple/unidecode v1.0.1 // indirect
 	github.com/gosuri/uitable v0.0.4 // indirect

@@ -2,11 +2,11 @@ package argoworker
 
 import (
 	"context"
-	"maps"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"

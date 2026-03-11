@@ -10,21 +10,24 @@ import (
 	"go.opentelemetry.io/otel/codes"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
+	"github.com/trolleksii/argocd-diff-reporter/internal/server/notifications"
 )
 
 var tracer = otel.Tracer("argocd-diff-reporter/internal/workers/coordinator")
 
 type Coordinator struct {
-	bus   *nats.Bus
-	store *nats.Store
-	log   *slog.Logger
+	bus      *nats.Bus
+	store    *nats.Store
+	log      *slog.Logger
+	notifier *notifications.NotificationServer
 }
 
-func New(log *slog.Logger, b *nats.Bus, s *nats.Store) *Coordinator {
+func New(log *slog.Logger, b *nats.Bus, s *nats.Store, n *notifications.NotificationServer) *Coordinator {
 	return &Coordinator{
-		bus:   b,
-		store: s,
-		log:   log.With("component", "coordinator"),
+		bus:      b,
+		store:    s,
+		notifier: n,
+		log:      log.With("component", "coordinator"),
 	}
 }
 
@@ -36,6 +39,7 @@ func (c *Coordinator) Run(ctx context.Context) error {
 		AckWait:    10 * time.Second,
 		Handlers: map[string]nats.Handler{
 			"helm.manifest.rendered":      c.handleRenderedManifest,
+			"diff.report.generated":       c.handleGeneratedReport,
 			"helm.manifest.render.failed": c.logDetails,
 			"helm.chart.fetch.failed":     c.logDetails,
 			"git.chart.fetch.failed":      c.logDetails,
@@ -90,4 +94,11 @@ func (c *Coordinator) handleRenderedManifest(ctx context.Context, headers nats.H
 	}
 	span.SetStatus(codes.Ok, "")
 	ack()
+}
+
+func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.Headers, _ []byte, ack, nak func() error) {
+	// update index
+	// update summary
+	// notify customers
+	//c.notifier.Notify(id, diffs)
 }

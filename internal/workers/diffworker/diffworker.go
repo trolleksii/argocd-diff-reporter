@@ -103,7 +103,8 @@ func (c *DiffWorker) handleDiffReport(ctx context.Context, headers nats.Headers,
 	key := fmt.Sprintf("%s.%s.%s.%s.%s", number, baseSha, headSha, fileName, appName)
 	reports.WriteDiffReport(c.tplCat, fromDoc, toDoc, excludedPaths, &report)
 	c.store.PutReport(ctx, key, report)
-	c.log.Info("stored report", "url", fmt.Sprintf("http://localhost:3000/reports/%s/%s:%s:%s:%s", number, baseSha, headSha, fileName, appName))
+	headers["reportId"] = key
+	c.bus.Publish(ctx, "diff.report.generated", headers, nil)
 	span.SetStatus(codes.Ok, "")
 	ack()
 }
