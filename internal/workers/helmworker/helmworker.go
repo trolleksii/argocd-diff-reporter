@@ -136,7 +136,7 @@ func (m *HelmWorker) handleChartRender(ctx context.Context, headers nats.Headers
 func (m *HelmWorker) handleEmptyManifest(ctx context.Context, headers nats.Headers, _ []byte, ack, nak func() error) {
 	ctx, span := tracer.Start(
 		otel.GetTextMapPropagator().Extract(ctx, headers),
-		"handleChartRender",
+		"handleEmptyManifest",
 	)
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
@@ -146,7 +146,6 @@ func (m *HelmWorker) handleEmptyManifest(ctx context.Context, headers nats.Heade
 	fileName := headers["fileName"]
 	appName := headers["application"]
 	delete(headers, "Nats-Msg-Id")
-
 	key := fmt.Sprintf("%s.%s.%s.%s", number, sha, fileName, appName)
 	m.log.Debug("stored manifest", "key", key)
 	if err := m.store.StoreObject(ctx, key, "---"); err != nil {
