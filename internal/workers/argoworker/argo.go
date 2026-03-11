@@ -99,6 +99,11 @@ func (m *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.He
 	isBase := headers["ref"] == headers["baseSha"]
 	s := headers["snapshotDir"]
 	for _, f := range files {
+		headers["fileName"] = f.FileName
+		if isBase && f.FileName != f.Counterpart && f.Counterpart != "" {
+			// when processing base file that was renamed, use the new name to store rendering results
+			headers["fileName"] = f.Counterpart
+		}
 		appSets, apps, err := parseFileResources(filepath.Join(s, f.FileName))
 		if err != nil {
 			headers["error"] = err.Error()
