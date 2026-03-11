@@ -2,6 +2,7 @@ package argoworker
 
 import (
 	"context"
+	"maps"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -111,6 +112,11 @@ func (m *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.He
 			delete(headers, "error")
 			continue
 		}
+		headers["fileName"] = f.FileName
+		if isBase && f.FileName != f.Counterpart && f.Counterpart != "" {
+			// when processing base file that was renamed, use the new name to store rendering results
+			headers["fileName"] = f.Counterpart
+		}
 		for _, appSet := range appSets {
 			headers["appset"] = appSet.Name
 			renderedApps, reason, err := m.generate(appSet)
@@ -165,13 +171,15 @@ func (m *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.He
 			// if the other half is empty it's either new file or deleted file
 			// we must generate an empty manifest
 			if f.Counterpart == "" {
-				headers["fileName"] = f.FileName
+				h := make(nats.Headers)
+				maps.Copy(h, headers)
 				if isBase {
-					headers["ref"] = headers["headSha"]
+					h["ref"] = headers["headSha"]
 				} else {
-					headers["ref"] = headers["baseSha"]
+					h["ref"] = headers["baseSha"]
 				}
-				m.bus.Publish(ctx, "argo.helm.empty.parsed", headers, nil)
+				delete(headers, "Nats-Msg-Id")
+				m.bus.Publish(ctx, "argo.helm.empty.parsed", h, nil)
 			}
 		}
 	}
