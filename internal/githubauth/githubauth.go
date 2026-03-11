@@ -9,7 +9,7 @@ import (
 	"time"
 
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
-	"github.com/google/go-github/v74/github"
+	"github.com/google/go-github/v82/github"
 	"github.com/jferrl/go-githubauth"
 	"golang.org/x/oauth2"
 

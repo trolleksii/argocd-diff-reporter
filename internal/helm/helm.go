@@ -419,7 +419,7 @@ func cacheHelmChart(chartPath, cacheKey string, chartCache *HelmChartCache) (str
 		// Clean up the temporary directory since we've cached it
 		os.RemoveAll(tempDir)
 
-		slog.Info("Extracted and cached chart", "key", cacheKey)
+		slog.Debug("Extracted and cached chart", "key", cacheKey)
 		return chartLocation, nil
 	}
 
@@ -523,7 +523,7 @@ func RenderChart(ctx context.Context, namespace, releaseName, chartPath, chartVe
 	}
 
 	// Parse Kubernetes version with error handling
-	kubeVersion, err := chartutil.ParseKubeVersion("1.32")
+	kubeVersion, err := chartutil.ParseKubeVersion("1.33")
 	if err != nil {
 		return "", fmt.Errorf("failed to parse Kubernetes version: %w", err)
 	}

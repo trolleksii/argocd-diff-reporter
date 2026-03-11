@@ -13,6 +13,7 @@ import (
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 	"github.com/trolleksii/argocd-diff-reporter/internal/githubauth"
+	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/repository"
 )
@@ -42,9 +43,10 @@ func New(cfg config.GitWorkerConfig, log *slog.Logger, auth *githubauth.GithubCr
 func (m *GitWorker) Run(ctx context.Context) error {
 	m.log.Info("starting git worker...")
 	err := m.bus.Consume(ctx, nats.ConsumerConfig{
-		Name:       "gitrepomanager",
-		MaxDeliver: 3,
-		AckWait:    3 * time.Second,
+		Name:        "gitrepomanager",
+		MaxDeliver:  3,
+		AckWait:     3 * time.Second,
+		Concurrency: 2,
 		Handlers: map[string]nats.Handler{
 			"webhook.pr.changed":   m.handlePRChanged,
 			"git.files.resolved":   m.handleFilesResolved,
@@ -65,35 +67,52 @@ func (m *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
 
-	m.log.Info("git worker got an pr.changed event")
+	m.log.Debug("new webhook.pr.changed event", "prNum", headers["prNum"], "owner", headers["owner"], "repo", headers["repository"])
 	repoUrl := fmt.Sprintf("https://github.com/%s/%s", headers["owner"], headers["repository"])
+	_, leafSpan := tracer.Start(ctx, "getOrCreateRepo")
 	r, err := m.getOrCreateRepo(ctx, repoUrl)
 	if err != nil {
 		m.log.Error("failed to find git repo", "error", err)
-		// we don't report this because if the webhook event came in the first place it means repo exists
-		// and the reason might be related to network, lag, credentials issue, etc
 		span.SetStatus(codes.Error, err.Error())
 		nak()
+		leafSpan.End()
 		return
 	}
+	leafSpan.End()
+	_, leafSpan = tracer.Start(ctx, "ListChangedFiles")
 	changes, err := r.ListChangedFiles(headers["baseSha"], headers["headSha"])
 	if err != nil {
 		m.log.Error("failed to list changed files")
 		span.SetStatus(codes.Error, err.Error())
 		nak()
+		leafSpan.End()
 		return
 	}
-	var from, to []string
-	for _, change := range changes {
-		from = append(from, change.From)
-		to = append(to, change.To)
+	leafSpan.End()
+	var from, to []models.FileChange
+
+	for _, change := range FilterChanges(changes, m.cfg.FileGlobs) {
+		if change.From != "" {
+			fc := models.FileChange{
+				FileName:    change.From,
+				Counterpart: change.To,
+			}
+			from = append(from, fc)
+		}
+		if change.To != "" {
+			fc := models.FileChange{
+				FileName:    change.To,
+				Counterpart: change.From,
+			}
+			to = append(to, fc)
+		}
 	}
 
-	// TODO: files that are created/deleted/moved will lack the counterpart for the diff to run
-	// we need to do something about it
+	_, leafSpan = tracer.Start(ctx, "PublishFiles")
+	defer leafSpan.End()
 	if len(from) > 0 {
 		headers["ref"] = headers["baseSha"]
-		data, err := nats.Marshal(FileGlobFilter(from, m.cfg.FileGlobs))
+		data, err := nats.Marshal(from)
 		if err != nil {
 			m.log.Error("failed to marshal base files", "error", err)
 			span.SetStatus(codes.Error, err.Error())
@@ -105,7 +124,7 @@ func (m *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 	}
 	if len(to) > 0 {
 		headers["ref"] = headers["headSha"]
-		data, err = nats.Marshal(FileGlobFilter(to, m.cfg.FileGlobs))
+		data, err = nats.Marshal(to)
 		if err != nil {
 			m.log.Error("failed to marshal head files", "error", err)
 			span.SetStatus(codes.Error, err.Error())
@@ -126,7 +145,7 @@ func (m *GitWorker) handleFilesResolved(ctx context.Context, headers nats.Header
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
 
-	m.log.Info("git worker got a file snapshot event")
+	m.log.Debug("new git.files.resolved event", "prNum", headers["prNum"], "owner", headers["owner"], "repo", headers["repository"], "sha", headers["ref"])
 	repoUrl := fmt.Sprintf("https://github.com/%s/%s", headers["owner"], headers["repository"])
 	r, err := m.getOrCreateRepo(ctx, repoUrl)
 	if err != nil {
@@ -135,7 +154,11 @@ func (m *GitWorker) handleFilesResolved(ctx context.Context, headers nats.Header
 		nak()
 		return
 	}
-	files, err := nats.Unmarshal[[]string](data)
+	fileChanges, err := nats.Unmarshal[[]models.FileChange](data)
+	var files = make([]string, len(fileChanges))
+	for i, fc := range fileChanges {
+		files[i] = fc.FileName
+	}
 	snapshotDir, err := r.GetOrCreateSnapshot(headers["ref"], "", files)
 	if err != nil {
 		m.log.Error("failed to create snapshot", "error", err)
@@ -157,7 +180,7 @@ func (m *GitWorker) handleChartFetch(ctx context.Context, headers nats.Headers, 
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
 
-	m.log.Info("git worker got a helm snapshot event")
+	m.log.Debug("new argo.helm.git.parsed event", "app", headers["application"], "repo", headers["chartRepo"], "revision", headers["chartRevision"])
 	chartRepo := headers["chartRepo"]
 	chartRevision := headers["chartRevision"]
 	chartPath := headers["chartPath"]
@@ -217,16 +240,27 @@ func (m *GitWorker) getOrCreateRepo(ctx context.Context, repoURL string) (*repos
 	return repo, nil
 }
 
-func FileGlobFilter(files []string, globs []string) []string {
-	var result []string
-	for _, f := range files {
-		for _, g := range globs {
-			res, err := filepath.Match(g, f)
-			if res && err == nil {
-				result = append(result, f)
-				break
-			}
+func FilterChanges(changes []repository.Change, globs []string) []repository.Change {
+	var result []repository.Change
+	for _, c := range changes {
+		if !globMatches(c.From, globs) {
+			c.From = ""
+		}
+		if !globMatches(c.To, globs) {
+			c.To = ""
+		}
+		if c.To != "" || c.From != "" {
+			result = append(result, c)
 		}
 	}
 	return result
+}
+
+func globMatches(file string, globs []string) bool {
+	for _, g := range globs {
+		if res, err := filepath.Match(g, file); res && err == nil {
+			return true
+		}
+	}
+	return false
 }

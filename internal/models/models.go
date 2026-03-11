@@ -1,5 +1,7 @@
 package models
 
+import "html/template"
+
 // ProcessedPR represents a pull request that has been through the diff rendering pipeline.
 type ProcessedPR struct {
 	Number string
@@ -70,7 +72,7 @@ type Report struct {
 	HeadSHA   string
 	File      string
 	AppName   string
-	Body      string
+	Body      template.HTML
 	DiffStats DiffStats
 }
 
@@ -82,4 +84,9 @@ type DiffDetail struct {
 	Content     string
 	FromContent string
 	ToContent   string
+}
+
+type FileChange struct {
+	FileName    string
+	Counterpart string
 }
