@@ -9,15 +9,15 @@ import (
 	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 )
 
-func (s *Store) GetIndex(ctx context.Context) models.Index {
-	i, err := GetValue[models.Index](ctx, s, "index")
+func (s *Store) GetIndex(ctx context.Context) []models.ProcessedPR {
+	i, err := GetValue[[]models.ProcessedPR](ctx, s, "index")
 	if err != nil {
-		i = models.Index{}
+		i = []models.ProcessedPR{}
 	}
 	return i
 }
 
-func (s *Store) PutIndex(ctx context.Context, index models.Index) error {
+func (s *Store) PutIndex(ctx context.Context, index []models.ProcessedPR) error {
 	return s.SetValue(ctx, "index", index)
 }
 

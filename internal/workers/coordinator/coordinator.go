@@ -19,6 +19,7 @@ type Coordinator struct {
 	bus      *nats.Bus
 	store    *nats.Store
 	log      *slog.Logger
+	index    *Index
 	notifier *notifications.NotificationServer
 }
 
@@ -33,6 +34,8 @@ func New(log *slog.Logger, b *nats.Bus, s *nats.Store, n *notifications.Notifica
 
 func (c *Coordinator) Run(ctx context.Context) error {
 	c.log.Info("starting coordinator...")
+	storedIndex := c.store.GetIndex(ctx)
+	c.index = NewIndex(10, storedIndex) // TODO: get the max capacity into the config
 	err := c.bus.Consume(ctx, nats.ConsumerConfig{
 		Name:       "coordinator",
 		MaxDeliver: 3,
@@ -96,9 +99,17 @@ func (c *Coordinator) handleRenderedManifest(ctx context.Context, headers nats.H
 	ack()
 }
 
+// Index should be handler in two scenarios:
+//   1. New PR event
+//   2. PR processing failed
+//   3. PR processing succeded
+
+
 func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.Headers, _ []byte, ack, nak func() error) {
 	// update index
+	//c.notifier.Notify("index", )
 	// update summary
+	//c.notifier.Notify("summary:"+prNum, pr)
 	// notify customers
 	//c.notifier.Notify(id, diffs)
 }

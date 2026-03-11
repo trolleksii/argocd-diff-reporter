@@ -18,9 +18,6 @@ const (
 	PipelineSucceeded  PipelineStatus = 1
 )
 
-// Index holds latest processed PRs
-type Index []ProcessedPR
-
 // PullRequest holds GitHub pull request metadata and the aggregated results
 // of rendering all changed files through the diff pipeline.
 type PullRequest struct {
