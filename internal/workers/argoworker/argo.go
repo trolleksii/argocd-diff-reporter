@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -89,21 +88,16 @@ func (m *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.He
 	defer span.End()
 
 	m.log.Debug("new git.files.snapshotted event", "number", headers["prNum"], "owner", headers["owner"], "repo", headers["repo"], "sha", headers["ref"])
-	files, err := nats.Unmarshal[[]models.FileChange](data)
+	files, err := nats.Unmarshal[[]models.FileProcessingSpec](data)
 	if err != nil {
 		m.log.Error("failed to unmarshal files", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
 	}
-	isBase := headers["ref"] == headers["baseSha"]
 	s := headers["snapshotDir"]
 	for _, f := range files {
-		headers["fileName"] = f.FileName
-		if isBase && f.FileName != f.Counterpart && f.Counterpart != "" {
-			// when processing base file that was renamed, use the new name to store rendering results
-			headers["fileName"] = f.Counterpart
-		}
+		headers["fileName"] = f.ArtifactName
 		appSets, apps, err := parseFileResources(filepath.Join(s, f.FileName))
 		if err != nil {
 			headers["error"] = err.Error()
@@ -111,11 +105,6 @@ func (m *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.He
 			m.bus.Publish(ctx, "argo.file.parsing.failed", headers, []byte{})
 			delete(headers, "error")
 			continue
-		}
-		headers["fileName"] = f.FileName
-		if isBase && f.FileName != f.Counterpart && f.Counterpart != "" {
-			// when processing base file that was renamed, use the new name to store rendering results
-			headers["fileName"] = f.Counterpart
 		}
 		for _, appSet := range appSets {
 			headers["appset"] = appSet.Name
@@ -168,18 +157,9 @@ func (m *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.He
 				headers["chartName"] = app.Spec.Source.Chart
 				m.bus.Publish(ctx, "argo.helm.oci.parsed", headers, data)
 			}
-			// if the other half is empty it's either new file or deleted file
-			// we must generate an empty manifest
-			if f.Counterpart == "" {
-				h := make(nats.Headers)
-				maps.Copy(h, headers)
-				if isBase {
-					h["ref"] = headers["headSha"]
-				} else {
-					h["ref"] = headers["baseSha"]
-				}
-				delete(headers, "Nats-Msg-Id")
-				m.bus.Publish(ctx, "argo.helm.empty.parsed", h, nil)
+			if f.EmptyArtifactSHA != "" {
+				headers["ref"] = f.EmptyArtifactSHA
+				m.bus.Publish(ctx, "argo.helm.empty.parsed", headers, nil)
 			}
 		}
 	}

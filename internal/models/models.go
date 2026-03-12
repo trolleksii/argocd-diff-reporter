@@ -18,6 +18,17 @@ const (
 	PipelineSucceeded  PipelineStatus = 1
 )
 
+
+// FileProcessingSpec contains details of how to treat a particular file.
+// FileName - is the name of the file in the snapshot
+// ArtifactName - is the name to use for artifact(manifest) storage
+// EmptyArtifactSHA - an empty manifest must be created with the same ArtifactName but provided SHA
+type FileProcessingSpec struct {
+	FileName         string
+	ArtifactName     string
+	EmptyArtifactSHA string
+}
+
 // PullRequest holds GitHub pull request metadata and the aggregated results
 // of rendering all changed files through the diff pipeline.
 type PullRequest struct {
@@ -81,9 +92,4 @@ type DiffDetail struct {
 	Content     string
 	FromContent string
 	ToContent   string
-}
-
-type FileChange struct {
-	FileName    string
-	Counterpart string
 }

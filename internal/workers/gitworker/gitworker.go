@@ -68,7 +68,14 @@ func (m *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 	defer span.End()
 
 	m.log.Debug("new webhook.pr.changed event", "prNum", headers["prNum"], "owner", headers["owner"], "repo", headers["repository"])
-	repoUrl := fmt.Sprintf("https://github.com/%s/%s", headers["owner"], headers["repository"])
+	pr, err := nats.Unmarshal[models.PullRequest](data)
+	if err != nil {
+		m.log.Error("failed to unmarshal pr object", "error", err)
+		span.SetStatus(codes.Error, err.Error())
+		nak()
+		return
+	}
+	repoUrl := fmt.Sprintf("https://github.com/%s/%s", pr.Owner, pr.Repo)
 	_, leafSpan := tracer.Start(ctx, "getOrCreateRepo")
 	r, err := m.getOrCreateRepo(ctx, repoUrl)
 	if err != nil {
@@ -80,7 +87,7 @@ func (m *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 	}
 	leafSpan.End()
 	_, leafSpan = tracer.Start(ctx, "ListChangedFiles")
-	changes, err := r.ListChangedFiles(headers["baseSha"], headers["headSha"])
+	changes, err := r.ListChangedFiles(pr.BaseSHA, pr.HeadSHA)
 	if err != nil {
 		m.log.Error("failed to list changed files")
 		span.SetStatus(codes.Error, err.Error())
@@ -89,20 +96,30 @@ func (m *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 		return
 	}
 	leafSpan.End()
-	var from, to []models.FileChange
+	var from, to []models.FileProcessingSpec
 
-	for _, change := range FilterChanges(changes, m.cfg.FileGlobs) {
+	// here we handle corner cases of file renames where base report should be stored under head filename
+	// so that coordinator would detect both files
+	// and the creation/deletion case, where empty manifest need to be produced for coordinator to initiate diff report
+	for _, change := range filterChanges(changes, m.cfg.FileGlobs) {
 		if change.From != "" {
-			fc := models.FileChange{
-				FileName:    change.From,
-				Counterpart: change.To,
+			fc := models.FileProcessingSpec{
+				FileName:     change.From,
+				ArtifactName: change.From,
+			}
+			if change.To == "" {
+				fc.EmptyArtifactSHA = headers["headSha"]
+			} else if change.From != change.To {
+				fc.ArtifactName = change.To
 			}
 			from = append(from, fc)
 		}
 		if change.To != "" {
-			fc := models.FileChange{
-				FileName:    change.To,
-				Counterpart: change.From,
+			fc := models.FileProcessingSpec{
+				FileName: change.To,
+			}
+			if change.From == "" {
+				fc.EmptyArtifactSHA = headers["baseSha"]
 			}
 			to = append(to, fc)
 		}
@@ -154,7 +171,7 @@ func (m *GitWorker) handleFilesResolved(ctx context.Context, headers nats.Header
 		nak()
 		return
 	}
-	fileChanges, err := nats.Unmarshal[[]models.FileChange](data)
+	fileChanges, err := nats.Unmarshal[[]models.FileProcessingSpec](data)
 	var files = make([]string, len(fileChanges))
 	for i, fc := range fileChanges {
 		files[i] = fc.FileName
@@ -240,7 +257,8 @@ func (m *GitWorker) getOrCreateRepo(ctx context.Context, repoURL string) (*repos
 	return repo, nil
 }
 
-func FilterChanges(changes []repository.Change, globs []string) []repository.Change {
+func filterChanges(changes []repository.Change, globs []string) []repository.Change {
+	// keep changes where at lest one side matches the glob
 	var result []repository.Change
 	for _, c := range changes {
 		if !globMatches(c.From, globs) {

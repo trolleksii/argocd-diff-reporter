@@ -104,7 +104,6 @@ func (c *Coordinator) handleRenderedManifest(ctx context.Context, headers nats.H
 //   2. PR processing failed
 //   3. PR processing succeded
 
-
 func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.Headers, _ []byte, ack, nak func() error) {
 	// update index
 	//c.notifier.Notify("index", )
