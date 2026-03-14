@@ -122,11 +122,9 @@ func (m *HelmWorker) handleChartRender(ctx context.Context, headers nats.Headers
 		nak()
 		return
 	}
-	m.log.Debug("new *.chart.fetched event", "application",
+	m.log.Debug("new *.chart.fetched event",
 		"app", spec.AppName,
 		"repo", spec.Source.RepoURL,
-		"chart", spec.Source.ChartName,
-		"path", spec.Source.Path,
 		"revision", spec.Source.Revision)
 
 	chartDir := headers["chart.location"]
@@ -161,6 +159,8 @@ func (m *HelmWorker) handleEmptyManifest(ctx context.Context, headers nats.Heade
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
 
+	m.log.Info("debug", "headers", headers)
+
 	owner := headers["pr.owner"]
 	repo := headers["pr.repo"]
 	number := headers["pr.number"]
@@ -174,7 +174,7 @@ func (m *HelmWorker) handleEmptyManifest(ctx context.Context, headers nats.Heade
 		nak()
 		return
 	}
-	headers["manifestLocation"] = key
+	headers["manifest.location"] = key
 	m.bus.Publish(ctx, "helm.manifest.rendered", headers, nil)
 	ack()
 }

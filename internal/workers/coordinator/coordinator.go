@@ -173,7 +173,10 @@ func (c *Coordinator) handleRenderedManifest(ctx context.Context, headers nats.H
 	origin := headers["app.origin"]
 	manifestLocation := headers.Get("manifest.location")
 
-	c.log.Debug("new helm.manifest.rendered event", "appName", appName, "sha")
+	c.log.Debug("new helm.manifest.rendered event",
+		"appName", appName,
+		"sha", sha,
+	)
 	baseKey := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, baseSha, origin, appName)
 	headKey := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, headSha, origin, appName)
 	headers.Set("Nats-Msg-Id", owner+repo+baseSha+headKey)

@@ -122,7 +122,7 @@ func (m *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 			return
 		}
 		headers["sha.active"] = pr.BaseSHA
-		headers["sha.complimentary"] = pr.HeadSHA
+		headers["sha.complementary"] = pr.HeadSHA
 		span.SetStatus(codes.Ok, "files resolved")
 		m.bus.Publish(ctx, "git.files.resolved", headers, data)
 	}
@@ -135,7 +135,7 @@ func (m *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 			return
 		}
 		headers["sha.active"] = pr.HeadSHA
-		headers["sha.complimentary"] = pr.BaseSHA
+		headers["sha.complementary"] = pr.BaseSHA
 		span.SetStatus(codes.Ok, "files resolved")
 		m.bus.Publish(ctx, "git.files.resolved", headers, data)
 	}

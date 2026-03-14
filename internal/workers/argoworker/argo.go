@@ -131,7 +131,11 @@ func (m *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.He
 				apps = append(apps, a)
 			}
 		}
-		headers["app.origin"] = f.ArtifactName
+		if f.ArtifactName != "" {
+			headers["app.origin"] = f.ArtifactName
+		} else {
+			headers["app.origin"] = f.FileName
+		}
 		for _, app := range apps {
 			if app.Spec.Source.Helm == nil {
 				m.log.Debug("skipping non helm application")

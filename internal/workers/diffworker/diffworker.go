@@ -58,36 +58,38 @@ func (c *DiffWorker) handleDiffReport(ctx context.Context, headers nats.Headers,
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
 
-	number := headers.Get("prNum")
-	baseSha := headers.Get("baseSha")
-	headSha := headers.Get("headSha")
-	fileName := headers.Get("fileName")
-	appName := headers.Get("application")
+	owner := headers["pr.owner"]
+	repo := headers["pr.repo"]
+	number := headers["pr.number"]
+	baseSha := headers["sha.base"]
+	headSha := headers["sha.head"]
+	appName := headers["app.name"]
+	origin := headers["app.origin"]
 	c.log.Debug("new coordinator.app.ready event", "appName", appName)
 	headers.Set("Nats-Msg-Id", baseSha+headSha)
 
-	data, err := nats.GetObject[string](ctx, c.store, headers["before"])
+	data, err := nats.GetObject[string](ctx, c.store, headers["app.from"])
 	if err != nil {
-		c.log.Error("failed to find from manifest", "error", err, "id", headers["before"])
+		c.log.Error("failed to find from manifest", "error", err, "id", headers["app.from"])
 		nak()
 		return
 	}
 	fromDoc, err := reports.LoadManifest(appName, []byte(data))
 	if err != nil {
-		c.log.Error("failed to load from manifest", "error", err, "id", headers["before"])
+		c.log.Error("failed to load from manifest", "error", err, "id", headers["app.from"])
 		nak()
 		return
 	}
 
-	data, err = nats.GetObject[string](ctx, c.store, headers["after"])
+	data, err = nats.GetObject[string](ctx, c.store, headers["app.to"])
 	if err != nil {
-		c.log.Error("failed to find to manifest", "error", err, "id", headers["after"])
+		c.log.Error("failed to find to manifest", "error", err, "id", headers["app.to"])
 		nak()
 		return
 	}
 	toDoc, err := reports.LoadManifest(appName, []byte(data))
 	if err != nil {
-		c.log.Error("failed to load to manifest", "error", err, "id", headers["after"])
+		c.log.Error("failed to load to manifest", "error", err, "id", headers["app.to"])
 		nak()
 		return
 	}
@@ -95,12 +97,12 @@ func (c *DiffWorker) handleDiffReport(ctx context.Context, headers nats.Headers,
 		PRNumber: number,
 		BaseSHA:  baseSha,
 		HeadSHA:  headSha,
-		File:     fileName,
+		File:     origin,
 		AppName:  appName,
 	}
 
 	excludedPaths := []string{"/metadata/labels/helm.sh/chart", "/spec/template/metadata/labels/helm.sh/chart"}
-	key := fmt.Sprintf("%s.%s.%s.%s.%s", number, baseSha, headSha, fileName, appName)
+	key := fmt.Sprintf("%s.%s.%s.%s.%s.%s.%s", owner, repo, number, baseSha, headSha, origin, appName)
 	reports.WriteDiffReport(c.tplCat, fromDoc, toDoc, excludedPaths, &report)
 	c.store.PutReport(ctx, key, report)
 	headers["reportId"] = key
