@@ -68,12 +68,10 @@ func (c *Coordinator) handleFileErrors(ctx context.Context, headers nats.Headers
 	number := headers["pr.number"]
 	owner := headers["pr.owner"]
 	repo := headers["pr.repo"]
-	baseSha := headers["pr.sha.base"]
-	headSha := headers["pr.sha.head"]
 	errorMsg := headers["error.msg"]
 	errorOrigin := headers["error.origin"]
-	key := fmt.Sprintf("%s.%s.%s.%s.%", owner, repo, number, baseSha, headSha)
-	pr, err := nats.GetObject[models.PullRequest](ctx, c.store, key)
+	key := fmt.Sprintf("%s.%s.%s", owner, repo, number)
+	pr, err := nats.GetValue[models.PullRequest](ctx, c.store, key)
 	if err != nil {
 		c.log.Error("failed to unmarshal files", "error", err)
 		span.SetStatus(codes.Error, err.Error())
@@ -85,7 +83,8 @@ func (c *Coordinator) handleFileErrors(ctx context.Context, headers nats.Headers
 	} else {
 		pr.Files[errorOrigin] = models.FileResult{Errors: []string{errorMsg}}
 	}
-	c.store.StoreObject(ctx, key, pr)
+	pr.Success = false
+	c.store.SetValue(ctx, key, pr)
 	ack()
 }
 
@@ -100,13 +99,11 @@ func (c *Coordinator) handleAppErrors(ctx context.Context, headers nats.Headers,
 	number := headers["pr.number"]
 	owner := headers["pr.owner"]
 	repo := headers["pr.repo"]
-	baseSha := headers["pr.sha.base"]
-	headSha := headers["pr.sha.head"]
 	errorMsg := headers["error.msg"]
 	errorOriginFile := headers["error.origini.file"]
 	errorOriginApp := headers["error.origin.app"]
-	key := fmt.Sprintf("%s.%s.%s.%s.%", owner, repo, number, baseSha, headSha)
-	pr, err := nats.GetObject[models.PullRequest](ctx, c.store, key)
+	key := fmt.Sprintf("%s.%s.%s", owner, repo, number)
+	pr, err := nats.GetValue[models.PullRequest](ctx, c.store, key)
 	if err != nil {
 		c.log.Error("failed to unmarshal files", "error", err)
 		span.SetStatus(codes.Error, err.Error())
@@ -126,7 +123,8 @@ func (c *Coordinator) handleAppErrors(ctx context.Context, headers nats.Headers,
 			},
 		}
 	}
-	c.store.StoreObject(ctx, key, pr)
+	pr.Success = false
+	c.store.SetValue(ctx, key, pr)
 	ack()
 }
 
@@ -150,8 +148,8 @@ func (c *Coordinator) handlePREvent(ctx context.Context, headers nats.Headers, d
 		"owner", pr.Owner,
 		"repo", pr.Repo)
 
-	key := fmt.Sprintf("%s.%s.%s.%s.%", pr.Owner, pr.Repo, pr.Number, pr.BaseSHA, pr.HeadSHA)
-	c.store.StoreObject(ctx, key, data)
+	key := fmt.Sprintf("%s.%s.%s", pr.Owner, pr.Repo, pr.Number)
+	c.store.SetValue(ctx, key, pr)
 	ack()
 }
 
@@ -199,16 +197,60 @@ func (c *Coordinator) handleRenderedManifest(ctx context.Context, headers nats.H
 	ack()
 }
 
-// Index should be handler in two scenarios:
-//   1. New PR event
-//   2. PR processing failed
-//   3. PR processing succeded
+func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
+	ctx, span := tracer.Start(
+		otel.GetTextMapPropagator().Extract(ctx, headers),
+		"handleGeneratedReport",
+	)
+	otel.GetTextMapPropagator().Inject(ctx, headers)
+	defer span.End()
 
-func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.Headers, _ []byte, ack, nak func() error) {
+	owner := headers["pr.owner"]
+	repo := headers["pr.repo"]
+	number := headers["pr.number"]
+	appName := headers["app.name"]
+	origin := headers["app.origin"]
+
+	c.log.Debug("new diff.report.generated event",
+		"owner", owner,
+		"repo", repo,
+		"pr", number,
+		"appName", appName,
+	)
+	key := fmt.Sprintf("%s.%s.%s", owner, repo, number)
+	pr, err := nats.GetValue[models.PullRequest](ctx, c.store, key)
+	if err != nil {
+		c.log.Error("failed to fetch pull request data", "error", err)
+		nak()
+		return
+	}
+	ds, err := nats.Unmarshal[models.DiffStats](data)
+	if err != nil {
+		c.log.Error("failed to unmarshal diffstats", "error", err)
+		nak()
+	}
+	if f, ok := pr.Files[origin]; ok {
+		if a, ok := f.Apps[appName]; ok {
+			a.DiffStats = ds
+		} else {
+			f.Apps[origin] = models.App{DiffStats: ds}
+		}
+	} else {
+		pr.Files[origin] = models.FileResult{
+			Apps: map[string]models.App{
+				appName: models.App{DiffStats: ds},
+			},
+		}
+	}
+	c.store.SetValue(ctx, key, pr)
+	// check how much app reports have been submitted and update status if all of them are there
+	// set pr.Success = true
 	// update index
 	//c.notifier.Notify("index", )
 	// update summary
 	//c.notifier.Notify("summary:"+prNum, pr)
 	// notify customers
 	//c.notifier.Notify(id, diffs)
+	span.SetStatus(codes.Ok, "")
+	ack()
 }

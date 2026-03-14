@@ -33,15 +33,15 @@ func New(log *slog.Logger, b *nats.Bus, s *nats.Store) *DiffWorker {
 	}
 }
 
-func (c *DiffWorker) Run(ctx context.Context) error {
-	c.log.Info("starting diffworker...")
-	err := c.bus.Consume(ctx, nats.ConsumerConfig{
+func (w *DiffWorker) Run(ctx context.Context) error {
+	w.log.Info("starting diffworker...")
+	err := w.bus.Consume(ctx, nats.ConsumerConfig{
 		Name:        "diffworker",
 		MaxDeliver:  3,
 		AckWait:     10 * time.Second,
 		Concurrency: 10,
 		Handlers: map[string]nats.Handler{
-			"coordinator.app.ready": c.handleDiffReport,
+			"coordinator.app.ready": w.handleDiffReport,
 		},
 	})
 	if err != nil {
@@ -50,7 +50,7 @@ func (c *DiffWorker) Run(ctx context.Context) error {
 	return nil
 }
 
-func (c *DiffWorker) handleDiffReport(ctx context.Context, headers nats.Headers, _ []byte, ack, nak func() error) {
+func (w *DiffWorker) handleDiffReport(ctx context.Context, headers nats.Headers, _ []byte, ack, nak func() error) {
 	ctx, span := tracer.Start(
 		otel.GetTextMapPropagator().Extract(ctx, headers),
 		"handleDiffReport",
@@ -65,31 +65,31 @@ func (c *DiffWorker) handleDiffReport(ctx context.Context, headers nats.Headers,
 	headSha := headers["sha.head"]
 	appName := headers["app.name"]
 	origin := headers["app.origin"]
-	c.log.Debug("new coordinator.app.ready event", "appName", appName)
+	w.log.Debug("new coordinator.app.ready event", "appName", appName)
 	headers.Set("Nats-Msg-Id", baseSha+headSha)
 
-	data, err := nats.GetObject[string](ctx, c.store, headers["app.from"])
+	data, err := nats.GetObject[string](ctx, w.store, headers["app.from"])
 	if err != nil {
-		c.log.Error("failed to find from manifest", "error", err, "id", headers["app.from"])
+		w.log.Error("failed to find from manifest", "error", err, "id", headers["app.from"])
 		nak()
 		return
 	}
 	fromDoc, err := reports.LoadManifest(appName, []byte(data))
 	if err != nil {
-		c.log.Error("failed to load from manifest", "error", err, "id", headers["app.from"])
+		w.log.Error("failed to load from manifest", "error", err, "id", headers["app.from"])
 		nak()
 		return
 	}
 
-	data, err = nats.GetObject[string](ctx, c.store, headers["app.to"])
+	data, err = nats.GetObject[string](ctx, w.store, headers["app.to"])
 	if err != nil {
-		c.log.Error("failed to find to manifest", "error", err, "id", headers["app.to"])
+		w.log.Error("failed to find to manifest", "error", err, "id", headers["app.to"])
 		nak()
 		return
 	}
 	toDoc, err := reports.LoadManifest(appName, []byte(data))
 	if err != nil {
-		c.log.Error("failed to load to manifest", "error", err, "id", headers["app.to"])
+		w.log.Error("failed to load to manifest", "error", err, "id", headers["app.to"])
 		nak()
 		return
 	}
@@ -103,10 +103,15 @@ func (c *DiffWorker) handleDiffReport(ctx context.Context, headers nats.Headers,
 
 	excludedPaths := []string{"/metadata/labels/helm.sh/chart", "/spec/template/metadata/labels/helm.sh/chart"}
 	key := fmt.Sprintf("%s.%s.%s.%s.%s.%s.%s", owner, repo, number, baseSha, headSha, origin, appName)
-	reports.WriteDiffReport(c.tplCat, fromDoc, toDoc, excludedPaths, &report)
-	c.store.PutReport(ctx, key, report)
-	headers["reportId"] = key
-	c.bus.Publish(ctx, "diff.report.generated", headers, nil)
+	reports.WriteDiffReport(w.tplCat, fromDoc, toDoc, excludedPaths, &report)
+	w.store.PutReport(ctx, key, report)
+	headers["report.id"] = key
+	d, err := nats.Marshal(report.DiffStats)
+	if err != nil {
+		w.log.Error("failed to marshal diffstats message", "error", err)
+		return
+	}
+	w.bus.Publish(ctx, "diff.report.generated", headers, d)
 	span.SetStatus(codes.Ok, "")
 	ack()
 }

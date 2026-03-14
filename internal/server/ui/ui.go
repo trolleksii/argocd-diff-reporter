@@ -31,7 +31,7 @@ func NewRouteFunc(store *nats.Store) func(*http.ServeMux, *slog.Logger) {
 	return func(mux *http.ServeMux, log *slog.Logger) {
 		uh := NewUIHandler(log, store)
 		mux.HandleFunc("GET /{$}", uh.ServeIndex)
-		mux.HandleFunc("GET /pulls/{pr}", uh.ServeSummary)
+		mux.HandleFunc("GET /pulls/{owner}/{repo}/{pr}", uh.ServeSummary)
 		mux.HandleFunc("GET /reports/{pr}/{id...}", uh.ServeReport)
 	}
 }
@@ -52,8 +52,11 @@ func (h *UIHandler) ServeIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *UIHandler) ServeSummary(w http.ResponseWriter, r *http.Request) {
+	owner := r.PathValue("pr")
+	repo := r.PathValue("pr")
 	prNumber := r.PathValue("pr")
-	summary, err := h.store.GetSummary(r.Context(), prNumber)
+	id := fmt.Sprintf("%s.%s.%s", owner, repo, prNumber)
+	summary, err := h.store.GetSummary(r.Context(), id)
 	if err != nil {
 		h.log.Error("failed to find summary for a pr", "error", err)
 		w.WriteHeader(http.StatusInternalServerError)

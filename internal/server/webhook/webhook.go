@@ -113,6 +113,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				Author:  pr.GetUser().GetLogin(),
 				BaseSHA: pr.GetBase().GetSHA(),
 				HeadSHA: pr.GetHead().GetSHA(),
+				Files:   make(map[string]models.FileResult),
 			}
 
 			span.SetAttributes(
