@@ -47,7 +47,7 @@ type ArgoWorker struct {
 	generate templateFunc
 }
 
-type templateFunc func(appset appv1alpha1.ApplicationSet) ([]appv1alpha1.Application, appv1alpha1.ApplicationSetReasonType, error)
+type templateFunc func(appset appv1alpha1.ApplicationSet) ([]appv1alpha1.Application, error)
 
 func New(cfg config.ArgoCDConfig, log *slog.Logger, b *nats.Bus) *ArgoWorker {
 	return &ArgoWorker{
@@ -79,6 +79,15 @@ func (m *ArgoWorker) Run(ctx context.Context) error {
 	return nil
 }
 
+func (w *ArgoWorker) reportError(ctx context.Context, headers nats.Headers, origin string, e error) {
+	headers["error.origin"] = origin
+	headers["error.msg"] = e.Error()
+	w.log.Error("failed to load file", "error", e)
+	w.bus.Publish(ctx, "argo.app.generation.failed", headers, nil)
+	delete(headers, "error.origin")
+	delete(headers, "error.msg")
+}
+
 func (m *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
 	ctx, span := tracer.Start(
 		otel.GetTextMapPropagator().Extract(ctx, headers),
@@ -87,78 +96,88 @@ func (m *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.He
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
 
-	m.log.Debug("new git.files.snapshotted event", "number", headers["prNum"], "owner", headers["owner"], "repo", headers["repo"], "sha", headers["ref"])
-	files, err := nats.Unmarshal[[]models.FileProcessingSpec](data)
+	num := headers["pr.number"]
+	owner := headers["pr.owner"]
+	repo := headers["pr.repo"]
+	sha := headers["sha.active"]
+	s := headers["pr.files.snapshot"]
+	m.log.Debug("new git.files.snapshotted event",
+		"prNum", num,
+		"owner", owner,
+		"repo", repo,
+		"sha", sha)
+
+	specs, err := nats.Unmarshal[[]models.FileProcessingSpec](data)
 	if err != nil {
 		m.log.Error("failed to unmarshal files", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
 	}
-	s := headers["snapshotDir"]
-	for _, f := range files {
-		headers["fileName"] = f.ArtifactName
+
+	for _, f := range specs {
 		appSets, apps, err := parseFileResources(filepath.Join(s, f.FileName))
 		if err != nil {
-			headers["error"] = err.Error()
-			m.log.Error("failed to load file", "error", err)
-			m.bus.Publish(ctx, "argo.file.parsing.failed", headers, []byte{})
-			delete(headers, "error")
+			m.reportError(ctx, headers, f.ArtifactName, err)
 			continue
 		}
 		for _, appSet := range appSets {
-			headers["appset"] = appSet.Name
-			renderedApps, reason, err := m.generate(appSet)
+			renderedApps, err := m.generate(appSet)
 			if err != nil {
-				headers["error"] = err.Error()
-				m.log.Error("failed to generate applications", "reason", reason, "error", err)
-				m.bus.Publish(ctx, "argo.app.generation.failed", headers, nil)
-				delete(headers, "error")
+				m.reportError(ctx, headers, f.ArtifactName, err)
 				continue
 			}
 			for _, a := range renderedApps {
 				apps = append(apps, a)
 			}
 		}
+		headers["app.origin"] = f.ArtifactName
 		for _, app := range apps {
-			headers["application"] = app.Name
 			if app.Spec.Source.Helm == nil {
 				m.log.Debug("skipping non helm application")
 				// TODO: add support for kustomize/dir
 				continue
 			}
-
 			// TODO: check values and valueFiles and add support if necessay
 			var values map[string]any
 			if err := json.Unmarshal(app.Spec.Source.Helm.ValuesObject.Raw, &values); err != nil {
 				m.log.Error("failed to unmarshal helm values", "error", err)
 			}
 
-			data, err := nats.Marshal(values)
+			appSpec := models.AppSpec{
+				AppName:   app.Name,
+				Namespace: app.Spec.Destination.Namespace,
+				Source: models.AppSource{
+					RepoURL:   app.Spec.Source.RepoURL,
+					Revision:  app.Spec.Source.TargetRevision,
+					Path:      app.Spec.Source.Path,
+					ChartName: app.Spec.Source.Chart,
+				},
+				Helm: models.HelmSpec{
+					ReleaseName: app.Spec.Source.Helm.ReleaseName,
+					Values:      values,
+				},
+			}
+
+			var subject string = "argo.helm.oci.parsed"
+			switch {
+			// Spec with git reference will have non empty path
+			case app.Spec.Source.Path != "":
+				subject = "argo.helm.git.parsed"
+			case strings.HasPrefix(app.Spec.Source.RepoURL, "http://") || strings.HasPrefix(app.Spec.Source.RepoURL, "https://"):
+				subject = "argo.helm.http.parsed"
+			}
+			data, err := nats.Marshal(appSpec)
 			if err != nil {
 				m.log.Error("failed to marshal application", "error", err)
 				span.SetStatus(codes.Error, err.Error())
 				nak()
 				return
 			}
-			headers["chartRepo"] = app.Spec.Source.RepoURL
-			headers["chartRevision"] = app.Spec.Source.TargetRevision
-			headers["releaseName"] = app.Spec.Source.Helm.ReleaseName
-			headers["namespace"] = app.Spec.Destination.Namespace
-			switch {
-			// Spec with git reference will have non empty path
-			case app.Spec.Source.Path != "":
-				headers["chartPath"] = app.Spec.Source.Path
-				m.bus.Publish(ctx, "argo.helm.git.parsed", headers, data)
-			case strings.HasPrefix(app.Spec.Source.RepoURL, "http://") || strings.HasPrefix(app.Spec.Source.RepoURL, "https://"):
-				headers["chartName"] = app.Spec.Source.Chart
-				m.bus.Publish(ctx, "argo.helm.http.parsed", headers, data)
-			default:
-				headers["chartName"] = app.Spec.Source.Chart
-				m.bus.Publish(ctx, "argo.helm.oci.parsed", headers, data)
-			}
-			if f.EmptyArtifactSHA != "" {
-				headers["ref"] = f.EmptyArtifactSHA
+			m.bus.Publish(ctx, subject, headers, data)
+			if f.EmptyCounterpart {
+				headers["sha.active"], headers["sha.complementary"] = headers["sha.complementary"], headers["sha.active"]
+				headers["app.name"] = app.Name
 				m.bus.Publish(ctx, "argo.helm.empty.parsed", headers, nil)
 			}
 		}
@@ -166,7 +185,7 @@ func (m *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.He
 	ack()
 }
 
-func getTemplateFunc(ctx context.Context, c config.ArgoCDConfig) (func(appv1alpha1.ApplicationSet) ([]appv1alpha1.Application, appv1alpha1.ApplicationSetReasonType, error), error) {
+func getTemplateFunc(ctx context.Context, c config.ArgoCDConfig) (func(appv1alpha1.ApplicationSet) ([]appv1alpha1.Application, error), error) {
 	scheme := runtime.NewScheme()
 	clientgoscheme.AddToScheme(scheme)
 	appv1alpha1.AddToScheme(scheme)
@@ -202,8 +221,9 @@ func getTemplateFunc(ctx context.Context, c config.ArgoCDConfig) (func(appv1alph
 	)
 	logctx := logrus.NewEntry(logrus.StandardLogger())
 	logrus.SetOutput(io.Discard)
-	return func(appset appv1alpha1.ApplicationSet) ([]appv1alpha1.Application, appv1alpha1.ApplicationSetReasonType, error) {
-		return template.GenerateApplications(logctx, appset, gen, &utils.Render{}, ctrlClient)
+	return func(appset appv1alpha1.ApplicationSet) ([]appv1alpha1.Application, error) {
+		apps, _, err := template.GenerateApplications(logctx, appset, gen, &utils.Render{}, ctrlClient)
+		return apps, err
 	}, nil
 }
 

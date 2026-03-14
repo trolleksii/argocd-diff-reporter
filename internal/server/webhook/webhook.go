@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
+	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 )
 
@@ -73,72 +74,69 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			attribute.String("pr.repo", repoName),
 		)
 		if !MatchesRepoFilters(repoName, owner, h.cfg.AllowedRepos) {
-			h.log.Info("event blocked by repo filters", "repo", repoName, "owner", owner, "allowedRepos", h.cfg.AllowedRepos)
+			h.log.Info("event blocked by repo filters",
+				"repo", repoName,
+				"owner", owner,
+				"allowedRepos", h.cfg.AllowedRepos)
 			span.SetStatus(codes.Ok, "")
 			return
 		}
-		span.SetStatus(codes.Ok, "event parsed")
 		switch action {
 		case "closed":
 			pr := event.GetPullRequest()
-			prNum := strconv.Itoa(pr.GetNumber())
-			var headers nats.Headers = map[string]string{
-				"repository": repoName,
-				"owner":      owner,
-				"prNum":      prNum,
+			var headers nats.Headers = make(map[string]string)
+			prObj := models.PullRequest{
+				Owner:  owner,
+				Repo:   repoName,
+				Number: strconv.Itoa(pr.GetNumber()),
 			}
 			span.SetAttributes(
-				attribute.String("pr.number", prNum),
+				attribute.String("pr.number", prObj.Number),
+				attribute.String("pr.owner", prObj.Owner),
+				attribute.String("pr.repo", prObj.Repo),
 			)
 			otel.GetTextMapPropagator().Inject(trCtx, headers)
-			err = h.bus.Publish(r.Context(),
-				"webhook.pr.closed",
-				headers,
-				nil,
-			)
+			data, err := nats.Marshal(prObj)
 			if err != nil {
-				h.log.Error("Failed to publish PR event", "error", err)
+				h.log.Error("failed to marshal pr object", "error", err)
+				span.SetStatus(codes.Error, err.Error())
+				return
 			}
+			h.bus.Publish(r.Context(), "webhook.pr.closed", headers, data)
 		case "opened", "synchronize", "reopened":
 			pr := event.GetPullRequest()
-			prNum := strconv.Itoa(pr.GetNumber())
-			title := pr.GetTitle()
-			author := pr.GetUser().GetLogin()
-			branch := pr.GetHead().GetRef()
-			baseSha := pr.GetBase().GetSHA()
-			headSha := pr.GetHead().GetSHA()
+			prObj := models.PullRequest{
+				Owner:   owner,
+				Repo:    repoName,
+				Number:  strconv.Itoa(pr.GetNumber()),
+				Title:   pr.GetTitle(),
+				Author:  pr.GetUser().GetLogin(),
+				BaseSHA: pr.GetBase().GetSHA(),
+				HeadSHA: pr.GetHead().GetSHA(),
+			}
 
-			var headers nats.Headers = map[string]string{
-				"repository": repoName,
-				"owner":      owner,
-				"prNum":      prNum,
-				"title":      title,
-				"author":     author,
-				"branch":     branch,
-				"baseSha":    baseSha,
-				"headSha":    headSha,
-			}
 			span.SetAttributes(
-				attribute.String("pr.number", prNum),
-				attribute.String("pr.title", title),
-				attribute.String("pr.author", author),
-				attribute.String("pr.branch", branch),
-				attribute.String("pr.baseSha", baseSha),
-				attribute.String("pr.headSha", headSha),
+				attribute.String("pr.number", prObj.Number),
+				attribute.String("pr.title", prObj.Title),
+				attribute.String("pr.author", prObj.Author),
+				attribute.String("pr.baseSha", prObj.BaseSHA),
+				attribute.String("pr.headSha", prObj.HeadSHA),
 			)
+			var headers nats.Headers = make(map[string]string)
 			otel.GetTextMapPropagator().Inject(trCtx, headers)
-			err = h.bus.Publish(r.Context(),
-				"webhook.pr.changed",
-				headers,
-				nil,
-			)
+
+			data, err := nats.Marshal(prObj)
 			if err != nil {
-				h.log.Error("Failed to publish PR event", "error", err)
+				h.log.Error("failed to marshal pr object", "error", err)
+				span.SetStatus(codes.Error, err.Error())
+				return
 			}
+			h.bus.Publish(r.Context(), "webhook.pr.changed", headers, data)
 		}
 	default:
 		h.log.Warn("unknown event type", "etype", github.WebHookType(r))
 	}
+	span.SetStatus(codes.Ok, "")
 }
 
 func MatchesRepoFilters(repo, owner string, allowedRepos []config.GitRepoFilter) bool {

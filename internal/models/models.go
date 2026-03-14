@@ -18,6 +18,25 @@ const (
 	PipelineSucceeded  PipelineStatus = 1
 )
 
+type AppSpec struct {
+	AppName   string    `json:"appName"`
+	Namespace string    `json:"namespace"`
+	Source    AppSource `json:"source"`
+	Helm      HelmSpec  `json:"helm"`
+	Kustomize string    `json:"kustomize,omitempty"`
+}
+
+type AppSource struct {
+	RepoURL   string `json:"repoUrl"`
+	Revision  string `json:"revision"`
+	Path      string `json:"path,omitempty"`
+	ChartName string `json:"chart,omitempty"`
+}
+
+type HelmSpec struct {
+	ReleaseName string         `json:"release"`
+	Values      map[string]any `json:"values,omitempty"`
+}
 
 // FileProcessingSpec contains details of how to treat a particular file.
 // FileName - is the name of the file in the snapshot
@@ -26,7 +45,7 @@ const (
 type FileProcessingSpec struct {
 	FileName         string
 	ArtifactName     string
-	EmptyArtifactSHA string
+	EmptyCounterpart bool
 }
 
 // PullRequest holds GitHub pull request metadata and the aggregated results

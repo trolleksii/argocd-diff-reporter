@@ -11,6 +11,7 @@ import (
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 	"github.com/trolleksii/argocd-diff-reporter/internal/helm"
+	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 )
 
@@ -69,23 +70,34 @@ func (m *HelmWorker) handleChartFetch(fetchFn func(string, string, helm.CredsPro
 		otel.GetTextMapPropagator().Inject(ctx, headers)
 		defer span.End()
 
-		chartRepo := headers["chartRepo"]
-		chartRevision := headers["chartRevision"]
-		chartName := headers["chartName"]
-		chartRef := fmt.Sprintf("%s/%s", chartRepo, chartName)
-		headers["Nats-Msg-Id"] = fmt.Sprintf("%s/%s/%s/%s/%s", headers["ref"], headers["fileName"], headers["application"], chartRef, chartRevision)
-		m.log.Debug("new argo.helm.(oci|http}.parsed event", "ref", chartRef, "version", chartRevision)
-		chartLocation, err := fetchFn(chartRef, chartRevision, nil, m.cache)
+		spec, err := nats.Unmarshal[models.AppSpec](data)
 		if err != nil {
-			headers["error"] = err.Error()
+			m.log.Error("failed to unmarshal pr object", "error", err)
+			span.SetStatus(codes.Error, err.Error())
+			nak()
+			return
+		}
+		m.log.Debug("new argo.helm.(oci|http}.parsed event",
+			"app", spec.AppName,
+			"repo", spec.Source.RepoURL,
+			"chart", spec.Source.ChartName,
+			"path", spec.Source.Path,
+			"revision", spec.Source.Revision)
+		appOrigin := headers["app.origin"]
+		chartRef := fmt.Sprintf("%s/%s", spec.Source.RepoURL, spec.Source.ChartName)
+		chartLocation, err := fetchFn(chartRef, spec.Source.Revision, nil, m.cache)
+		if err != nil {
+			headers["error.origin.file"] = appOrigin
+			headers["error.origin.app"] = spec.AppName
+			headers["error.msg"] = err.Error()
 			m.log.Error("failed to feth the chart", "error", err)
 			m.bus.Publish(ctx, "helm.chart.fetch.failed", headers, nil)
 			ack()
 			return
 		}
-		headers["chartLocation"] = chartLocation
-		m.log.Debug("fetched the chart", "location", chartLocation)
+		headers["chart.location"] = chartLocation
 		m.bus.Publish(ctx, "helm.chart.fetched", headers, data)
+		span.SetStatus(codes.Ok, "")
 		ack()
 	}
 }
@@ -98,37 +110,45 @@ func (m *HelmWorker) handleChartRender(ctx context.Context, headers nats.Headers
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
 
-	namespace := headers["namespace"]
-	releaseName := headers["releaseName"]
-	chartPath := headers["chartLocation"]
-	chartVersion := headers["chartRevision"]
-	number := headers["prNum"]
-	sha := headers["ref"]
-	fileName := headers["fileName"]
-	appName := headers["application"]
-	m.log.Debug("new (git|helm).chart.fetched event", "application", appName)
-
-	releaseValues, err := nats.Unmarshal[map[string]any](data)
-	manifest, err := helm.RenderChart(ctx, namespace, releaseName, chartPath, chartVersion, releaseValues)
+	owner := headers["pr.owner"]
+	repo := headers["pr.repo"]
+	number := headers["pr.number"]
+	sha := headers["sha.active"]
+	origin := headers["app.origin"]
+	spec, err := nats.Unmarshal[models.AppSpec](data)
 	if err != nil {
-		headers["error"] = err.Error()
+		m.log.Error("failed to unmarshal pr object", "error", err)
+		span.SetStatus(codes.Error, err.Error())
+		nak()
+		return
+	}
+	m.log.Debug("new *.chart.fetched event", "application",
+		"app", spec.AppName,
+		"repo", spec.Source.RepoURL,
+		"chart", spec.Source.ChartName,
+		"path", spec.Source.Path,
+		"revision", spec.Source.Revision)
+
+	chartDir := headers["chart.location"]
+	manifest, err := helm.RenderChart(ctx, spec.Namespace, spec.Helm.ReleaseName, chartDir, spec.Source.Revision, spec.Helm.Values)
+	if err != nil {
+		headers["error.msg"] = err.Error()
+		headers["error.origin.file"] = origin
+		headers["error.origin.app"] = spec.AppName
 		m.log.Error("failed to render the manifest", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		m.bus.Publish(ctx, "helm.manifest.render.failed", headers, nil)
 		ack()
 		return
 	}
-
-	delete(headers, "Nats-Msg-Id")
-	key := fmt.Sprintf("%s.%s.%s.%s", number, sha, fileName, appName)
-	m.log.Debug("stored manifest", "key", key)
+	key := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, spec.AppName)
 	if err := m.store.StoreObject(ctx, key, manifest); err != nil {
 		m.log.Error("failed to store the manifest", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
 	}
-	headers["manifestLocation"] = key
+	headers["manifest.location"] = key
 	m.bus.Publish(ctx, "helm.manifest.rendered", headers, nil)
 	ack()
 }
@@ -141,13 +161,13 @@ func (m *HelmWorker) handleEmptyManifest(ctx context.Context, headers nats.Heade
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
 
-	number := headers["prNum"]
-	sha := headers["ref"]
-	fileName := headers["fileName"]
-	appName := headers["application"]
-	delete(headers, "Nats-Msg-Id")
-	key := fmt.Sprintf("%s.%s.%s.%s", number, sha, fileName, appName)
-	m.log.Debug("stored manifest", "key", key)
+	owner := headers["pr.owner"]
+	repo := headers["pr.repo"]
+	number := headers["pr.number"]
+	sha := headers["sha.active"]
+	appName := headers["app.name"]
+	origin := headers["app.origin"]
+	key := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, appName)
 	if err := m.store.StoreObject(ctx, key, "---"); err != nil {
 		m.log.Error("failed to store the manifest", "error", err)
 		span.SetStatus(codes.Error, err.Error())
