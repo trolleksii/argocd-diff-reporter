@@ -160,8 +160,6 @@ func (m *HelmWorker) handleEmptyManifest(ctx context.Context, headers nats.Heade
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
 
-	m.log.Info("debug", "headers", headers)
-
 	owner := headers["pr.owner"]
 	repo := headers["pr.repo"]
 	number := headers["pr.number"]
