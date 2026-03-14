@@ -46,7 +46,7 @@ func (m *HelmWorker) Run(ctx context.Context) error {
 		Name:        "helmworker",
 		MaxDeliver:  3,
 		AckWait:     3 * time.Second,
-		Concurrency: 4,
+		Concurrency: 8,
 		Handlers: map[string]nats.Handler{
 			"argo.helm.oci.parsed":   m.handleChartFetch(helm.FetchChartOCI),
 			"argo.helm.http.parsed":  m.handleChartFetch(helm.FetchChartHTTPS),
@@ -147,6 +147,7 @@ func (m *HelmWorker) handleChartRender(ctx context.Context, headers nats.Headers
 		return
 	}
 	headers["manifest.location"] = key
+	headers["app.name"] = spec.AppName
 	m.bus.Publish(ctx, "helm.manifest.rendered", headers, nil)
 	ack()
 }
