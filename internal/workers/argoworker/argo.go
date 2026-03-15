@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -57,20 +58,20 @@ func New(cfg config.ArgoCDConfig, log *slog.Logger, b *nats.Bus) *ArgoWorker {
 	}
 }
 
-func (m *ArgoWorker) Run(ctx context.Context) error {
-	m.log.Info("starting argo worker...")
-	fn, err := getTemplateFunc(ctx, m.cfg)
+func (w *ArgoWorker) Run(ctx context.Context) error {
+	w.log.Info("starting argo worker...")
+	fn, err := getTemplateFunc(ctx, w.cfg)
 	if err != nil {
 		return err
 	}
-	m.generate = fn
-	err = m.bus.Consume(ctx, nats.ConsumerConfig{
+	w.generate = fn
+	err = w.bus.Consume(ctx, nats.ConsumerConfig{
 		Name:        "argotemplateengine",
 		MaxDeliver:  3,
 		AckWait:     3 * time.Second,
 		Concurrency: 4,
 		Handlers: map[string]nats.Handler{
-			"git.files.snapshotted": m.handleSnapshottedFiles,
+			"git.files.snapshotted": w.handleSnapshottedFiles,
 		},
 	})
 	if err != nil {
@@ -88,7 +89,7 @@ func (w *ArgoWorker) reportError(ctx context.Context, headers nats.Headers, orig
 	delete(headers, "error.msg")
 }
 
-func (m *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
+func (w *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
 	ctx, span := tracer.Start(
 		otel.GetTextMapPropagator().Extract(ctx, headers),
 		"handleSnapshottedFiles",
@@ -101,7 +102,7 @@ func (m *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.He
 	repo := headers["pr.repo"]
 	sha := headers["sha.active"]
 	s := headers["pr.files.snapshot"]
-	m.log.Debug("new git.files.snapshotted event",
+	w.log.Debug("new git.files.snapshotted event",
 		"prNum", num,
 		"owner", owner,
 		"repo", repo,
@@ -109,22 +110,23 @@ func (m *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.He
 
 	specs, err := nats.Unmarshal[[]models.FileProcessingSpec](data)
 	if err != nil {
-		m.log.Error("failed to unmarshal files", "error", err)
+		w.log.Error("failed to unmarshal files", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
 	}
 
+	totalApps := 0
 	for _, f := range specs {
 		appSets, apps, err := parseFileResources(filepath.Join(s, f.FileName))
 		if err != nil {
-			m.reportError(ctx, headers, f.ArtifactName, err)
+			w.reportError(ctx, headers, f.ArtifactName, err)
 			continue
 		}
 		for _, appSet := range appSets {
-			renderedApps, err := m.generate(appSet)
+			renderedApps, err := w.generate(appSet)
 			if err != nil {
-				m.reportError(ctx, headers, f.ArtifactName, err)
+				w.reportError(ctx, headers, f.ArtifactName, err)
 				continue
 			}
 			for _, a := range renderedApps {
@@ -136,16 +138,18 @@ func (m *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.He
 		} else {
 			headers["app.origin"] = f.FileName
 		}
+
+		totalApps += len(apps)
 		for _, app := range apps {
 			if app.Spec.Source.Helm == nil {
-				m.log.Debug("skipping non helm application")
+				w.log.Debug("skipping non helm application")
 				// TODO: add support for kustomize/dir
 				continue
 			}
 			// TODO: check values and valueFiles and add support if necessay
 			var values map[string]any
 			if err := json.Unmarshal(app.Spec.Source.Helm.ValuesObject.Raw, &values); err != nil {
-				m.log.Error("failed to unmarshal helm values", "error", err)
+				w.log.Error("failed to unmarshal helm values", "error", err)
 			}
 
 			appSpec := models.AppSpec{
@@ -173,19 +177,22 @@ func (m *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.He
 			}
 			data, err := nats.Marshal(appSpec)
 			if err != nil {
-				m.log.Error("failed to marshal application", "error", err)
+				w.log.Error("failed to marshal application", "error", err)
 				span.SetStatus(codes.Error, err.Error())
 				nak()
 				return
 			}
-			m.bus.Publish(ctx, subject, headers, data)
+			w.bus.Publish(ctx, subject, headers, data)
 			if f.EmptyCounterpart {
 				headers["sha.active"], headers["sha.complementary"] = headers["sha.complementary"], headers["sha.active"]
 				headers["app.name"] = app.Name
-				m.bus.Publish(ctx, "argo.helm.empty.parsed", headers, nil)
+				w.bus.Publish(ctx, "argo.helm.empty.parsed", headers, nil)
 			}
 		}
 	}
+	w.bus.Publish(ctx, "argo.helm.empty.parsed", headers, nil)
+	headers["app.total"] = strconv.Itoa(totalApps)
+	w.bus.Publish(ctx, "argo.total.updated", headers, nil)
 	ack()
 }
 

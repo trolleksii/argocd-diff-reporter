@@ -40,6 +40,11 @@ type HelmSpec struct {
 	Values      map[string]any `json:"values,omitempty"`
 }
 
+type Progress struct {
+	TotalApps     int
+	ProcessedApps int
+}
+
 // FileProcessingSpec contains details of how to treat a particular file.
 // FileName - is the name of the file in the snapshot
 // ArtifactName - is the name to use for artifact(manifest) storage
@@ -61,7 +66,7 @@ type PullRequest struct {
 	BaseSHA string
 	HeadSHA string
 	Files   map[string]FileResult
-	Success bool
+	Status  PipelineStatus
 }
 
 // FileResult holds the rendering outcome for a single changed file in a pull request.

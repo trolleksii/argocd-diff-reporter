@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -22,6 +24,8 @@ type Coordinator struct {
 	log      *slog.Logger
 	index    *Index
 	notifier *notifications.NotificationServer
+	// mutex to serialize kv operaitons
+	mu sync.Mutex
 }
 
 func New(log *slog.Logger, b *nats.Bus, s *nats.Store, n *notifications.NotificationServer) *Coordinator {
@@ -50,6 +54,7 @@ func (c *Coordinator) Run(ctx context.Context) error {
 			"diff.report.generated":       c.handleGeneratedReport,
 			"webhook.pr.changed":          c.handlePREvent,
 			"argo.file.parsing.failed":    c.handleFileErrors,
+			"argo.total.updated":          c.handleTotalAppUpdate,
 			"helm.manifest.render.failed": c.handleAppErrors,
 			"git.chart.fetch.failed":      c.handleAppErrors,
 			"helm.chart.fetch.failed":     c.handleAppErrors,
@@ -75,6 +80,8 @@ func (c *Coordinator) handleFileErrors(ctx context.Context, headers nats.Headers
 	errorMsg := headers["error.msg"]
 	errorOrigin := headers["error.origin"]
 	key := fmt.Sprintf("%s.%s.%s", owner, repo, number)
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	pr, err := nats.GetValue[models.PullRequest](ctx, c.store, key)
 	if err != nil {
 		c.log.Error("failed to unmarshal files", "error", err)
@@ -87,10 +94,13 @@ func (c *Coordinator) handleFileErrors(ctx context.Context, headers nats.Headers
 	} else {
 		pr.Files[errorOrigin] = models.FileResult{Errors: []string{errorMsg}}
 	}
-	pr.Success = false
+	if pr.Status == models.PipelineInProgress {
+		pr.Status = models.PipelineFailed
+		c.index.UpdateStatus(pr.Owner, pr.Repo, pr.Number, models.PipelineFailed)
+		c.store.SetValue(ctx, "index", c.index.GetElements())
+		c.notifier.Notify("index", c.index.GetElements())
+	}
 	c.store.SetValue(ctx, key, pr)
-	c.index.Update(models.ProcessedPR{Owner: pr.Owner, Repo: pr.Repo, Number: pr.Number, Title: pr.Title, Status: models.PipelineFailed})
-	c.store.SetValue(ctx, "index", c.index.GetElements())
 	c.notifier.Notify("index", c.index.GetElements())
 	ack()
 }
@@ -110,6 +120,8 @@ func (c *Coordinator) handleAppErrors(ctx context.Context, headers nats.Headers,
 	errorOriginFile := headers["error.origini.file"]
 	errorOriginApp := headers["error.origin.app"]
 	key := fmt.Sprintf("%s.%s.%s", owner, repo, number)
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	pr, err := nats.GetValue[models.PullRequest](ctx, c.store, key)
 	if err != nil {
 		c.log.Error("failed to unmarshal files", "error", err)
@@ -130,10 +142,13 @@ func (c *Coordinator) handleAppErrors(ctx context.Context, headers nats.Headers,
 			},
 		}
 	}
-	pr.Success = false
-	c.store.SetValue(ctx, key, pr)
-	c.index.Update(models.ProcessedPR{Owner: pr.Owner, Repo: pr.Repo, Number: pr.Number, Title: pr.Title, Status: models.PipelineFailed})
-	c.notifier.Notify("index", c.index.GetElements())
+	if pr.Status == models.PipelineInProgress {
+		pr.Status = models.PipelineFailed
+		c.store.SetValue(ctx, "index", c.index.GetElements())
+		c.index.UpdateStatus(pr.Owner, pr.Repo, pr.Number, models.PipelineFailed)
+		c.notifier.Notify("index", c.index.GetElements())
+	}
+	span.SetStatus(codes.Ok, "")
 	ack()
 }
 
@@ -158,13 +173,36 @@ func (c *Coordinator) handlePREvent(ctx context.Context, headers nats.Headers, d
 		"repo", pr.Repo)
 
 	key := fmt.Sprintf("%s.%s.%s", pr.Owner, pr.Repo, pr.Number)
-	if err := c.store.SetValue(ctx, key, pr); err != nil {
-		c.log.Error("sic", "error", err)
-	}
-	c.log.Debug("stored pr summary", "error", err, "key", key)
-	c.index.Update(models.ProcessedPR{Owner: pr.Owner, Repo: pr.Repo, Number: pr.Number, Title: pr.Title, Status: models.PipelineFailed})
+	c.store.SetValue(ctx, key, pr)
+	c.index.Update(models.ProcessedPR{Owner: pr.Owner, Repo: pr.Repo, Number: pr.Number, Title: pr.Title, Status: models.PipelineInProgress})
 	c.store.SetValue(ctx, "index", c.index.GetElements())
 	c.notifier.Notify("index", c.index.GetElements())
+	ack()
+}
+
+func (c *Coordinator) handleTotalAppUpdate(ctx context.Context, headers nats.Headers, _ []byte, ack, nak func() error) {
+	ctx, span := tracer.Start(
+		otel.GetTextMapPropagator().Extract(ctx, headers),
+		"handleTotalAppUpdate",
+	)
+	otel.GetTextMapPropagator().Inject(ctx, headers)
+	defer span.End()
+
+	number := headers["pr.number"]
+	owner := headers["pr.owner"]
+	repo := headers["pr.repo"]
+	baseSha := headers["pr.sha.base"]
+	headSha := headers["pr.sha.head"]
+	total, err := strconv.Atoi(headers["app.total"])
+	key := fmt.Sprintf("progress-%s.%s.%s.%s.%s", owner, repo, number, baseSha, headSha)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	progress, err := nats.GetValue[models.Progress](ctx, c.store, key)
+	if err != nil {
+		progress = models.Progress{}
+	}
+	progress.TotalApps += total
+	c.store.SetValue(ctx, key, progress)
 	ack()
 }
 
@@ -257,11 +295,23 @@ func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.He
 			},
 		}
 	}
-	c.store.SetValue(ctx, key, pr)
+	c.mu.Lock()
+	progressId := fmt.Sprintf("progress-%s.%s.%s.%s.%s", owner, repo, number, pr.BaseSHA, pr.HeadSHA)
+	progress, err := nats.GetValue[models.Progress](ctx, c.store, progressId)
+	if err != nil {
+		c.log.Error("failed to unmarshal progress object", "error", err)
+		nak()
+	}
+	progress.ProcessedApps += 1
+	c.store.SetValue(ctx, progressId, progress)
+	if pr.Status == models.PipelineInProgress && progress.TotalApps == progress.ProcessedApps {
+		pr.Status = models.PipelineSucceeded
+		c.index.UpdateStatus(pr.Owner, pr.Repo, pr.Number, models.PipelineSucceeded)
+		c.notifier.Notify("index", c.index.GetElements())
+	}
+	c.mu.Unlock()
 	c.notifier.Notify("summary:"+key, pr)
-
-	// check how much app reports have been submitted and update status if all of them are there
-	// set pr.Success = true
+	c.store.SetValue(ctx, key, pr)
 	span.SetStatus(codes.Ok, "")
 	ack()
 }

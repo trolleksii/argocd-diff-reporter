@@ -40,9 +40,9 @@ func (idx *Index) Update(pr models.ProcessedPR) {
 }
 
 // UpdateStatus sets the status of a tracked PR. No-op if the PR is not found.
-func (idx *Index) UpdateStatus(number string, status models.PipelineStatus) {
+func (idx *Index) UpdateStatus(owner, repo, number string, status models.PipelineStatus) {
 	for i, item := range idx.items {
-		if item.Number == number {
+		if item.Owner == owner && item.Repo == repo && item.Number == number {
 			idx.items[i].Status = status
 			return
 		}
