@@ -35,9 +35,13 @@ func New(log *slog.Logger, b *nats.Bus, s *nats.Store, n *notifications.Notifica
 
 func (c *Coordinator) Run(ctx context.Context) error {
 	c.log.Info("starting coordinator...")
-	storedIndex := c.store.GetIndex(ctx)
-	c.index = NewIndex(10, storedIndex) // TODO: get the max capacity into the config
-	err := c.bus.Consume(ctx, nats.ConsumerConfig{
+	storedState, err := nats.GetValue[[]models.ProcessedPR](ctx, c.store, "index")
+	if err != nil {
+		storedState = []models.ProcessedPR{}
+	}
+	c.index = NewIndex(10, storedState) // TODO: get the max capacity into the config
+	c.store.SetValue(ctx, "index", c.index.GetElements())
+	err = c.bus.Consume(ctx, nats.ConsumerConfig{
 		Name:       "coordinator",
 		MaxDeliver: 3,
 		AckWait:    10 * time.Second,
@@ -85,6 +89,9 @@ func (c *Coordinator) handleFileErrors(ctx context.Context, headers nats.Headers
 	}
 	pr.Success = false
 	c.store.SetValue(ctx, key, pr)
+	c.index.Update(models.ProcessedPR{Owner: pr.Owner, Repo: pr.Repo, Number: pr.Number, Title: pr.Title, Status: models.PipelineFailed})
+	c.store.SetValue(ctx, "index", c.index.GetElements())
+	c.notifier.Notify("index", c.index.GetElements())
 	ack()
 }
 
@@ -125,6 +132,8 @@ func (c *Coordinator) handleAppErrors(ctx context.Context, headers nats.Headers,
 	}
 	pr.Success = false
 	c.store.SetValue(ctx, key, pr)
+	c.index.Update(models.ProcessedPR{Owner: pr.Owner, Repo: pr.Repo, Number: pr.Number, Title: pr.Title, Status: models.PipelineFailed})
+	c.notifier.Notify("index", c.index.GetElements())
 	ack()
 }
 
@@ -149,7 +158,13 @@ func (c *Coordinator) handlePREvent(ctx context.Context, headers nats.Headers, d
 		"repo", pr.Repo)
 
 	key := fmt.Sprintf("%s.%s.%s", pr.Owner, pr.Repo, pr.Number)
-	c.store.SetValue(ctx, key, pr)
+	if err := c.store.SetValue(ctx, key, pr); err != nil {
+		c.log.Error("sic", "error", err)
+	}
+	c.log.Debug("stored pr summary", "error", err, "key", key)
+	c.index.Update(models.ProcessedPR{Owner: pr.Owner, Repo: pr.Repo, Number: pr.Number, Title: pr.Title, Status: models.PipelineFailed})
+	c.store.SetValue(ctx, "index", c.index.GetElements())
+	c.notifier.Notify("index", c.index.GetElements())
 	ack()
 }
 
@@ -233,7 +248,7 @@ func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.He
 		if a, ok := f.Apps[appName]; ok {
 			a.DiffStats = ds
 		} else {
-			f.Apps[origin] = models.App{DiffStats: ds}
+			f.Apps[appName] = models.App{DiffStats: ds}
 		}
 	} else {
 		pr.Files[origin] = models.FileResult{
@@ -243,14 +258,16 @@ func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.He
 		}
 	}
 	c.store.SetValue(ctx, key, pr)
+	c.notifier.Notify("summary:"+key, pr)
+
 	// check how much app reports have been submitted and update status if all of them are there
 	// set pr.Success = true
 	// update index
-	//c.notifier.Notify("index", )
 	// update summary
 	//c.notifier.Notify("summary:"+prNum, pr)
 	// notify customers
 	//c.notifier.Notify(id, diffs)
+
 	span.SetStatus(codes.Ok, "")
 	ack()
 }

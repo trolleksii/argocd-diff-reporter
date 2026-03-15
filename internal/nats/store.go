@@ -5,37 +5,7 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/vmihailenco/msgpack/v5"
-
-	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 )
-
-func (s *Store) GetIndex(ctx context.Context) []models.ProcessedPR {
-	i, err := GetValue[[]models.ProcessedPR](ctx, s, "index")
-	if err != nil {
-		i = []models.ProcessedPR{}
-	}
-	return i
-}
-
-func (s *Store) PutIndex(ctx context.Context, index []models.ProcessedPR) error {
-	return s.SetValue(ctx, "index", index)
-}
-
-func (s *Store) GetSummary(ctx context.Context, id string) (models.PullRequest, error) {
-	return GetValue[models.PullRequest](ctx, s, id)
-}
-
-func (s *Store) PutSummary(ctx context.Context, id string, pr models.PullRequest) error {
-	return s.SetValue(ctx, id, pr)
-}
-
-func (s *Store) GetReport(ctx context.Context, id string) (models.Report, error) {
-	return GetObject[models.Report](ctx, s, id)
-}
-
-func (s *Store) PutReport(ctx context.Context, id string, report models.Report) error {
-	return s.StoreObject(ctx, id, report)
-}
 
 func (s *Store) SetValue(ctx context.Context, key string, value any) error {
 	data, err := msgpack.Marshal(value)

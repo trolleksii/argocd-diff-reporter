@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 
+	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/templates"
 )
@@ -32,7 +32,7 @@ func NewRouteFunc(store *nats.Store) func(*http.ServeMux, *slog.Logger) {
 		uh := NewUIHandler(log, store)
 		mux.HandleFunc("GET /{$}", uh.ServeIndex)
 		mux.HandleFunc("GET /pulls/{owner}/{repo}/{pr}", uh.ServeSummary)
-		mux.HandleFunc("GET /reports/{pr}/{id...}", uh.ServeReport)
+		mux.HandleFunc("GET /reports/{owner}/{repo}/{pr}/{id...}", uh.ServeReport)
 	}
 }
 
@@ -45,18 +45,24 @@ func (h *UIHandler) ServeIndex(w http.ResponseWriter, r *http.Request) {
 	if partial {
 		templateName = "latestprs"
 	}
-	if err := h.templateManager[templateName].Execute(w, h.store.GetIndex(r.Context())); err != nil {
+	index, err := nats.GetValue[[]models.ProcessedPR](r.Context(), h.store, "index")
+	if err != nil {
+		h.log.Error("failed to fetch index", "error", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	if err := h.templateManager[templateName].Execute(w, index); err != nil {
 		h.log.Error("failed to execute index template", "error", err)
 		w.WriteHeader(http.StatusInternalServerError)
 	}
 }
 
 func (h *UIHandler) ServeSummary(w http.ResponseWriter, r *http.Request) {
-	owner := r.PathValue("pr")
-	repo := r.PathValue("pr")
+	owner := r.PathValue("owner")
+	repo := r.PathValue("repo")
 	prNumber := r.PathValue("pr")
-	id := fmt.Sprintf("%s.%s.%s", owner, repo, prNumber)
-	summary, err := h.store.GetSummary(r.Context(), id)
+	key := fmt.Sprintf("%s.%s.%s", owner, repo, prNumber)
+	summary, err := nats.GetValue[models.PullRequest](r.Context(), h.store, key)
 	if err != nil {
 		h.log.Error("failed to find summary for a pr", "error", err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -76,11 +82,9 @@ func (h *UIHandler) ServeSummary(w http.ResponseWriter, r *http.Request) {
 }
 
 func ParseReportId(r *http.Request) (string, error) {
-	prNumber, err := strconv.Atoi(r.PathValue("pr"))
-	if err != nil {
-		return "", errors.New("invalid PR number")
-	}
-
+	owner := r.PathValue("owner")
+	repo := r.PathValue("repo")
+	prNumber := r.PathValue("pr")
 	reportId := r.PathValue("id")
 	chunks := strings.Split(reportId, ":")
 
@@ -88,7 +92,7 @@ func ParseReportId(r *http.Request) (string, error) {
 		return "", errors.New("invalid report ID format")
 	}
 
-	return fmt.Sprintf("%d.%s.%s.%s.%s", prNumber, chunks[0], chunks[1], chunks[2], chunks[3]), nil
+	return fmt.Sprintf("%s.%s.%s.%s.%s.%s.%s", owner, repo, prNumber, chunks[0], chunks[1], chunks[2], chunks[3]), nil
 }
 
 func (h *UIHandler) ServeReport(w http.ResponseWriter, r *http.Request) {
@@ -100,7 +104,7 @@ func (h *UIHandler) ServeReport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get the report from storage
-	report, err := h.store.GetReport(r.Context(), id)
+	report, err := nats.GetObject[models.Report](r.Context(), h.store, id)
 	if err != nil {
 		h.log.Error("report not found", "id", id)
 		w.WriteHeader(http.StatusNotFound)

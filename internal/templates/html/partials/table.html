@@ -73,7 +73,7 @@
                     {{range $name, $app := $v.Apps}}
                     <td>{{$app.DiffStats.DiffCount}}</td>
                     <td>
-                        <a href="/reports/{{$pr.Number}}/{{$pr.BaseSHA}}:{{$pr.HeadSHA}}:{{$k}}:{{$name}}" class="app-link">{{$name}}</a>
+                        <a href="/reports/{{$pr.Owner}}/{{$pr.Repo}}/{{$pr.Number}}/{{$pr.BaseSHA}}:{{$pr.HeadSHA}}:{{$k}}:{{$name}}" class="app-link">{{$name}}</a>
                     </td>
                 </tr>
                 {{end}}

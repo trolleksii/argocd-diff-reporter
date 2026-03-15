@@ -4,6 +4,8 @@ import "html/template"
 
 // ProcessedPR represents a pull request that has been through the diff rendering pipeline.
 type ProcessedPR struct {
+	Owner  string
+	Repo   string
 	Number string
 	Title  string
 	Status PipelineStatus
@@ -94,6 +96,8 @@ type DiffStats struct {
 // It combines PR metadata, file context, diff statistics, and the pre-rendered
 // HTML diff output.
 type Report struct {
+	Owner     string
+	Repo      string
 	PRNumber  string
 	BaseSHA   string
 	HeadSHA   string

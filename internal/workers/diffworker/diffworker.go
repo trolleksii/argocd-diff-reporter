@@ -61,12 +61,12 @@ func (w *DiffWorker) handleDiffReport(ctx context.Context, headers nats.Headers,
 	owner := headers["pr.owner"]
 	repo := headers["pr.repo"]
 	number := headers["pr.number"]
-	baseSha := headers["sha.base"]
-	headSha := headers["sha.head"]
+	baseSha := headers["pr.sha.base"]
+	headSha := headers["pr.sha.head"]
 	appName := headers["app.name"]
 	origin := headers["app.origin"]
 	w.log.Debug("new coordinator.app.ready event", "appName", appName)
-	headers.Set("Nats-Msg-Id", baseSha+headSha)
+	headers.Set("Nats-Msg-Id", baseSha+headSha+origin+appName)
 
 	data, err := nats.GetObject[string](ctx, w.store, headers["app.from"])
 	if err != nil {
@@ -94,6 +94,8 @@ func (w *DiffWorker) handleDiffReport(ctx context.Context, headers nats.Headers,
 		return
 	}
 	report := models.Report{
+		Owner:    owner,
+		Repo:     repo,
 		PRNumber: number,
 		BaseSHA:  baseSha,
 		HeadSHA:  headSha,
@@ -104,7 +106,9 @@ func (w *DiffWorker) handleDiffReport(ctx context.Context, headers nats.Headers,
 	excludedPaths := []string{"/metadata/labels/helm.sh/chart", "/spec/template/metadata/labels/helm.sh/chart"}
 	key := fmt.Sprintf("%s.%s.%s.%s.%s.%s.%s", owner, repo, number, baseSha, headSha, origin, appName)
 	reports.WriteDiffReport(w.tplCat, fromDoc, toDoc, excludedPaths, &report)
-	w.store.PutReport(ctx, key, report)
+	if err := w.store.StoreObject(ctx, key, report); err != nil {
+		w.log.Error("failed to store report", "error", err)
+	}
 	headers["report.id"] = key
 	d, err := nats.Marshal(report.DiffStats)
 	if err != nil {

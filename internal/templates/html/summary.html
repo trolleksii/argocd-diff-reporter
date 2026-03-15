@@ -170,10 +170,10 @@
         }
     </style>
 </head>
-<body hx-ext="ws" ws-connect="/ws/updates/summary:{{.Number}}">
+<body hx-ext="ws" ws-connect="/ws/updates/summary:{{.Owner}}.{{.Repo}}.{{.Number}}">
     <div id="ws-indicator" class="ws-indicator">Connecting...</div>
     <div class="container" 
-         hx-get="/pulls/{{.Number}}?partial=true"
+        hx-get="/pulls/{{.Owner}}/{{.Repo}}/{{.Number}}?partial=true"
          hx-trigger="load, ws-refresh from:body"
          hx-swap="innerHTML">
         <!-- Header -->
