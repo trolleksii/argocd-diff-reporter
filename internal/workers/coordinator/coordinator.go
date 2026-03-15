@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/models"
@@ -79,6 +80,12 @@ func (c *Coordinator) handleFileErrors(ctx context.Context, headers nats.Headers
 	repo := headers["pr.repo"]
 	errorMsg := headers["error.msg"]
 	errorOrigin := headers["error.origin"]
+	span.SetAttributes(
+		attribute.String("pr.owner", owner),
+		attribute.String("pr.repo", repo),
+		attribute.String("pr.number", number),
+		attribute.String("error.origin", errorOrigin),
+	)
 	key := fmt.Sprintf("%s.%s.%s", owner, repo, number)
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -117,8 +124,15 @@ func (c *Coordinator) handleAppErrors(ctx context.Context, headers nats.Headers,
 	owner := headers["pr.owner"]
 	repo := headers["pr.repo"]
 	errorMsg := headers["error.msg"]
-	errorOriginFile := headers["error.origini.file"]
+	errorOriginFile := headers["error.origin.file"]
 	errorOriginApp := headers["error.origin.app"]
+	span.SetAttributes(
+		attribute.String("pr.owner", owner),
+		attribute.String("pr.repo", repo),
+		attribute.String("pr.number", number),
+		attribute.String("error.origin.file", errorOriginFile),
+		attribute.String("error.origin.app", errorOriginApp),
+	)
 	key := fmt.Sprintf("%s.%s.%s", owner, repo, number)
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -167,6 +181,11 @@ func (c *Coordinator) handlePREvent(ctx context.Context, headers nats.Headers, d
 		nak()
 		return
 	}
+	span.SetAttributes(
+		attribute.String("pr.owner", pr.Owner),
+		attribute.String("pr.repo", pr.Repo),
+		attribute.String("pr.number", pr.Number),
+	)
 	c.log.Debug("coordinating webhook.pr.changed event",
 		"prNum", pr.Number,
 		"owner", pr.Owner,
@@ -193,6 +212,12 @@ func (c *Coordinator) handleTotalAppUpdate(ctx context.Context, headers nats.Hea
 	repo := headers["pr.repo"]
 	baseSha := headers["pr.sha.base"]
 	headSha := headers["pr.sha.head"]
+	span.SetAttributes(
+		attribute.String("pr.owner", owner),
+		attribute.String("pr.repo", repo),
+		attribute.String("pr.number", number),
+		attribute.String("app.total", headers["app.total"]),
+	)
 	total, err := strconv.Atoi(headers["app.total"])
 	key := fmt.Sprintf("progress-%s.%s.%s.%s.%s", owner, repo, number, baseSha, headSha)
 	c.mu.Lock()
@@ -223,7 +248,14 @@ func (c *Coordinator) handleRenderedManifest(ctx context.Context, headers nats.H
 	appName := headers["app.name"]
 	origin := headers["app.origin"]
 	manifestLocation := headers.Get("manifest.location")
-
+	span.SetAttributes(
+		attribute.String("pr.owner", owner),
+		attribute.String("pr.repo", repo),
+		attribute.String("pr.number", number),
+		attribute.String("sha.active", sha),
+		attribute.String("app.name", appName),
+		attribute.String("app.origin", origin),
+	)
 	c.log.Debug("new helm.manifest.rendered event",
 		"appName", appName,
 		"sha", sha,
@@ -263,7 +295,13 @@ func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.He
 	number := headers["pr.number"]
 	appName := headers["app.name"]
 	origin := headers["app.origin"]
-
+	span.SetAttributes(
+		attribute.String("pr.owner", owner),
+		attribute.String("pr.repo", repo),
+		attribute.String("pr.number", number),
+		attribute.String("app.name", appName),
+		attribute.String("app.origin", origin),
+	)
 	c.log.Debug("new diff.report.generated event",
 		"owner", owner,
 		"repo", repo,

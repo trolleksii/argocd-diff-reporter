@@ -53,8 +53,8 @@ func InitTracer(ctx context.Context, cfg config.TracingConfig, log *slog.Logger)
 	))
 
 	return func() {
-		if err := tp.Shutdown(ctx); err != nil {
-			log.Info("failed to shut down tracing provider", "error", err)
+		if err := tp.Shutdown(context.Background()); err != nil {
+			log.Error("failed to shut down tracing provider", "error", err)
 		}
 	}, nil
 }

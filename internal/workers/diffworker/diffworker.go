@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/models"
@@ -68,6 +69,15 @@ func (w *DiffWorker) handleDiffReport(ctx context.Context, headers nats.Headers,
 	headSha := headers["pr.sha.head"]
 	appName := headers["app.name"]
 	origin := headers["app.origin"]
+	span.SetAttributes(
+		attribute.String("pr.owner", owner),
+		attribute.String("pr.repo", repo),
+		attribute.String("pr.number", number),
+		attribute.String("pr.baseSha", baseSha),
+		attribute.String("pr.headSha", headSha),
+		attribute.String("app.name", appName),
+		attribute.String("app.origin", origin),
+	)
 	w.log.Debug("new coordinator.app.ready event", "appName", appName)
 	headers.Set("Nats-Msg-Id", baseSha+headSha+origin+appName)
 

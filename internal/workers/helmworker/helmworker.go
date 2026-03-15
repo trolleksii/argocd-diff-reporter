@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
@@ -77,6 +78,13 @@ func (m *HelmWorker) handleChartFetch(fetchFn func(string, string, helm.CredsPro
 			nak()
 			return
 		}
+		span.SetAttributes(
+			attribute.String("pr.owner", headers["pr.owner"]),
+			attribute.String("pr.repo", headers["pr.repo"]),
+			attribute.String("pr.number", headers["pr.number"]),
+			attribute.String("app.name", spec.AppName),
+			attribute.String("app.origin", headers["app.origin"]),
+		)
 		m.log.Debug("new argo.helm.(oci|http}.parsed event",
 			"app", spec.AppName,
 			"repo", spec.Source.RepoURL,
@@ -122,6 +130,14 @@ func (m *HelmWorker) handleChartRender(ctx context.Context, headers nats.Headers
 		nak()
 		return
 	}
+	span.SetAttributes(
+		attribute.String("pr.owner", owner),
+		attribute.String("pr.repo", repo),
+		attribute.String("pr.number", number),
+		attribute.String("sha.active", sha),
+		attribute.String("app.name", spec.AppName),
+		attribute.String("app.origin", origin),
+	)
 	m.log.Debug("new *.chart.fetched event",
 		"app", spec.AppName,
 		"repo", spec.Source.RepoURL,
@@ -166,6 +182,14 @@ func (m *HelmWorker) handleEmptyManifest(ctx context.Context, headers nats.Heade
 	sha := headers["sha.active"]
 	appName := headers["app.name"]
 	origin := headers["app.origin"]
+	span.SetAttributes(
+		attribute.String("pr.owner", owner),
+		attribute.String("pr.repo", repo),
+		attribute.String("pr.number", number),
+		attribute.String("sha.active", sha),
+		attribute.String("app.name", appName),
+		attribute.String("app.origin", origin),
+	)
 	key := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, appName)
 	if err := m.store.StoreObject(ctx, key, "---"); err != nil {
 		m.log.Error("failed to store the manifest", "error", err)

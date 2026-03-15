@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
@@ -74,6 +75,13 @@ func (m *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 		nak()
 		return
 	}
+	span.SetAttributes(
+		attribute.String("pr.owner", pr.Owner),
+		attribute.String("pr.repo", pr.Repo),
+		attribute.String("pr.number", pr.Number),
+		attribute.String("pr.baseSha", pr.BaseSHA),
+		attribute.String("pr.headSha", pr.HeadSHA),
+	)
 	m.log.Debug("new webhook.pr.changed event",
 		"prNum", pr.Number,
 		"owner", pr.Owner,
@@ -154,6 +162,12 @@ func (m *GitWorker) handleFilesResolved(ctx context.Context, headers nats.Header
 	owner := headers["pr.owner"]
 	repo := headers["pr.repo"]
 	sha := headers["sha.active"]
+	span.SetAttributes(
+		attribute.String("pr.owner", owner),
+		attribute.String("pr.repo", repo),
+		attribute.String("pr.number", num),
+		attribute.String("sha.active", sha),
+	)
 	m.log.Debug("new git.files.resolved event",
 		"prNum", num,
 		"owner", owner,
@@ -207,6 +221,13 @@ func (m *GitWorker) handleChartFetch(ctx context.Context, headers nats.Headers, 
 		nak()
 		return
 	}
+	span.SetAttributes(
+		attribute.String("pr.owner", headers["pr.owner"]),
+		attribute.String("pr.repo", headers["pr.repo"]),
+		attribute.String("pr.number", headers["pr.number"]),
+		attribute.String("app.name", spec.AppName),
+		attribute.String("app.origin", headers["app.origin"]),
+	)
 	m.log.Debug("new argo.helm.git.parsed event",
 		"app", spec.AppName,
 		"repo", spec.Source.RepoURL,

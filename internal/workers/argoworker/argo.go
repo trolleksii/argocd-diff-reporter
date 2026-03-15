@@ -14,6 +14,7 @@ import (
 
 	logrus "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/dynamic"
@@ -102,6 +103,12 @@ func (w *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.He
 	repo := headers["pr.repo"]
 	sha := headers["sha.active"]
 	s := headers["pr.files.snapshot"]
+	span.SetAttributes(
+		attribute.String("pr.owner", owner),
+		attribute.String("pr.repo", repo),
+		attribute.String("pr.number", num),
+		attribute.String("sha.active", sha),
+	)
 	w.log.Debug("new git.files.snapshotted event",
 		"prNum", num,
 		"owner", owner,
