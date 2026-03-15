@@ -262,12 +262,6 @@ func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.He
 
 	// check how much app reports have been submitted and update status if all of them are there
 	// set pr.Success = true
-	// update index
-	// update summary
-	//c.notifier.Notify("summary:"+prNum, pr)
-	// notify customers
-	//c.notifier.Notify(id, diffs)
-
 	span.SetStatus(codes.Ok, "")
 	ack()
 }

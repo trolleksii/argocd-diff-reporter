@@ -89,7 +89,7 @@ func main() {
 	gitWorker := gitworker.New(cfg.Workers.GitWorker, logger, auth, bus)
 	argoWorker := argoworker.New(cfg.ArgoCD, logger, bus)
 	helmWorker := helmworker.New(cfg.Workers.HelmWorker, logger, bus, store)
-	diffWorker := diffworker.New(logger, bus, store)
+	diffWorker := diffworker.New(logger, bus, store, notifier)
 	coordinator := coord.New(logger, bus, store, notifier)
 
 	workers := []wrk.Worker{

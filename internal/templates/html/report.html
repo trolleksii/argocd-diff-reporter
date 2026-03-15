@@ -277,7 +277,7 @@
 </head>
 <body>
     <div id="update-indicator" class="update-indicator htmx-indicator">Connecting to live updates...</div>
-    <div class="container" hx-ext="ws" ws-connect="/ws/updates/{{.Owner}}{{.Repo}}{{.PRNumber}}:{{.File}}:{{.AppName}}">
+    <div class="container" hx-ext="ws" ws-connect="/ws/updates/report:{{.Owner}}.{{.Repo}}.{{.PRNumber}}.{{.File}}.{{.AppName}}">
         <div class="header">
             <h1>{{.AppName}}</h1>
             <div class="meta">

@@ -12,24 +12,27 @@ import (
 	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/reports"
+	"github.com/trolleksii/argocd-diff-reporter/internal/server/notifications"
 	"github.com/trolleksii/argocd-diff-reporter/internal/templates"
 )
 
 var tracer = otel.Tracer("argocd-diff-reporter/internal/workers/diffworker")
 
 type DiffWorker struct {
-	tplCat templates.Catalog
-	bus    *nats.Bus
-	store  *nats.Store
-	log    *slog.Logger
+	tplCat   templates.Catalog
+	bus      *nats.Bus
+	store    *nats.Store
+	log      *slog.Logger
+	notifier *notifications.NotificationServer
 }
 
-func New(log *slog.Logger, b *nats.Bus, s *nats.Store) *DiffWorker {
+func New(log *slog.Logger, b *nats.Bus, s *nats.Store, n *notifications.NotificationServer) *DiffWorker {
 	return &DiffWorker{
-		tplCat: templates.NewCatalog(),
-		bus:    b,
-		store:  s,
-		log:    log.With("component", "diffworker"),
+		tplCat:   templates.NewCatalog(),
+		bus:      b,
+		store:    s,
+		notifier: n,
+		log:      log.With("component", "diffworker"),
 	}
 }
 
@@ -116,6 +119,8 @@ func (w *DiffWorker) handleDiffReport(ctx context.Context, headers nats.Headers,
 		return
 	}
 	w.bus.Publish(ctx, "diff.report.generated", headers, d)
+	nk := fmt.Sprintf("report:%s.%s.%s.%s.%s", owner, repo, number, origin, appName)
+	w.notifier.Notify(nk, report)
 	span.SetStatus(codes.Ok, "")
 	ack()
 }
