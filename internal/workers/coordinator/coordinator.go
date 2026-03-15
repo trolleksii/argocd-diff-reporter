@@ -307,6 +307,7 @@ func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.He
 	if pr.Status == models.PipelineInProgress && progress.TotalApps == progress.ProcessedApps {
 		pr.Status = models.PipelineSucceeded
 		c.index.UpdateStatus(pr.Owner, pr.Repo, pr.Number, models.PipelineSucceeded)
+		c.store.SetValue(ctx, "index", c.index.GetElements())
 		c.notifier.Notify("index", c.index.GetElements())
 	}
 	c.mu.Unlock()
