@@ -23,37 +23,29 @@ func New(ctx context.Context, cfg config.NatsConfig, log *slog.Logger) (*Nats, e
 		close(closedCh)
 	})
 
-	if cfg.Addr != "" {
-		var err error
-		nc, err = nats.Connect(cfg.Addr, closedHandler)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		opts := &server.Options{
-			DontListen:      true,
-			JetStream:       true,
-			JetStreamDomain: cfg.Domain,
-			ServerName:      cfg.ServerName,
-			StoreDir:        cfg.StoreDir,
-			NoSigs:          true,
-		}
-		var err error
-		srv, err = server.NewServer(opts)
-		if err != nil {
-			return nil, err
-		}
+	opts := &server.Options{
+		DontListen:      true,
+		JetStream:       true,
+		JetStreamDomain: cfg.Domain,
+		ServerName:      cfg.ServerName,
+		StoreDir:        cfg.StoreDir,
+		NoSigs:          true,
+	}
+	var err error
+	srv, err = server.NewServer(opts)
+	if err != nil {
+		return nil, err
+	}
 
-		go srv.Start()
-		if !srv.ReadyForConnections(5 * time.Second) {
-			return nil, errors.New("nats: server timeout")
-		}
+	go srv.Start()
+	if !srv.ReadyForConnections(5 * time.Second) {
+		return nil, errors.New("nats: server timeout")
+	}
 
-		nc, err = nats.Connect(srv.ClientURL(), nats.InProcessServer(srv), closedHandler)
-		if err != nil {
-			srv.Shutdown()
-			return nil, err
-		}
+	nc, err = nats.Connect(srv.ClientURL(), nats.InProcessServer(srv), closedHandler)
+	if err != nil {
+		srv.Shutdown()
+		return nil, err
 	}
 
 	js, err := jetstream.New(nc)
