@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"time"
-
 	"log/slog"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
