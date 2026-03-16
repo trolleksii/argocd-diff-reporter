@@ -38,6 +38,7 @@ import (
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
+	"github.com/trolleksii/argocd-diff-reporter/internal/subjects"
 )
 
 var tracer = otel.Tracer("argocd-diff-reporter/internal/workers/argoworker")
@@ -72,7 +73,7 @@ func (w *ArgoWorker) Run(ctx context.Context) error {
 		AckWait:     3 * time.Second,
 		Concurrency: 4,
 		Handlers: map[string]nats.Handler{
-			"git.files.snapshotted": w.handleSnapshottedFiles,
+			subjects.GitFilesSnapshotted: w.handleSnapshottedFiles,
 		},
 	})
 	if err != nil {
@@ -85,7 +86,7 @@ func (w *ArgoWorker) reportError(ctx context.Context, headers nats.Headers, orig
 	headers["error.origin"] = origin
 	headers["error.msg"] = e.Error()
 	w.log.Error("failed to load file", "error", e)
-	w.bus.Publish(ctx, "argo.app.generation.failed", headers, nil)
+	w.bus.Publish(ctx, subjects.ArgoAppGenerationFailed, headers, nil)
 	delete(headers, "error.origin")
 	delete(headers, "error.msg")
 }
@@ -174,13 +175,13 @@ func (w *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.He
 				},
 			}
 
-			var subject string = "argo.helm.oci.parsed"
+			var subject string = subjects.ArgoHelmOCIParsed
 			switch {
 			// Spec with git reference will have non empty path
 			case app.Spec.Source.Path != "":
-				subject = "argo.helm.git.parsed"
+				subject = subjects.ArgoHelmGitParsed
 			case strings.HasPrefix(app.Spec.Source.RepoURL, "http://") || strings.HasPrefix(app.Spec.Source.RepoURL, "https://"):
-				subject = "argo.helm.http.parsed"
+				subject = subjects.ArgoHelmHTTPParsed
 			}
 			data, err := nats.Marshal(appSpec)
 			if err != nil {
@@ -193,13 +194,13 @@ func (w *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.He
 			if f.HasNoCounterpart {
 				headers["sha.active"], headers["sha.complementary"] = headers["sha.complementary"], headers["sha.active"]
 				headers["app.name"] = app.Name
-				w.bus.Publish(ctx, "argo.helm.empty.parsed", headers, nil)
+				w.bus.Publish(ctx, subjects.ArgoHelmEmptyParsed, headers, nil)
 			}
 		}
 	}
-	w.bus.Publish(ctx, "argo.helm.empty.parsed", headers, nil)
+	w.bus.Publish(ctx, subjects.ArgoHelmEmptyParsed, headers, nil)
 	headers["app.total"] = strconv.Itoa(totalApps)
-	w.bus.Publish(ctx, "argo.total.updated", headers, nil)
+	w.bus.Publish(ctx, subjects.ArgoTotalUpdated, headers, nil)
 	ack()
 }
 

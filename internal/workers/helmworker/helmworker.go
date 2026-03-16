@@ -14,6 +14,7 @@ import (
 	"github.com/trolleksii/argocd-diff-reporter/internal/helm"
 	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
+	"github.com/trolleksii/argocd-diff-reporter/internal/subjects"
 )
 
 var tracer = otel.Tracer("argocd-diff-reporter/internal/workers/helmworker")
@@ -49,11 +50,11 @@ func (w *HelmWorker) Run(ctx context.Context) error {
 		AckWait:     3 * time.Second,
 		Concurrency: 8,
 		Handlers: map[string]nats.Handler{
-			"argo.helm.oci.parsed":   w.handleChartFetch(helm.FetchChartOCI),
-			"argo.helm.http.parsed":  w.handleChartFetch(helm.FetchChartHTTPS),
-			"argo.helm.empty.parsed": w.handleEmptyManifest,
-			"helm.chart.fetched":     w.handleChartRender,
-			"git.chart.fetched":      w.handleChartRender,
+			subjects.ArgoHelmOCIParsed:   w.handleChartFetch(helm.FetchChartOCI),
+			subjects.ArgoHelmHTTPParsed:  w.handleChartFetch(helm.FetchChartHTTPS),
+			subjects.ArgoHelmEmptyParsed: w.handleEmptyManifest,
+			subjects.HelmChartFetched:    w.handleChartRender,
+			subjects.GitChartFetched:     w.handleChartRender,
 		},
 	})
 	if err != nil {
@@ -99,12 +100,12 @@ func (w *HelmWorker) handleChartFetch(fetchFn func(string, string, helm.CredsPro
 			headers["error.origin.app"] = spec.AppName
 			headers["error.msg"] = err.Error()
 			w.log.Error("failed to feth the chart", "error", err)
-			w.bus.Publish(ctx, "helm.chart.fetch.failed", headers, nil)
+			w.bus.Publish(ctx, subjects.HelmChartFetchFailed, headers, nil)
 			ack()
 			return
 		}
 		headers["chart.location"] = chartLocation
-		w.bus.Publish(ctx, "helm.chart.fetched", headers, data)
+		w.bus.Publish(ctx, subjects.HelmChartFetched, headers, data)
 		span.SetStatus(codes.Ok, "")
 		ack()
 	}
@@ -151,7 +152,7 @@ func (w *HelmWorker) handleChartRender(ctx context.Context, headers nats.Headers
 		headers["error.origin.app"] = spec.AppName
 		w.log.Error("failed to render the manifest", "error", err)
 		span.SetStatus(codes.Error, err.Error())
-		w.bus.Publish(ctx, "helm.manifest.render.failed", headers, nil)
+		w.bus.Publish(ctx, subjects.HelmManifestRenderFailed, headers, nil)
 		ack()
 		return
 	}
@@ -164,7 +165,7 @@ func (w *HelmWorker) handleChartRender(ctx context.Context, headers nats.Headers
 	}
 	headers["manifest.location"] = key
 	headers["app.name"] = spec.AppName
-	w.bus.Publish(ctx, "helm.manifest.rendered", headers, nil)
+	w.bus.Publish(ctx, subjects.HelmManifestRendered, headers, nil)
 	ack()
 }
 
@@ -198,6 +199,6 @@ func (w *HelmWorker) handleEmptyManifest(ctx context.Context, headers nats.Heade
 		return
 	}
 	headers["manifest.location"] = key
-	w.bus.Publish(ctx, "helm.manifest.rendered", headers, nil)
+	w.bus.Publish(ctx, subjects.HelmManifestRendered, headers, nil)
 	ack()
 }

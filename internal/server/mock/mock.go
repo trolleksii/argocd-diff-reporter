@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
+	"github.com/trolleksii/argocd-diff-reporter/internal/subjects"
 )
 
 var tracer = otel.Tracer("argocd-diff-reporter/internal/server/mock")
@@ -106,7 +107,7 @@ func (h *MockHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		)
 		otel.GetTextMapPropagator().Inject(trCtx, headers)
 		err := h.bus.Publish(r.Context(),
-			"webhook.pr.changed",
+			subjects.WebhookPRChanged,
 			headers,
 			nil,
 		)

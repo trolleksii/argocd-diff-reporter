@@ -14,6 +14,7 @@ import (
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/reports"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server/notifications"
+	"github.com/trolleksii/argocd-diff-reporter/internal/subjects"
 	"github.com/trolleksii/argocd-diff-reporter/internal/templates"
 )
 
@@ -45,7 +46,7 @@ func (w *DiffWorker) Run(ctx context.Context) error {
 		AckWait:     10 * time.Second,
 		Concurrency: 10,
 		Handlers: map[string]nats.Handler{
-			"coordinator.app.ready": w.handleDiffReport,
+			subjects.CoordinatorAppReady: w.handleDiffReport,
 		},
 	})
 	if err != nil {
@@ -128,7 +129,7 @@ func (w *DiffWorker) handleDiffReport(ctx context.Context, headers nats.Headers,
 		w.log.Error("failed to marshal diffstats message", "error", err)
 		return
 	}
-	w.bus.Publish(ctx, "diff.report.generated", headers, d)
+	w.bus.Publish(ctx, subjects.DiffReportGenerated, headers, d)
 	nk := fmt.Sprintf("report:%s.%s.%s.%s.%s", owner, repo, number, origin, appName)
 	w.notifier.Notify(nk, report)
 	span.SetStatus(codes.Ok, "")

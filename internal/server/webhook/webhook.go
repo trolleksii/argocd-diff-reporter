@@ -15,6 +15,7 @@ import (
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
+	"github.com/trolleksii/argocd-diff-reporter/internal/subjects"
 )
 
 var tracer = otel.Tracer("argocd-diff-reporter/internal/server/webhook")
@@ -102,7 +103,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				span.SetStatus(codes.Error, err.Error())
 				return
 			}
-			h.bus.Publish(r.Context(), "webhook.pr.closed", headers, data)
+			h.bus.Publish(r.Context(), subjects.WebhookPRClosed, headers, data)
 		case "opened", "synchronize", "reopened":
 			pr := event.GetPullRequest()
 			prObj := models.PullRequest{
@@ -132,7 +133,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				span.SetStatus(codes.Error, err.Error())
 				return
 			}
-			h.bus.Publish(r.Context(), "webhook.pr.changed", headers, data)
+			h.bus.Publish(r.Context(), subjects.WebhookPRChanged, headers, data)
 		}
 	default:
 		h.log.Warn("unknown event type", "etype", github.WebHookType(r))

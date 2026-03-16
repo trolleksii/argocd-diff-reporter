@@ -15,6 +15,7 @@ import (
 	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server/notifications"
+	"github.com/trolleksii/argocd-diff-reporter/internal/subjects"
 )
 
 var tracer = otel.Tracer("argocd-diff-reporter/internal/workers/coordinator")
@@ -51,14 +52,14 @@ func (c *Coordinator) Run(ctx context.Context) error {
 		MaxDeliver: 3,
 		AckWait:    10 * time.Second,
 		Handlers: map[string]nats.Handler{
-			"helm.manifest.rendered":      c.handleRenderedManifest,
-			"diff.report.generated":       c.handleGeneratedReport,
-			"webhook.pr.changed":          c.handlePREvent,
-			"argo.file.parsing.failed":    c.handleFileErrors,
-			"argo.total.updated":          c.handleTotalAppUpdate,
-			"helm.manifest.render.failed": c.handleAppErrors,
-			"git.chart.fetch.failed":      c.handleAppErrors,
-			"helm.chart.fetch.failed":     c.handleAppErrors,
+			subjects.HelmManifestRendered:     c.handleRenderedManifest,
+			subjects.DiffReportGenerated:      c.handleGeneratedReport,
+			subjects.WebhookPRChanged:         c.handlePREvent,
+			subjects.ArgoFileParseFailed:      c.handleFileErrors,
+			subjects.ArgoTotalUpdated:         c.handleTotalAppUpdate,
+			subjects.HelmManifestRenderFailed: c.handleAppErrors,
+			subjects.GitChartFetchFailed:      c.handleAppErrors,
+			subjects.HelmChartFetchFailed:     c.handleAppErrors,
 		},
 	})
 	if err != nil {
@@ -98,6 +99,7 @@ func (c *Coordinator) handleFileErrors(ctx context.Context, headers nats.Headers
 	}
 	if f, ok := pr.Files[errorOrigin]; ok {
 		f.Errors = append(f.Errors, errorMsg)
+		pr.Files[errorOrigin] = f
 	} else {
 		pr.Files[errorOrigin] = models.FileResult{Errors: []string{errorMsg}}
 	}
@@ -108,7 +110,7 @@ func (c *Coordinator) handleFileErrors(ctx context.Context, headers nats.Headers
 		c.notifier.Notify("index", c.index.GetElements())
 	}
 	c.store.SetValue(ctx, key, pr)
-	c.notifier.Notify("index", c.index.GetElements())
+	span.SetStatus(codes.Ok, "")
 	ack()
 }
 
@@ -144,15 +146,22 @@ func (c *Coordinator) handleAppErrors(ctx context.Context, headers nats.Headers,
 		return
 	}
 	if f, ok := pr.Files[errorOriginFile]; ok {
-		if a, ok := f.Apps[errorOriginApp]; ok {
-			a.Errors = append(a.Errors, errorMsg)
-		} else {
+		if f.Apps == nil {
+			f.Apps = make(map[string]models.App)
 			f.Apps[errorOriginApp] = models.App{Errors: []string{errorMsg}}
+		} else {
+			if a, ok := f.Apps[errorOriginApp]; ok {
+				a.Errors = append(a.Errors, errorMsg)
+				f.Apps[errorOriginApp] = a
+			} else {
+				f.Apps[errorOriginApp] = models.App{Errors: []string{errorMsg}}
+			}
 		}
+		pr.Files[errorOriginFile] = f
 	} else {
 		pr.Files[errorOriginFile] = models.FileResult{
 			Apps: map[string]models.App{
-				errorOriginApp: models.App{Errors: []string{errorMsg}},
+				errorOriginApp: {Errors: []string{errorMsg}},
 			},
 		}
 	}
@@ -162,6 +171,7 @@ func (c *Coordinator) handleAppErrors(ctx context.Context, headers nats.Headers,
 		c.store.SetValue(ctx, "index", c.index.GetElements())
 		c.notifier.Notify("index", c.index.GetElements())
 	}
+	c.store.SetValue(ctx, key, pr)
 	span.SetStatus(codes.Ok, "")
 	ack()
 }
@@ -269,13 +279,13 @@ func (c *Coordinator) handleRenderedManifest(ctx context.Context, headers nats.H
 		if _, err := nats.GetValue[string](ctx, c.store, baseKey); err == nil {
 			headers["app.from"] = baseKey
 			headers["app.to"] = manifestLocation
-			c.bus.Publish(ctx, "coordinator.app.ready", headers, nil)
+			c.bus.Publish(ctx, subjects.CoordinatorAppReady, headers, nil)
 		}
 	} else {
 		if _, err := nats.GetValue[string](ctx, c.store, headKey); err == nil {
 			headers["app.from"] = manifestLocation
 			headers["app.to"] = headKey
-			c.bus.Publish(ctx, "coordinator.app.ready", headers, nil)
+			c.bus.Publish(ctx, subjects.CoordinatorAppReady, headers, nil)
 		}
 		c.store.SetValue(ctx, baseKey, manifestLocation)
 	}

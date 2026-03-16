@@ -17,6 +17,7 @@ import (
 	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/repository"
+	"github.com/trolleksii/argocd-diff-reporter/internal/subjects"
 )
 
 var tracer = otel.Tracer("argocd-diff-reporter/internal/workers/gitworker")
@@ -49,9 +50,9 @@ func (w *GitWorker) Run(ctx context.Context) error {
 		AckWait:     3 * time.Second,
 		Concurrency: 2,
 		Handlers: map[string]nats.Handler{
-			"webhook.pr.changed":   w.handlePRChanged,
-			"git.files.resolved":   w.handleFilesResolved,
-			"argo.helm.git.parsed": w.handleChartFetch,
+			subjects.WebhookPRChanged:  w.handlePRChanged,
+			subjects.GitFilesResolved:  w.handleFilesResolved,
+			subjects.ArgoHelmGitParsed: w.handleChartFetch,
 		},
 	})
 	if err != nil {
@@ -132,7 +133,7 @@ func (w *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 		headers["sha.active"] = pr.BaseSHA
 		headers["sha.complementary"] = pr.HeadSHA
 		span.SetStatus(codes.Ok, "files resolved")
-		w.bus.Publish(ctx, "git.files.resolved", headers, data)
+		w.bus.Publish(ctx, subjects.GitFilesResolved, headers, data)
 	}
 	if len(to) > 0 {
 		data, err = nats.Marshal(to)
@@ -145,7 +146,7 @@ func (w *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 		headers["sha.active"] = pr.HeadSHA
 		headers["sha.complementary"] = pr.BaseSHA
 		span.SetStatus(codes.Ok, "files resolved")
-		w.bus.Publish(ctx, "git.files.resolved", headers, data)
+		w.bus.Publish(ctx, subjects.GitFilesResolved, headers, data)
 	}
 	ack()
 }
@@ -202,7 +203,7 @@ func (w *GitWorker) handleFilesResolved(ctx context.Context, headers nats.Header
 	}
 	headers["pr.files.snapshot"] = snapshotPath
 	span.SetStatus(codes.Ok, "files snapshotted")
-	w.bus.Publish(ctx, "git.files.snapshotted", headers, data)
+	w.bus.Publish(ctx, subjects.GitFilesSnapshotted, headers, data)
 	ack()
 }
 
@@ -241,7 +242,7 @@ func (w *GitWorker) handleChartFetch(ctx context.Context, headers nats.Headers, 
 		headers["error.msg"] = err.Error()
 		w.log.Error("failed to find git repo", "error", err)
 		span.SetStatus(codes.Error, err.Error())
-		w.bus.Publish(ctx, "git.chart.fetch.failed", headers, nil)
+		w.bus.Publish(ctx, subjects.GitChartFetchFailed, headers, nil)
 		ack()
 		return
 	}
@@ -252,12 +253,12 @@ func (w *GitWorker) handleChartFetch(ctx context.Context, headers nats.Headers, 
 		headers["error.msg"] = err.Error()
 		w.log.Error("failed to create snapshot", "error", err)
 		span.SetStatus(codes.Error, err.Error())
-		w.bus.Publish(ctx, "git.chart.fetch.failed", headers, nil)
+		w.bus.Publish(ctx, subjects.GitChartFetchFailed, headers, nil)
 		ack()
 		return
 	}
 	headers["chart.location"] = chartDir
-	w.bus.Publish(ctx, "git.chart.fetched", headers, data)
+	w.bus.Publish(ctx, subjects.GitChartFetched, headers, data)
 	span.SetStatus(codes.Ok, "")
 	ack()
 }
