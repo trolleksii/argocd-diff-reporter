@@ -1,3 +1,8 @@
+// Copyright (c) 2019 The Homeport Team
+//
+// This file contains code derived from https://github.com/homeport/dyff,
+// licensed under the MIT License. See THIRD_PARTY_NOTICES for details.
+
 package reports
 
 import (

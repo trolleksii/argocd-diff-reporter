@@ -2,15 +2,6 @@ package models
 
 import "html/template"
 
-// ProcessedPR represents a pull request that has been through the diff rendering pipeline.
-type ProcessedPR struct {
-	Owner  string
-	Repo   string
-	Number string
-	Title  string
-	Status PipelineStatus
-}
-
 // PipelineStatus represents the outcome of the diff rendering pipeline for a pull request.
 type PipelineStatus int
 
@@ -48,11 +39,11 @@ type Progress struct {
 // FileProcessingSpec contains details of how to treat a particular file.
 // FileName - is the name of the file in the snapshot
 // ArtifactName - is the name to use for artifact(manifest) storage
-// EmptyArtifactSHA - an empty manifest must be created with the same ArtifactName but provided SHA
+// HasNoCounterpart - an empty manifest must be created with the same ArtifactName but provided SHA
 type FileProcessingSpec struct {
 	FileName         string
 	ArtifactName     string
-	EmptyCounterpart bool
+	HasNoCounterpart bool
 }
 
 // PullRequest holds GitHub pull request metadata and the aggregated results

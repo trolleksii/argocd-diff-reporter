@@ -36,24 +36,24 @@ func New(cfg config.HelmWorkerConfig, log *slog.Logger, b *nats.Bus, s *nats.Sto
 	}
 }
 
-func (m *HelmWorker) Run(ctx context.Context) error {
-	m.log.Info("starting helm worker...")
-	c, err := helm.NewChartDiskCache(m.cfg.ChartCacheDir)
+func (w *HelmWorker) Run(ctx context.Context) error {
+	w.log.Info("starting helm worker...")
+	c, err := helm.NewChartDiskCache(w.cfg.ChartCacheDir)
 	if err != nil {
 		return err
 	}
-	m.cache = c
-	err = m.bus.Consume(ctx, nats.ConsumerConfig{
+	w.cache = c
+	err = w.bus.Consume(ctx, nats.ConsumerConfig{
 		Name:        "helmworker",
 		MaxDeliver:  3,
 		AckWait:     3 * time.Second,
 		Concurrency: 8,
 		Handlers: map[string]nats.Handler{
-			"argo.helm.oci.parsed":   m.handleChartFetch(helm.FetchChartOCI),
-			"argo.helm.http.parsed":  m.handleChartFetch(helm.FetchChartHTTPS),
-			"argo.helm.empty.parsed": m.handleEmptyManifest,
-			"helm.chart.fetched":     m.handleChartRender,
-			"git.chart.fetched":      m.handleChartRender,
+			"argo.helm.oci.parsed":   w.handleChartFetch(helm.FetchChartOCI),
+			"argo.helm.http.parsed":  w.handleChartFetch(helm.FetchChartHTTPS),
+			"argo.helm.empty.parsed": w.handleEmptyManifest,
+			"helm.chart.fetched":     w.handleChartRender,
+			"git.chart.fetched":      w.handleChartRender,
 		},
 	})
 	if err != nil {
@@ -62,7 +62,7 @@ func (m *HelmWorker) Run(ctx context.Context) error {
 	return nil
 }
 
-func (m *HelmWorker) handleChartFetch(fetchFn func(string, string, helm.CredsProvider, *helm.HelmChartCache) (string, error)) nats.Handler {
+func (w *HelmWorker) handleChartFetch(fetchFn func(string, string, helm.CredsProvider, *helm.HelmChartCache) (string, error)) nats.Handler {
 	return func(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
 		ctx, span := tracer.Start(
 			otel.GetTextMapPropagator().Extract(ctx, headers),
@@ -73,7 +73,7 @@ func (m *HelmWorker) handleChartFetch(fetchFn func(string, string, helm.CredsPro
 
 		spec, err := nats.Unmarshal[models.AppSpec](data)
 		if err != nil {
-			m.log.Error("failed to unmarshal pr object", "error", err)
+			w.log.Error("failed to unmarshal pr object", "error", err)
 			span.SetStatus(codes.Error, err.Error())
 			nak()
 			return
@@ -85,7 +85,7 @@ func (m *HelmWorker) handleChartFetch(fetchFn func(string, string, helm.CredsPro
 			attribute.String("app.name", spec.AppName),
 			attribute.String("app.origin", headers["app.origin"]),
 		)
-		m.log.Debug("new argo.helm.(oci|http}.parsed event",
+		w.log.Debug("new argo.helm.(oci|http}.parsed event",
 			"app", spec.AppName,
 			"repo", spec.Source.RepoURL,
 			"chart", spec.Source.ChartName,
@@ -93,24 +93,24 @@ func (m *HelmWorker) handleChartFetch(fetchFn func(string, string, helm.CredsPro
 			"revision", spec.Source.Revision)
 		appOrigin := headers["app.origin"]
 		chartRef := fmt.Sprintf("%s/%s", spec.Source.RepoURL, spec.Source.ChartName)
-		chartLocation, err := fetchFn(chartRef, spec.Source.Revision, nil, m.cache)
+		chartLocation, err := fetchFn(chartRef, spec.Source.Revision, nil, w.cache)
 		if err != nil {
 			headers["error.origin.file"] = appOrigin
 			headers["error.origin.app"] = spec.AppName
 			headers["error.msg"] = err.Error()
-			m.log.Error("failed to feth the chart", "error", err)
-			m.bus.Publish(ctx, "helm.chart.fetch.failed", headers, nil)
+			w.log.Error("failed to feth the chart", "error", err)
+			w.bus.Publish(ctx, "helm.chart.fetch.failed", headers, nil)
 			ack()
 			return
 		}
 		headers["chart.location"] = chartLocation
-		m.bus.Publish(ctx, "helm.chart.fetched", headers, data)
+		w.bus.Publish(ctx, "helm.chart.fetched", headers, data)
 		span.SetStatus(codes.Ok, "")
 		ack()
 	}
 }
 
-func (m *HelmWorker) handleChartRender(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
+func (w *HelmWorker) handleChartRender(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
 	ctx, span := tracer.Start(
 		otel.GetTextMapPropagator().Extract(ctx, headers),
 		"handleChartRender",
@@ -125,7 +125,7 @@ func (m *HelmWorker) handleChartRender(ctx context.Context, headers nats.Headers
 	origin := headers["app.origin"]
 	spec, err := nats.Unmarshal[models.AppSpec](data)
 	if err != nil {
-		m.log.Error("failed to unmarshal pr object", "error", err)
+		w.log.Error("failed to unmarshal pr object", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
@@ -138,7 +138,7 @@ func (m *HelmWorker) handleChartRender(ctx context.Context, headers nats.Headers
 		attribute.String("app.name", spec.AppName),
 		attribute.String("app.origin", origin),
 	)
-	m.log.Debug("new *.chart.fetched event",
+	w.log.Debug("new *.chart.fetched event",
 		"app", spec.AppName,
 		"repo", spec.Source.RepoURL,
 		"revision", spec.Source.Revision)
@@ -149,26 +149,26 @@ func (m *HelmWorker) handleChartRender(ctx context.Context, headers nats.Headers
 		headers["error.msg"] = err.Error()
 		headers["error.origin.file"] = origin
 		headers["error.origin.app"] = spec.AppName
-		m.log.Error("failed to render the manifest", "error", err)
+		w.log.Error("failed to render the manifest", "error", err)
 		span.SetStatus(codes.Error, err.Error())
-		m.bus.Publish(ctx, "helm.manifest.render.failed", headers, nil)
+		w.bus.Publish(ctx, "helm.manifest.render.failed", headers, nil)
 		ack()
 		return
 	}
 	key := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, spec.AppName)
-	if err := m.store.StoreObject(ctx, key, manifest); err != nil {
-		m.log.Error("failed to store the manifest", "error", err)
+	if err := w.store.StoreObject(ctx, key, manifest); err != nil {
+		w.log.Error("failed to store the manifest", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
 	}
 	headers["manifest.location"] = key
 	headers["app.name"] = spec.AppName
-	m.bus.Publish(ctx, "helm.manifest.rendered", headers, nil)
+	w.bus.Publish(ctx, "helm.manifest.rendered", headers, nil)
 	ack()
 }
 
-func (m *HelmWorker) handleEmptyManifest(ctx context.Context, headers nats.Headers, _ []byte, ack, nak func() error) {
+func (w *HelmWorker) handleEmptyManifest(ctx context.Context, headers nats.Headers, _ []byte, ack, nak func() error) {
 	ctx, span := tracer.Start(
 		otel.GetTextMapPropagator().Extract(ctx, headers),
 		"handleEmptyManifest",
@@ -191,13 +191,13 @@ func (m *HelmWorker) handleEmptyManifest(ctx context.Context, headers nats.Heade
 		attribute.String("app.origin", origin),
 	)
 	key := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, appName)
-	if err := m.store.StoreObject(ctx, key, "---"); err != nil {
-		m.log.Error("failed to store the manifest", "error", err)
+	if err := w.store.StoreObject(ctx, key, "---"); err != nil {
+		w.log.Error("failed to store the manifest", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
 	}
 	headers["manifest.location"] = key
-	m.bus.Publish(ctx, "helm.manifest.rendered", headers, nil)
+	w.bus.Publish(ctx, "helm.manifest.rendered", headers, nil)
 	ack()
 }

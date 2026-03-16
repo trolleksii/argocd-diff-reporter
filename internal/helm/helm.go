@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/client-go/discovery"
+
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
@@ -494,6 +496,20 @@ func extractChartArchive(archivePath, destDir string) error {
 	return nil
 }
 
+func detectKubernetesVersion(settings *cli.EnvSettings) (*chartutil.KubeVersion, error) {
+	restConfig, err := settings.RESTClientGetter().ToRESTConfig()
+	dc, err := discovery.NewDiscoveryClientForConfig(restConfig)
+	if err != nil {
+		return nil, err
+	}
+	sv, err := dc.ServerVersion()
+	if err != nil {
+		return nil, err
+	}
+	kubeVersion, err := chartutil.ParseKubeVersion(sv.GitVersion)
+	return kubeVersion, err
+}
+
 // RenderChart renders a Helm chart to Kubernetes manifests without installing it.
 // This is the main public API function that provides a simplified interface for chart rendering.
 // It automatically handles repository management for URL-based chart references.
@@ -523,7 +539,7 @@ func RenderChart(ctx context.Context, namespace, releaseName, chartPath, chartVe
 	}
 
 	// Parse Kubernetes version with error handling
-	kubeVersion, err := chartutil.ParseKubeVersion("1.33")
+	kubeVersion, err := detectKubernetesVersion(settings)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse Kubernetes version: %w", err)
 	}

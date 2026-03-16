@@ -41,17 +41,17 @@ func New(cfg config.GitWorkerConfig, log *slog.Logger, auth *githubauth.GithubCr
 	}
 }
 
-func (m *GitWorker) Run(ctx context.Context) error {
-	m.log.Info("starting git worker...")
-	err := m.bus.Consume(ctx, nats.ConsumerConfig{
+func (w *GitWorker) Run(ctx context.Context) error {
+	w.log.Info("starting git worker...")
+	err := w.bus.Consume(ctx, nats.ConsumerConfig{
 		Name:        "gitrepomanager",
 		MaxDeliver:  3,
 		AckWait:     3 * time.Second,
 		Concurrency: 2,
 		Handlers: map[string]nats.Handler{
-			"webhook.pr.changed":   m.handlePRChanged,
-			"git.files.resolved":   m.handleFilesResolved,
-			"argo.helm.git.parsed": m.handleChartFetch,
+			"webhook.pr.changed":   w.handlePRChanged,
+			"git.files.resolved":   w.handleFilesResolved,
+			"argo.helm.git.parsed": w.handleChartFetch,
 		},
 	})
 	if err != nil {
@@ -60,7 +60,7 @@ func (m *GitWorker) Run(ctx context.Context) error {
 	return nil
 }
 
-func (m *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
+func (w *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
 	ctx, span := tracer.Start(
 		otel.GetTextMapPropagator().Extract(ctx, headers),
 		"handlePRChanged",
@@ -70,7 +70,7 @@ func (m *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 
 	pr, err := nats.Unmarshal[models.PullRequest](data)
 	if err != nil {
-		m.log.Error("failed to unmarshal pr object", "error", err)
+		w.log.Error("failed to unmarshal pr object", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
@@ -82,7 +82,7 @@ func (m *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 		attribute.String("pr.baseSha", pr.BaseSHA),
 		attribute.String("pr.headSha", pr.HeadSHA),
 	)
-	m.log.Debug("new webhook.pr.changed event",
+	w.log.Debug("new webhook.pr.changed event",
 		"prNum", pr.Number,
 		"owner", pr.Owner,
 		"repo", pr.Repo)
@@ -97,9 +97,9 @@ func (m *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 
 	_, leafSpan := tracer.Start(ctx, "getOrCreateRepo")
 	repoUrl := fmt.Sprintf("https://github.com/%s/%s", pr.Owner, pr.Repo)
-	r, err := m.getOrCreateRepo(ctx, repoUrl)
+	r, err := w.getOrCreateRepo(ctx, repoUrl)
 	if err != nil {
-		m.log.Error("failed to find git repo", "error", err)
+		w.log.Error("failed to find git repo", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		leafSpan.End()
@@ -110,7 +110,7 @@ func (m *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 	_, leafSpan = tracer.Start(ctx, "ListChangedFiles")
 	changes, err := r.ListChangedFiles(pr.BaseSHA, pr.HeadSHA)
 	if err != nil {
-		m.log.Error("failed to list changed files")
+		w.log.Error("failed to list changed files")
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		leafSpan.End()
@@ -119,12 +119,12 @@ func (m *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 	leafSpan.End()
 
 	_, leafSpan = tracer.Start(ctx, "FilterAndPublishFiles")
-	from, to := filterAndSplitChanges(changes, m.cfg.FileGlobs)
+	from, to := filterAndSplitChanges(changes, w.cfg.FileGlobs)
 	defer leafSpan.End()
 	if len(from) > 0 {
 		data, err := nats.Marshal(from)
 		if err != nil {
-			m.log.Error("failed to marshal base files", "error", err)
+			w.log.Error("failed to marshal base files", "error", err)
 			span.SetStatus(codes.Error, err.Error())
 			nak()
 			return
@@ -132,12 +132,12 @@ func (m *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 		headers["sha.active"] = pr.BaseSHA
 		headers["sha.complementary"] = pr.HeadSHA
 		span.SetStatus(codes.Ok, "files resolved")
-		m.bus.Publish(ctx, "git.files.resolved", headers, data)
+		w.bus.Publish(ctx, "git.files.resolved", headers, data)
 	}
 	if len(to) > 0 {
 		data, err = nats.Marshal(to)
 		if err != nil {
-			m.log.Error("failed to marshal head files", "error", err)
+			w.log.Error("failed to marshal head files", "error", err)
 			span.SetStatus(codes.Error, err.Error())
 			nak()
 			return
@@ -145,12 +145,12 @@ func (m *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 		headers["sha.active"] = pr.HeadSHA
 		headers["sha.complementary"] = pr.BaseSHA
 		span.SetStatus(codes.Ok, "files resolved")
-		m.bus.Publish(ctx, "git.files.resolved", headers, data)
+		w.bus.Publish(ctx, "git.files.resolved", headers, data)
 	}
 	ack()
 }
 
-func (m *GitWorker) handleFilesResolved(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
+func (w *GitWorker) handleFilesResolved(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
 	ctx, span := tracer.Start(
 		otel.GetTextMapPropagator().Extract(ctx, headers),
 		"handleFilesResolved",
@@ -168,7 +168,7 @@ func (m *GitWorker) handleFilesResolved(ctx context.Context, headers nats.Header
 		attribute.String("pr.number", num),
 		attribute.String("sha.active", sha),
 	)
-	m.log.Debug("new git.files.resolved event",
+	w.log.Debug("new git.files.resolved event",
 		"prNum", num,
 		"owner", owner,
 		"repo", repo,
@@ -176,15 +176,15 @@ func (m *GitWorker) handleFilesResolved(ctx context.Context, headers nats.Header
 
 	specs, err := nats.Unmarshal[[]models.FileProcessingSpec](data)
 	if err != nil {
-		m.log.Error("failed to unmarshal pr object", "error", err)
+		w.log.Error("failed to unmarshal pr object", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
 	}
 	repoUrl := fmt.Sprintf("https://github.com/%s/%s", owner, repo)
-	r, err := m.getOrCreateRepo(ctx, repoUrl)
+	r, err := w.getOrCreateRepo(ctx, repoUrl)
 	if err != nil {
-		m.log.Error("failed to find git repo", "error", err)
+		w.log.Error("failed to find git repo", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
@@ -195,18 +195,18 @@ func (m *GitWorker) handleFilesResolved(ctx context.Context, headers nats.Header
 	}
 	snapshotPath, err := r.GetOrCreateSnapshot(sha, "", files)
 	if err != nil {
-		m.log.Error("failed to create snapshot", "error", err)
+		w.log.Error("failed to create snapshot", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
 	}
 	headers["pr.files.snapshot"] = snapshotPath
 	span.SetStatus(codes.Ok, "files snapshotted")
-	m.bus.Publish(ctx, "git.files.snapshotted", headers, data)
+	w.bus.Publish(ctx, "git.files.snapshotted", headers, data)
 	ack()
 }
 
-func (m *GitWorker) handleChartFetch(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
+func (w *GitWorker) handleChartFetch(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
 	ctx, span := tracer.Start(
 		otel.GetTextMapPropagator().Extract(ctx, headers),
 		"handleChartFetch",
@@ -216,7 +216,7 @@ func (m *GitWorker) handleChartFetch(ctx context.Context, headers nats.Headers, 
 
 	spec, err := nats.Unmarshal[models.AppSpec](data)
 	if err != nil {
-		m.log.Error("failed to unmarshal pr object", "error", err)
+		w.log.Error("failed to unmarshal pr object", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
@@ -228,20 +228,20 @@ func (m *GitWorker) handleChartFetch(ctx context.Context, headers nats.Headers, 
 		attribute.String("app.name", spec.AppName),
 		attribute.String("app.origin", headers["app.origin"]),
 	)
-	m.log.Debug("new argo.helm.git.parsed event",
+	w.log.Debug("new argo.helm.git.parsed event",
 		"app", spec.AppName,
 		"repo", spec.Source.RepoURL,
 		"revision", spec.Source.Revision)
 
 	appOrigin := headers["app.origin"]
-	r, err := m.getOrCreateRepo(ctx, spec.Source.RepoURL)
+	r, err := w.getOrCreateRepo(ctx, spec.Source.RepoURL)
 	if err != nil {
 		headers["error.origin.file"] = appOrigin
 		headers["error.origin.app"] = spec.AppName
 		headers["error.msg"] = err.Error()
-		m.log.Error("failed to find git repo", "error", err)
+		w.log.Error("failed to find git repo", "error", err)
 		span.SetStatus(codes.Error, err.Error())
-		m.bus.Publish(ctx, "git.chart.fetch.failed", headers, nil)
+		w.bus.Publish(ctx, "git.chart.fetch.failed", headers, nil)
 		ack()
 		return
 	}
@@ -250,47 +250,47 @@ func (m *GitWorker) handleChartFetch(ctx context.Context, headers nats.Headers, 
 		headers["error.origin.file"] = appOrigin
 		headers["error.origin.app"] = spec.AppName
 		headers["error.msg"] = err.Error()
-		m.log.Error("failed to create snapshot", "error", err)
+		w.log.Error("failed to create snapshot", "error", err)
 		span.SetStatus(codes.Error, err.Error())
-		m.bus.Publish(ctx, "git.chart.fetch.failed", headers, nil)
+		w.bus.Publish(ctx, "git.chart.fetch.failed", headers, nil)
 		ack()
 		return
 	}
 	headers["chart.location"] = chartDir
-	m.bus.Publish(ctx, "git.chart.fetched", headers, data)
+	w.bus.Publish(ctx, "git.chart.fetched", headers, data)
 	span.SetStatus(codes.Ok, "")
 	ack()
 }
 
 // getOrCreateRepo returns the entry for a repo URL, initializing it on first access.
-func (m *GitWorker) getOrCreateRepo(ctx context.Context, repoURL string) (*repository.Repository, error) {
-	m.mu.RLock()
-	repo, ok := m.repos[repoURL]
-	m.mu.RUnlock()
+func (w *GitWorker) getOrCreateRepo(ctx context.Context, repoURL string) (*repository.Repository, error) {
+	w.mu.RLock()
+	repo, ok := w.repos[repoURL]
+	w.mu.RUnlock()
 	if ok {
 		return repo, nil
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	w.mu.Lock()
+	defer w.mu.Unlock()
 
-	if repo, ok = m.repos[repoURL]; ok {
+	if repo, ok = w.repos[repoURL]; ok {
 		return repo, nil
 	}
 
 	repo, err := repository.NewRepository(
 		ctx,
 		repoURL,
-		m.cfg.CloneBaseDir,
-		m.cfg.SnapshotBaseDir,
-		m.auth,
-		m.log.With("repo", repoURL),
+		w.cfg.CloneBaseDir,
+		w.cfg.SnapshotBaseDir,
+		w.auth,
+		w.log.With("repo", repoURL),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("init repo %s: %w", repoURL, err)
 	}
 
-	m.repos[repoURL] = repo
+	w.repos[repoURL] = repo
 	return repo, nil
 }
 
@@ -309,7 +309,7 @@ func filterAndSplitChanges(changes []repository.Change, globs []string) (from, t
 				ArtifactName: c.From,
 			}
 			if c.To == "" {
-				fc.EmptyCounterpart = true
+				fc.HasNoCounterpart = true
 			} else if c.From != c.To {
 				fc.ArtifactName = c.To
 			}
@@ -320,7 +320,7 @@ func filterAndSplitChanges(changes []repository.Change, globs []string) (from, t
 				FileName: c.To,
 			}
 			if c.From == "" {
-				fc.EmptyCounterpart = true
+				fc.HasNoCounterpart = true
 			}
 			to = append(to, fc)
 		}

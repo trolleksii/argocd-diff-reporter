@@ -40,9 +40,9 @@ func New(log *slog.Logger, b *nats.Bus, s *nats.Store, n *notifications.Notifica
 
 func (c *Coordinator) Run(ctx context.Context) error {
 	c.log.Info("starting coordinator...")
-	storedState, err := nats.GetValue[[]models.ProcessedPR](ctx, c.store, "index")
+	storedState, err := nats.GetValue[[]models.PullRequest](ctx, c.store, "index")
 	if err != nil {
-		storedState = []models.ProcessedPR{}
+		storedState = []models.PullRequest{}
 	}
 	c.index = NewIndex(10, storedState) // TODO: get the max capacity into the config
 	c.store.SetValue(ctx, "index", c.index.GetElements())
@@ -103,7 +103,7 @@ func (c *Coordinator) handleFileErrors(ctx context.Context, headers nats.Headers
 	}
 	if pr.Status == models.PipelineInProgress {
 		pr.Status = models.PipelineFailed
-		c.index.UpdateStatus(pr.Owner, pr.Repo, pr.Number, models.PipelineFailed)
+		c.index.UpdateStatus(pr)
 		c.store.SetValue(ctx, "index", c.index.GetElements())
 		c.notifier.Notify("index", c.index.GetElements())
 	}
@@ -158,8 +158,8 @@ func (c *Coordinator) handleAppErrors(ctx context.Context, headers nats.Headers,
 	}
 	if pr.Status == models.PipelineInProgress {
 		pr.Status = models.PipelineFailed
+		c.index.UpdateStatus(pr)
 		c.store.SetValue(ctx, "index", c.index.GetElements())
-		c.index.UpdateStatus(pr.Owner, pr.Repo, pr.Number, models.PipelineFailed)
 		c.notifier.Notify("index", c.index.GetElements())
 	}
 	span.SetStatus(codes.Ok, "")
@@ -193,7 +193,7 @@ func (c *Coordinator) handlePREvent(ctx context.Context, headers nats.Headers, d
 
 	key := fmt.Sprintf("%s.%s.%s", pr.Owner, pr.Repo, pr.Number)
 	c.store.SetValue(ctx, key, pr)
-	c.index.Update(models.ProcessedPR{Owner: pr.Owner, Repo: pr.Repo, Number: pr.Number, Title: pr.Title, Status: models.PipelineInProgress})
+	c.index.Update(pr)
 	c.store.SetValue(ctx, "index", c.index.GetElements())
 	c.notifier.Notify("index", c.index.GetElements())
 	ack()
@@ -219,7 +219,7 @@ func (c *Coordinator) handleTotalAppUpdate(ctx context.Context, headers nats.Hea
 		attribute.String("app.total", headers["app.total"]),
 	)
 	total, err := strconv.Atoi(headers["app.total"])
-	key := fmt.Sprintf("progress-%s.%s.%s.%s.%s", owner, repo, number, baseSha, headSha)
+	key := fmt.Sprintf("%s.%s.%s.%s.%s", owner, repo, number, baseSha, headSha)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	progress, err := nats.GetValue[models.Progress](ctx, c.store, key)
@@ -257,6 +257,7 @@ func (c *Coordinator) handleRenderedManifest(ctx context.Context, headers nats.H
 		attribute.String("app.origin", origin),
 	)
 	c.log.Debug("new helm.manifest.rendered event",
+		"prNum", number,
 		"appName", appName,
 		"sha", sha,
 	)
@@ -334,7 +335,7 @@ func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.He
 		}
 	}
 	c.mu.Lock()
-	progressId := fmt.Sprintf("progress-%s.%s.%s.%s.%s", owner, repo, number, pr.BaseSHA, pr.HeadSHA)
+	progressId := fmt.Sprintf("%s.%s.%s.%s.%s", owner, repo, number, pr.BaseSHA, pr.HeadSHA)
 	progress, err := nats.GetValue[models.Progress](ctx, c.store, progressId)
 	if err != nil {
 		c.log.Error("failed to unmarshal progress object", "error", err)
@@ -344,7 +345,7 @@ func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.He
 	c.store.SetValue(ctx, progressId, progress)
 	if pr.Status == models.PipelineInProgress && progress.TotalApps == progress.ProcessedApps {
 		pr.Status = models.PipelineSucceeded
-		c.index.UpdateStatus(pr.Owner, pr.Repo, pr.Number, models.PipelineSucceeded)
+		c.index.UpdateStatus(pr)
 		c.store.SetValue(ctx, "index", c.index.GetElements())
 		c.notifier.Notify("index", c.index.GetElements())
 	}

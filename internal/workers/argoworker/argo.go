@@ -190,7 +190,7 @@ func (w *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.He
 				return
 			}
 			w.bus.Publish(ctx, subject, headers, data)
-			if f.EmptyCounterpart {
+			if f.HasNoCounterpart {
 				headers["sha.active"], headers["sha.complementary"] = headers["sha.complementary"], headers["sha.active"]
 				headers["app.name"] = app.Name
 				w.bus.Publish(ctx, "argo.helm.empty.parsed", headers, nil)
