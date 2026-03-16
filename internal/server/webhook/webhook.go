@@ -142,6 +142,9 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func MatchesRepoFilters(repo, owner string, allowedRepos []config.GitRepoFilter) bool {
+	if len(allowedRepos) == 0 {
+		return true
+	}
 	for _, rf := range allowedRepos {
 		if rf.Owner == owner && rf.Repo == repo {
 			return true
