@@ -14,19 +14,22 @@ import (
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/go-git/go-git/v5/plumbing/object"
-
-	"github.com/trolleksii/argocd-diff-reporter/internal/githubauth"
 )
 
 // Repository represents a git repository
 type Repository struct {
 	repo         *git.Repository
-	auth         *githubauth.GithubCredManager
+	auth         GitAuthProvider
 	cloneDir     string
 	snapshotsDir string
 	log          *slog.Logger
 	queue        chan request
+}
+
+type GitAuthProvider interface {
+	GetBasicHTTPAuth() (*http.BasicAuth, error)
 }
 
 // Change represents a file change between two commits.
@@ -66,7 +69,7 @@ type request struct {
 }
 
 // NewRepository creates a new Repository, reusing a local clone if one already exists.
-func NewRepository(ctx context.Context, url, cloneRootDir, snapshotsRootDir string, auth *githubauth.GithubCredManager, log *slog.Logger) (*Repository, error) {
+func NewRepository(ctx context.Context, url, cloneRootDir, snapshotsRootDir string, auth GitAuthProvider, log *slog.Logger) (*Repository, error) {
 	id := fmt.Sprintf("%x", xxhash.Sum64String(url))
 	cloneDir := filepath.Join(cloneRootDir, id)
 	snapshotsDir := filepath.Join(snapshotsRootDir, id)
