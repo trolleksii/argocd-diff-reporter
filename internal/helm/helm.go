@@ -323,8 +323,13 @@ func loadHelmRepository(settings *cli.EnvSettings, chartURL string) (string, err
 		repoURL = fmt.Sprintf("%s/%s", repoURL, repoPath)
 	}
 
-	// Generate repository name from URL
-	repoName := generateRepoName(u.Host, repoPath)
+	// Generate repository name from URL. Include the port (if non-standard) so
+	// that repos on different ports of the same host get distinct names.
+	host := u.Hostname()
+	if port := u.Port(); port != "" {
+		host = host + "-" + port
+	}
+	repoName := generateRepoName(host, repoPath)
 
 	// Ensure repository is added
 	if err := ensureRepository(settings, repoName, repoURL); err != nil {

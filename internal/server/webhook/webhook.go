@@ -52,7 +52,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.log.Error("invalid webhook signature", "error", err)
 		span.SetStatus(codes.Error, err.Error())
-		http.Error(w, "Bad request", http.StatusBadRequest)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 	event, err := github.ParseWebHook(github.WebHookType(r), payload)

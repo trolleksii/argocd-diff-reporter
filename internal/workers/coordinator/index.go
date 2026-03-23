@@ -28,7 +28,7 @@ func NewIndex(maxCap int, state []models.PullRequest) *Index {
 // Update refreshes the index considering a new PR processing event.
 func (idx *Index) Update(pr models.PullRequest) {
 	for i, item := range idx.items {
-		if item.Number == pr.Number {
+		if item.Owner == pr.Owner && item.Repo == pr.Repo && item.Number == pr.Number {
 			idx.items = append(idx.items[:i], idx.items[i+1:]...)
 			break
 		}
