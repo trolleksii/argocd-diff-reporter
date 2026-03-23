@@ -50,11 +50,10 @@ func (w *HelmWorker) Run(ctx context.Context) error {
 		AckWait:     3 * time.Second,
 		Concurrency: 8,
 		Handlers: map[string]nats.Handler{
-			subjects.ArgoHelmOCIParsed:   w.handleChartFetch(helm.FetchChartOCI),
-			subjects.ArgoHelmHTTPParsed:  w.handleChartFetch(helm.FetchChartHTTPS),
-			subjects.ArgoHelmEmptyParsed: w.handleEmptyManifest,
-			subjects.HelmChartFetched:    w.handleChartRender,
-			subjects.GitChartFetched:     w.handleChartRender,
+			subjects.ArgoHelmOCIParsed:  w.handleChartFetch(helm.FetchChartOCI),
+			subjects.ArgoHelmHTTPParsed: w.handleChartFetch(helm.FetchChartHTTPS),
+			subjects.HelmChartFetched:   w.handleChartRender,
+			subjects.GitChartFetched:    w.handleChartRender,
 		},
 	})
 	if err != nil {
@@ -165,40 +164,6 @@ func (w *HelmWorker) handleChartRender(ctx context.Context, headers nats.Headers
 	}
 	headers["manifest.location"] = key
 	headers["app.name"] = spec.AppName
-	w.bus.Publish(ctx, subjects.HelmManifestRendered, headers, nil)
-	ack()
-}
-
-func (w *HelmWorker) handleEmptyManifest(ctx context.Context, headers nats.Headers, _ []byte, ack, nak func() error) {
-	ctx, span := tracer.Start(
-		otel.GetTextMapPropagator().Extract(ctx, headers),
-		"handleEmptyManifest",
-	)
-	otel.GetTextMapPropagator().Inject(ctx, headers)
-	defer span.End()
-
-	owner := headers["pr.owner"]
-	repo := headers["pr.repo"]
-	number := headers["pr.number"]
-	sha := headers["sha.active"]
-	appName := headers["app.name"]
-	origin := headers["app.origin"]
-	span.SetAttributes(
-		attribute.String("pr.owner", owner),
-		attribute.String("pr.repo", repo),
-		attribute.String("pr.number", number),
-		attribute.String("sha.active", sha),
-		attribute.String("app.name", appName),
-		attribute.String("app.origin", origin),
-	)
-	key := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, appName)
-	if err := w.store.StoreObject(ctx, key, "---"); err != nil {
-		w.log.Error("failed to store the manifest", "error", err)
-		span.SetStatus(codes.Error, err.Error())
-		nak()
-		return
-	}
-	headers["manifest.location"] = key
 	w.bus.Publish(ctx, subjects.HelmManifestRendered, headers, nil)
 	ack()
 }

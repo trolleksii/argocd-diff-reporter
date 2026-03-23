@@ -52,14 +52,19 @@ func (c *Coordinator) Run(ctx context.Context) error {
 		MaxDeliver: 3,
 		AckWait:    10 * time.Second,
 		Handlers: map[string]nats.Handler{
-			subjects.HelmManifestRendered:     c.handleRenderedManifest,
-			subjects.DiffReportGenerated:      c.handleGeneratedReport,
-			subjects.WebhookPRChanged:         c.handlePREvent,
-			subjects.ArgoFileParseFailed:      c.handleFileErrors,
-			subjects.ArgoTotalUpdated:         c.handleTotalAppUpdate,
-			subjects.HelmManifestRenderFailed: c.handleAppErrors,
-			subjects.GitChartFetchFailed:      c.handleAppErrors,
-			subjects.HelmChartFetchFailed:     c.handleAppErrors,
+			subjects.WebhookPRChanged:              c.handlePREvent,
+			subjects.ArgoFileParseFailed:           c.handleFileErrors,
+			subjects.ArgoTotalUpdated:              c.handleTotalAppUpdate,
+			subjects.GitChartFetchFailed:           c.handleAppErrors,
+			subjects.HelmChartFetchFailed:          c.handleAppErrors,
+			subjects.GitDirectoryFetchFailed:       c.handleAppErrors,
+			subjects.DirectoryManifestRenderFailed: c.handleAppErrors,
+			subjects.HelmManifestRenderFailed:      c.handleAppErrors,
+			subjects.ArgoEmptyParsed:               c.handleEmptyManifest,
+			subjects.DirectoryManifestRendered:     c.handleRenderedManifest,
+			subjects.HelmManifestRendered:          c.handleRenderedManifest,
+			subjects.EmptyManifestRendered:			c.handleRenderedManifest,
+			subjects.DiffReportGenerated:           c.handleGeneratedReport,
 		},
 	})
 	if err != nil {
@@ -363,5 +368,39 @@ func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.He
 	c.notifier.Notify("summary:"+key, pr)
 	c.store.SetValue(ctx, key, pr)
 	span.SetStatus(codes.Ok, "")
+	ack()
+}
+
+func (c *Coordinator) handleEmptyManifest(ctx context.Context, headers nats.Headers, _ []byte, ack, nak func() error) {
+	ctx, span := tracer.Start(
+		otel.GetTextMapPropagator().Extract(ctx, headers),
+		"handleEmptyManifest",
+	)
+	otel.GetTextMapPropagator().Inject(ctx, headers)
+	defer span.End()
+
+	owner := headers["pr.owner"]
+	repo := headers["pr.repo"]
+	number := headers["pr.number"]
+	sha := headers["sha.active"]
+	appName := headers["app.name"]
+	origin := headers["app.origin"]
+	span.SetAttributes(
+		attribute.String("pr.owner", owner),
+		attribute.String("pr.repo", repo),
+		attribute.String("pr.number", number),
+		attribute.String("sha.active", sha),
+		attribute.String("app.name", appName),
+		attribute.String("app.origin", origin),
+	)
+	key := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, appName)
+	if err := c.store.StoreObject(ctx, key, "---"); err != nil {
+		c.log.Error("failed to store the manifest", "error", err)
+		span.SetStatus(codes.Error, err.Error())
+		nak()
+		return
+	}
+	headers["manifest.location"] = key
+	c.bus.Publish(ctx, subjects.HelmManifestRendered, headers, nil)
 	ack()
 }

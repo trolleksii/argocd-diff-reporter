@@ -11,12 +11,64 @@ const (
 	PipelineSucceeded  PipelineStatus = 1
 )
 
+type SourceType int
+
+const (
+	SourceTypeUndefined = iota
+	SourceTypeHelm
+	SourceTypeKustomize
+	SourceTypeDirectory
+)
+
+type KustomizePatchTarget struct {
+	Group              string `json:"group,omitempty"`
+	Version            string `json:"version,omitempty"`
+	Kind               string `json:"kind,omitempty"`
+	Name               string `json:"name,omitempty"`
+	Namespace          string `json:"namespace,omitempty"`
+	LabelSelector      string `json:"labelSelector,omitempty"`
+	AnnotationSelector string `json:"annotationSelector,omitempty"`
+}
+
+type KustomizePatch struct {
+	Path   string                `json:"path,omitempty"`
+	Patch  string                `json:"patch,omitempty"`
+	Target *KustomizePatchTarget `json:"target,omitempty"`
+}
+
+type KustomizeReplica struct {
+	Name  string `json:"name"`
+	Count int64  `json:"count"`
+}
+
+type KustomizeSpec struct {
+	NamePrefix             string             `json:"namePrefix,omitempty"`
+	NameSuffix             string             `json:"nameSuffix,omitempty"`
+	Namespace              string             `json:"namespace,omitempty"`
+	CommonLabels           map[string]string  `json:"commonLabels,omitempty"`
+	CommonAnnotations      map[string]string  `json:"commonAnnotations,omitempty"`
+	ForceCommonLabels      bool               `json:"forceCommonLabels,omitempty"`
+	ForceCommonAnnotations bool               `json:"forceCommonAnnotations,omitempty"`
+	Images                 []string           `json:"images,omitempty"`
+	Replicas               []KustomizeReplica `json:"replicas,omitempty"`
+	Patches                []KustomizePatch   `json:"patches,omitempty"`
+	Components             []string           `json:"components,omitempty"`
+}
+
 type AppSpec struct {
-	AppName   string    `json:"appName"`
-	Namespace string    `json:"namespace"`
-	Source    AppSource `json:"source"`
-	Helm      HelmSpec  `json:"helm"`
-	Kustomize string    `json:"kustomize,omitempty"`
+	AppName    string        `json:"appName"`
+	SourceType SourceType    `json:"sourceType,omitempty"`
+	Namespace  string        `json:"namespace"`
+	Source     AppSource     `json:"source"`
+	Helm       HelmSpec      `json:"helm"`
+	Directory  DirectorySpec `json:"directory"`
+	Kustomize  KustomizeSpec `json:"kustomize"`
+}
+
+// DirectorySpec holds directory source parameters for an application.
+// Recurse controls whether subdirectories are traversed during rendering.
+type DirectorySpec struct {
+	Recurse bool `json:"recurse,omitempty"`
 }
 
 type AppSource struct {

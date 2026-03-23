@@ -29,6 +29,8 @@ require (
 	k8s.io/apimachinery v0.34.0
 	k8s.io/client-go v0.34.0
 	sigs.k8s.io/controller-runtime v0.21.0
+	sigs.k8s.io/kustomize/api v0.20.1
+	sigs.k8s.io/kustomize/kyaml v0.20.1
 	sigs.k8s.io/yaml v1.6.0
 )
 
@@ -245,8 +247,6 @@ require (
 	k8s.io/utils v0.0.0-20250604170112-4c0f3b243397 // indirect
 	oras.land/oras-go/v2 v2.6.0 // indirect
 	sigs.k8s.io/json v0.0.0-20241014173422-cfa47c3a1cc8 // indirect
-	sigs.k8s.io/kustomize/api v0.20.1 // indirect
-	sigs.k8s.io/kustomize/kyaml v0.20.1 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.1-0.20251003215857-446d8398e19c // indirect
 )

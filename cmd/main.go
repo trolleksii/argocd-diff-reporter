@@ -23,6 +23,7 @@ import (
 	"github.com/trolleksii/argocd-diff-reporter/internal/workers/argoworker"
 	coord "github.com/trolleksii/argocd-diff-reporter/internal/workers/coordinator"
 	"github.com/trolleksii/argocd-diff-reporter/internal/workers/diffworker"
+	"github.com/trolleksii/argocd-diff-reporter/internal/workers/directoryworker"
 	"github.com/trolleksii/argocd-diff-reporter/internal/workers/gitworker"
 	"github.com/trolleksii/argocd-diff-reporter/internal/workers/helmworker"
 )
@@ -63,7 +64,6 @@ func main() {
 		"git.>",
 		"argo.>",
 		"helm.>",
-		"kustomize.>",
 		"dir.>",
 		"coordinator.>",
 		"diff.>",
@@ -87,8 +87,9 @@ func main() {
 	}
 
 	gitWorker := gitworker.New(cfg.Workers.GitWorker, logger, auth, bus)
-	argoWorker := argoworker.New(cfg.ArgoCD, logger, bus)
+	argoWorker := argoworker.New(cfg.ArgoCD, logger, bus, nil)
 	helmWorker := helmworker.New(cfg.Workers.HelmWorker, logger, bus, store)
+	directoryWorker := directoryworker.New(logger, bus, store)
 	diffWorker := diffworker.New(logger, bus, store, notifier)
 	coordinator := coord.New(logger, bus, store, notifier)
 
@@ -98,6 +99,7 @@ func main() {
 		gitWorker,
 		argoWorker,
 		helmWorker,
+		directoryWorker,
 		diffWorker,
 		coordinator,
 	}

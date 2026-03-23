@@ -8,37 +8,48 @@ import (
 	"sync"
 	"time"
 
+	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
-	"github.com/trolleksii/argocd-diff-reporter/internal/githubauth"
 	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/repository"
 	"github.com/trolleksii/argocd-diff-reporter/internal/subjects"
 )
 
+// RepositoryProvider abstracts the repository operations used by GitWorker.
+type RepositoryProvider interface {
+	ListChangedFiles(base, head string) ([]repository.Change, error)
+	GetOrCreateSnapshot(ref, repoDir string, files []string) (string, error)
+}
+
+// AuthProvider abstracts the authentication credential methods used by GitWorker.
+type AuthProvider interface {
+	GetBasicHTTPAuth() (*githttp.BasicAuth, error)
+}
+
 var tracer = otel.Tracer("argocd-diff-reporter/internal/workers/gitworker")
 
 type GitWorker struct {
 	cfg  config.GitWorkerConfig
-	auth *githubauth.GithubCredManager
+	auth AuthProvider
 	log  *slog.Logger
 	bus  *nats.Bus
 
 	mu    sync.RWMutex
-	repos map[string]*repository.Repository
+	repos map[string]RepositoryProvider
 }
 
-func New(cfg config.GitWorkerConfig, log *slog.Logger, auth *githubauth.GithubCredManager, b *nats.Bus) *GitWorker {
+func New(cfg config.GitWorkerConfig, log *slog.Logger, auth AuthProvider, b *nats.Bus) *GitWorker {
 	return &GitWorker{
 		cfg:   cfg,
 		auth:  auth,
 		log:   log.With("worker", "git"),
 		bus:   b,
-		repos: make(map[string]*repository.Repository),
+		repos: make(map[string]RepositoryProvider),
 	}
 }
 
@@ -50,9 +61,11 @@ func (w *GitWorker) Run(ctx context.Context) error {
 		AckWait:     3 * time.Second,
 		Concurrency: 2,
 		Handlers: map[string]nats.Handler{
-			subjects.WebhookPRChanged:  w.handlePRChanged,
-			subjects.GitFilesResolved:  w.handleFilesResolved,
-			subjects.ArgoHelmGitParsed: w.handleChartFetch,
+			subjects.WebhookPRChanged:       w.handlePRChanged,
+			subjects.GitFilesResolved:       w.handleFilesResolved,
+			// TODO: ugly shit
+			subjects.ArgoHelmGitParsed:      w.snapshotFetchHandler(subjects.GitChartFetched, subjects.GitChartFetchFailed),
+			subjects.ArgoDirectoryGitParsed: w.snapshotFetchHandler(subjects.GitDirectoryFetched, subjects.GitDirectoryFetchFailed),
 		},
 	})
 	if err != nil {
@@ -207,64 +220,66 @@ func (w *GitWorker) handleFilesResolved(ctx context.Context, headers nats.Header
 	ack()
 }
 
-func (w *GitWorker) handleChartFetch(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
-	ctx, span := tracer.Start(
-		otel.GetTextMapPropagator().Extract(ctx, headers),
-		"handleChartFetch",
-	)
-	otel.GetTextMapPropagator().Inject(ctx, headers)
-	defer span.End()
+func (w *GitWorker) snapshotFetchHandler(successSubject, failSubject string) nats.Handler {
+	return func(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
+		ctx, span := tracer.Start(
+			otel.GetTextMapPropagator().Extract(ctx, headers),
+			"snapshotFetch",
+		)
+		otel.GetTextMapPropagator().Inject(ctx, headers)
+		defer span.End()
 
-	spec, err := nats.Unmarshal[models.AppSpec](data)
-	if err != nil {
-		w.log.Error("failed to unmarshal pr object", "error", err)
-		span.SetStatus(codes.Error, err.Error())
-		nak()
-		return
-	}
-	span.SetAttributes(
-		attribute.String("pr.owner", headers["pr.owner"]),
-		attribute.String("pr.repo", headers["pr.repo"]),
-		attribute.String("pr.number", headers["pr.number"]),
-		attribute.String("app.name", spec.AppName),
-		attribute.String("app.origin", headers["app.origin"]),
-	)
-	w.log.Debug("new argo.helm.git.parsed event",
-		"app", spec.AppName,
-		"repo", spec.Source.RepoURL,
-		"revision", spec.Source.Revision)
+		spec, err := nats.Unmarshal[models.AppSpec](data)
+		if err != nil {
+			w.log.Error("failed to unmarshal pr object", "error", err)
+			span.SetStatus(codes.Error, err.Error())
+			nak()
+			return
+		}
+		span.SetAttributes(
+			attribute.String("pr.owner", headers["pr.owner"]),
+			attribute.String("pr.repo", headers["pr.repo"]),
+			attribute.String("pr.number", headers["pr.number"]),
+			attribute.String("app.name", spec.AppName),
+			attribute.String("app.origin", headers["app.origin"]),
+		)
+		w.log.Debug("new snapshot fetch event",
+			"app", spec.AppName,
+			"repo", spec.Source.RepoURL,
+			"revision", spec.Source.Revision)
 
-	appOrigin := headers["app.origin"]
-	r, err := w.getOrCreateRepo(ctx, spec.Source.RepoURL)
-	if err != nil {
-		headers["error.origin.file"] = appOrigin
-		headers["error.origin.app"] = spec.AppName
-		headers["error.msg"] = err.Error()
-		w.log.Error("failed to find git repo", "error", err)
-		span.SetStatus(codes.Error, err.Error())
-		w.bus.Publish(ctx, subjects.GitChartFetchFailed, headers, nil)
+		appOrigin := headers["app.origin"]
+		r, err := w.getOrCreateRepo(ctx, spec.Source.RepoURL)
+		if err != nil {
+			headers["error.origin.file"] = appOrigin
+			headers["error.origin.app"] = spec.AppName
+			headers["error.msg"] = err.Error()
+			w.log.Error("failed to find git repo", "error", err)
+			span.SetStatus(codes.Error, err.Error())
+			w.bus.Publish(ctx, failSubject, headers, nil)
+			ack()
+			return
+		}
+		snapshotDir, err := r.GetOrCreateSnapshot(spec.Source.Revision, spec.Source.Path, nil)
+		if err != nil {
+			headers["error.origin.file"] = appOrigin
+			headers["error.origin.app"] = spec.AppName
+			headers["error.msg"] = err.Error()
+			w.log.Error("failed to create snapshot", "error", err)
+			span.SetStatus(codes.Error, err.Error())
+			w.bus.Publish(ctx, failSubject, headers, nil)
+			ack()
+			return
+		}
+		headers["chart.location"] = snapshotDir
+		w.bus.Publish(ctx, successSubject, headers, data)
+		span.SetStatus(codes.Ok, "")
 		ack()
-		return
 	}
-	chartDir, err := r.GetOrCreateSnapshot(spec.Source.Revision, spec.Source.Path, nil)
-	if err != nil {
-		headers["error.origin.file"] = appOrigin
-		headers["error.origin.app"] = spec.AppName
-		headers["error.msg"] = err.Error()
-		w.log.Error("failed to create snapshot", "error", err)
-		span.SetStatus(codes.Error, err.Error())
-		w.bus.Publish(ctx, subjects.GitChartFetchFailed, headers, nil)
-		ack()
-		return
-	}
-	headers["chart.location"] = chartDir
-	w.bus.Publish(ctx, subjects.GitChartFetched, headers, data)
-	span.SetStatus(codes.Ok, "")
-	ack()
 }
 
 // getOrCreateRepo returns the entry for a repo URL, initializing it on first access.
-func (w *GitWorker) getOrCreateRepo(ctx context.Context, repoURL string) (*repository.Repository, error) {
+func (w *GitWorker) getOrCreateRepo(ctx context.Context, repoURL string) (RepositoryProvider, error) {
 	w.mu.RLock()
 	repo, ok := w.repos[repoURL]
 	w.mu.RUnlock()

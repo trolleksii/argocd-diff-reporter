@@ -15,7 +15,7 @@ const (
 	ArgoHelmOCIParsed       = "argo.helm.oci.parsed"
 	ArgoHelmHTTPParsed      = "argo.helm.http.parsed"
 	ArgoHelmGitParsed       = "argo.helm.git.parsed"
-	ArgoHelmEmptyParsed     = "argo.helm.empty.parsed"
+	ArgoEmptyParsed         = "argo.empty.parsed"
 	ArgoAppGenerationFailed = "argo.app.generation.failed"
 	ArgoFileParseFailed     = "argo.file.parsing.failed"
 	ArgoTotalUpdated        = "argo.total.updated"
@@ -26,8 +26,16 @@ const (
 	HelmManifestRendered     = "helm.manifest.rendered"
 	HelmManifestRenderFailed = "helm.manifest.render.failed"
 
+	// Directory subjects
+	ArgoDirectoryGitParsed        = "argo.directory.git.parsed"
+	GitDirectoryFetched           = "git.directory.fetched"
+	GitDirectoryFetchFailed       = "git.directory.fetch.failed"
+	DirectoryManifestRendered     = "dir.manifest.rendered"
+	DirectoryManifestRenderFailed = "dir.manifest.render.failed"
+
 	// Coordinator subjects
-	CoordinatorAppReady = "coordinator.app.ready"
+	CoordinatorAppReady   = "coordinator.app.ready"
+	EmptyManifestRendered = "coordinator.manifest.empty.rendered"
 
 	// Diff subjects
 	DiffReportGenerated = "diff.report.generated"
