@@ -262,7 +262,7 @@ func (w *ArgoWorker) routeApp(ctx context.Context, app appv1alpha1.Application, 
 		}
 
 	default:
-		w.log.Debug("skipping unsupported source type")
+		w.reportError(ctx, headers, app.Name, fmt.Errorf("unsupported source type: %s", *sourceType))
 		return nil
 	}
 
