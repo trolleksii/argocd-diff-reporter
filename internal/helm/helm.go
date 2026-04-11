@@ -26,6 +26,8 @@ import (
 	"helm.sh/helm/v3/pkg/repo"
 )
 
+const fallbackKubeVersion = "v1.33.0"
+
 func initActionConfig(settings *cli.EnvSettings) (*action.Configuration, error) {
 	if settings == nil {
 		return nil, fmt.Errorf("CLI settings cannot be nil")
@@ -503,16 +505,27 @@ func extractChartArchive(archivePath, destDir string) error {
 
 func detectKubernetesVersion(settings *cli.EnvSettings) (*chartutil.KubeVersion, error) {
 	restConfig, err := settings.RESTClientGetter().ToRESTConfig()
+	if err != nil || restConfig == nil {
+		slog.Default().Debug("helm: falling back to default kube version; unable to build REST config",
+			"error", err, "version", fallbackKubeVersion)
+		return chartutil.ParseKubeVersion(fallbackKubeVersion)
+	}
+
 	dc, err := discovery.NewDiscoveryClientForConfig(restConfig)
 	if err != nil {
-		return nil, err
+		slog.Default().Debug("helm: falling back to default kube version; unable to create discovery client",
+			"error", err, "version", fallbackKubeVersion)
+		return chartutil.ParseKubeVersion(fallbackKubeVersion)
 	}
+
 	sv, err := dc.ServerVersion()
 	if err != nil {
-		return nil, err
+		slog.Default().Debug("helm: falling back to default kube version; unable to query server version",
+			"error", err, "version", fallbackKubeVersion)
+		return chartutil.ParseKubeVersion(fallbackKubeVersion)
 	}
-	kubeVersion, err := chartutil.ParseKubeVersion(sv.GitVersion)
-	return kubeVersion, err
+
+	return chartutil.ParseKubeVersion(sv.GitVersion)
 }
 
 // RenderChart renders a Helm chart to Kubernetes manifests without installing it.
