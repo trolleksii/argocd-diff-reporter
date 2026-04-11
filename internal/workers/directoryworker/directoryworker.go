@@ -48,8 +48,8 @@ func (w *DirectoryWorker) Run(ctx context.Context) error {
 		MaxDeliver:  3,
 		AckWait:     3 * time.Second,
 		Concurrency: 8,
-		Handlers: map[string]nats.Handler{
-			subjects.GitDirectoryFetched: w.handleDirectoryRender,
+		Routes: []nats.Route{
+			{Subjects: []string{subjects.GitDirectoryFetched}, Handler: w.handleDirectoryRender},
 		},
 	})
 	if err != nil {

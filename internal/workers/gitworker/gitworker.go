@@ -60,12 +60,11 @@ func (w *GitWorker) Run(ctx context.Context) error {
 		MaxDeliver:  3,
 		AckWait:     3 * time.Second,
 		Concurrency: 2,
-		Handlers: map[string]nats.Handler{
-			subjects.WebhookPRChanged:       w.handlePRChanged,
-			subjects.GitFilesResolved:       w.handleFilesResolved,
-			// TODO: ugly shit
-			subjects.ArgoHelmGitParsed:      w.snapshotFetchHandler(subjects.GitChartFetched, subjects.GitChartFetchFailed),
-			subjects.ArgoDirectoryGitParsed: w.snapshotFetchHandler(subjects.GitDirectoryFetched, subjects.GitDirectoryFetchFailed),
+		Routes: []nats.Route{
+			{Subjects: []string{subjects.WebhookPRChanged}, Handler: w.handlePRChanged},
+			{Subjects: []string{subjects.GitFilesResolved}, Handler: w.handleFilesResolved},
+			{Subjects: []string{subjects.ArgoHelmGitParsed}, Handler: w.handleHelmGitParsed},
+			{Subjects: []string{subjects.ArgoDirectoryGitParsed}, Handler: w.handleDirectoryGitParsed},
 		},
 	})
 	if err != nil {
@@ -220,62 +219,68 @@ func (w *GitWorker) handleFilesResolved(ctx context.Context, headers nats.Header
 	ack()
 }
 
-func (w *GitWorker) snapshotFetchHandler(successSubject, failSubject string) nats.Handler {
-	return func(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
-		ctx, span := tracer.Start(
-			otel.GetTextMapPropagator().Extract(ctx, headers),
-			"snapshotFetch",
-		)
-		otel.GetTextMapPropagator().Inject(ctx, headers)
-		defer span.End()
+func (w *GitWorker) handleHelmGitParsed(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
+	w.snapshotFetch(ctx, headers, data, ack, nak, subjects.GitChartFetched, subjects.GitChartFetchFailed)
+}
 
-		spec, err := nats.Unmarshal[models.AppSpec](data)
-		if err != nil {
-			w.log.Error("failed to unmarshal pr object", "error", err)
-			span.SetStatus(codes.Error, err.Error())
-			nak()
-			return
-		}
-		span.SetAttributes(
-			attribute.String("pr.owner", headers["pr.owner"]),
-			attribute.String("pr.repo", headers["pr.repo"]),
-			attribute.String("pr.number", headers["pr.number"]),
-			attribute.String("app.name", spec.AppName),
-			attribute.String("app.origin", headers["app.origin"]),
-		)
-		w.log.Debug("new snapshot fetch event",
-			"app", spec.AppName,
-			"repo", spec.Source.RepoURL,
-			"revision", spec.Source.Revision)
+func (w *GitWorker) handleDirectoryGitParsed(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
+	w.snapshotFetch(ctx, headers, data, ack, nak, subjects.GitDirectoryFetched, subjects.GitDirectoryFetchFailed)
+}
 
-		appOrigin := headers["app.origin"]
-		r, err := w.getOrCreateRepo(ctx, spec.Source.RepoURL)
-		if err != nil {
-			headers["error.origin.file"] = appOrigin
-			headers["error.origin.app"] = spec.AppName
-			headers["error.msg"] = err.Error()
-			w.log.Error("failed to find git repo", "error", err)
-			span.SetStatus(codes.Error, err.Error())
-			w.bus.Publish(ctx, failSubject, headers, nil)
-			ack()
-			return
-		}
-		snapshotDir, err := r.GetOrCreateSnapshot(spec.Source.Revision, spec.Source.Path, nil)
-		if err != nil {
-			headers["error.origin.file"] = appOrigin
-			headers["error.origin.app"] = spec.AppName
-			headers["error.msg"] = err.Error()
-			w.log.Error("failed to create snapshot", "error", err)
-			span.SetStatus(codes.Error, err.Error())
-			w.bus.Publish(ctx, failSubject, headers, nil)
-			ack()
-			return
-		}
-		headers["chart.location"] = snapshotDir
-		w.bus.Publish(ctx, successSubject, headers, data)
-		span.SetStatus(codes.Ok, "")
-		ack()
+func (w *GitWorker) snapshotFetch(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error, successSubject, failSubject string) {
+	ctx, span := tracer.Start(
+		otel.GetTextMapPropagator().Extract(ctx, headers),
+		"snapshotFetch",
+	)
+	otel.GetTextMapPropagator().Inject(ctx, headers)
+	defer span.End()
+
+	spec, err := nats.Unmarshal[models.AppSpec](data)
+	if err != nil {
+		w.log.Error("failed to unmarshal pr object", "error", err)
+		span.SetStatus(codes.Error, err.Error())
+		nak()
+		return
 	}
+	span.SetAttributes(
+		attribute.String("pr.owner", headers["pr.owner"]),
+		attribute.String("pr.repo", headers["pr.repo"]),
+		attribute.String("pr.number", headers["pr.number"]),
+		attribute.String("app.name", spec.AppName),
+		attribute.String("app.origin", headers["app.origin"]),
+	)
+	w.log.Debug("new snapshot fetch event",
+		"app", spec.AppName,
+		"repo", spec.Source.RepoURL,
+		"revision", spec.Source.Revision)
+
+	appOrigin := headers["app.origin"]
+	r, err := w.getOrCreateRepo(ctx, spec.Source.RepoURL)
+	if err != nil {
+		headers["error.origin.file"] = appOrigin
+		headers["error.origin.app"] = spec.AppName
+		headers["error.msg"] = err.Error()
+		w.log.Error("failed to find git repo", "error", err)
+		span.SetStatus(codes.Error, err.Error())
+		w.bus.Publish(ctx, failSubject, headers, nil)
+		ack()
+		return
+	}
+	snapshotDir, err := r.GetOrCreateSnapshot(spec.Source.Revision, spec.Source.Path, nil)
+	if err != nil {
+		headers["error.origin.file"] = appOrigin
+		headers["error.origin.app"] = spec.AppName
+		headers["error.msg"] = err.Error()
+		w.log.Error("failed to create snapshot", "error", err)
+		span.SetStatus(codes.Error, err.Error())
+		w.bus.Publish(ctx, failSubject, headers, nil)
+		ack()
+		return
+	}
+	headers["chart.location"] = snapshotDir
+	w.bus.Publish(ctx, successSubject, headers, data)
+	span.SetStatus(codes.Ok, "")
+	ack()
 }
 
 // getOrCreateRepo returns the entry for a repo URL, initializing it on first access.

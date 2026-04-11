@@ -45,8 +45,8 @@ func (w *DiffWorker) Run(ctx context.Context) error {
 		MaxDeliver:  3,
 		AckWait:     10 * time.Second,
 		Concurrency: 10,
-		Handlers: map[string]nats.Handler{
-			subjects.CoordinatorAppReady: w.handleDiffReport,
+		Routes: []nats.Route{
+			{Subjects: []string{subjects.CoordinatorAppReady}, Handler: w.handleDiffReport},
 		},
 	})
 	if err != nil {

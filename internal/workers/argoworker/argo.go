@@ -78,8 +78,8 @@ func (w *ArgoWorker) Run(ctx context.Context) error {
 		MaxDeliver:  3,
 		AckWait:     3 * time.Second,
 		Concurrency: 4,
-		Handlers: map[string]nats.Handler{
-			subjects.GitFilesSnapshotted: w.handleSnapshottedFiles,
+		Routes: []nats.Route{
+			{Subjects: []string{subjects.GitFilesSnapshotted}, Handler: w.handleSnapshottedFiles},
 		},
 	})
 	if err != nil {

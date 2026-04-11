@@ -49,11 +49,10 @@ func (w *HelmWorker) Run(ctx context.Context) error {
 		MaxDeliver:  3,
 		AckWait:     3 * time.Second,
 		Concurrency: 8,
-		Handlers: map[string]nats.Handler{
-			subjects.ArgoHelmOCIParsed:  w.handleChartFetch(helm.FetchChartOCI),
-			subjects.ArgoHelmHTTPParsed: w.handleChartFetch(helm.FetchChartHTTPS),
-			subjects.HelmChartFetched:   w.handleChartRender,
-			subjects.GitChartFetched:    w.handleChartRender,
+		Routes: []nats.Route{
+			{Subjects: []string{subjects.ArgoHelmOCIParsed}, Handler: w.handleChartFetch(helm.FetchChartOCI)},
+			{Subjects: []string{subjects.ArgoHelmHTTPParsed}, Handler: w.handleChartFetch(helm.FetchChartHTTPS)},
+			{Subjects: []string{subjects.HelmChartFetched, subjects.GitChartFetched}, Handler: w.handleChartRender},
 		},
 	})
 	if err != nil {

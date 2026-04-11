@@ -23,13 +23,18 @@ func (c Headers) Get(key string) string { return c[key] }
 func (c Headers) Set(key, val string)   { c[key] = val }
 func (c Headers) Keys() []string        { return slices.Collect(maps.Keys(c)) }
 
+// Route binds one or more subjects to a single handler.
+type Route struct {
+	Subjects []string
+	Handler  Handler
+}
+
 // ConsumerConfig describes how to set up a JetStream pull consumer.
 type ConsumerConfig struct {
 	// Durable consumer name
 	Name string
-	// Handlers maps each subject to its handler.
-	// The subjects are used as FilterSubjects on the JetStream consumer.
-	Handlers map[string]Handler
+	// Routes maps subjects to handlers. Multiple subjects can share the same handler.
+	Routes []Route
 	// Max delivery attempts
 	MaxDeliver int
 	// Ack wait time
@@ -74,14 +79,18 @@ func Unmarshal[T any](data []byte) (T, error) {
 // Consume creates (or updates) a JetStream consumer and starts delivering
 // messages to fn. It blocks until ctx is cancelled, then stops the consumer.
 func (b *Bus) Consume(ctx context.Context, cfg ConsumerConfig) error {
-	subjects := make([]string, 0, len(cfg.Handlers))
-	for s := range cfg.Handlers {
-		subjects = append(subjects, s)
+	filterSubjects := make([]string, 0)
+	handlers := make(map[string]Handler)
+	for _, r := range cfg.Routes {
+		filterSubjects = append(filterSubjects, r.Subjects...)
+		for _, s := range r.Subjects {
+			handlers[s] = r.Handler
+		}
 	}
 
 	cons, err := b.stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
 		Durable:        cfg.Name,
-		FilterSubjects: subjects,
+		FilterSubjects: filterSubjects,
 		AckPolicy:      jetstream.AckExplicitPolicy,
 		MaxDeliver:     cfg.MaxDeliver,
 		AckWait:        cfg.AckWait,
@@ -100,7 +109,7 @@ func (b *Bus) Consume(ctx context.Context, cfg ConsumerConfig) error {
 	}
 
 	dispatch := func(msg jetstream.Msg) {
-		handler, ok := cfg.Handlers[msg.Subject()]
+		handler, ok := handlers[msg.Subject()]
 		if !ok {
 			_ = msg.Nak()
 			return

@@ -51,20 +51,30 @@ func (c *Coordinator) Run(ctx context.Context) error {
 		Name:       "coordinator",
 		MaxDeliver: 3,
 		AckWait:    10 * time.Second,
-		Handlers: map[string]nats.Handler{
-			subjects.WebhookPRChanged:              c.handlePREvent,
-			subjects.ArgoFileParseFailed:           c.handleFileErrors,
-			subjects.ArgoTotalUpdated:              c.handleTotalAppUpdate,
-			subjects.GitChartFetchFailed:           c.handleAppErrors,
-			subjects.HelmChartFetchFailed:          c.handleAppErrors,
-			subjects.GitDirectoryFetchFailed:       c.handleAppErrors,
-			subjects.DirectoryManifestRenderFailed: c.handleAppErrors,
-			subjects.HelmManifestRenderFailed:      c.handleAppErrors,
-			subjects.ArgoEmptyParsed:               c.handleEmptyManifest,
-			subjects.DirectoryManifestRendered:     c.handleRenderedManifest,
-			subjects.HelmManifestRendered:          c.handleRenderedManifest,
-			subjects.EmptyManifestRendered:			c.handleRenderedManifest,
-			subjects.DiffReportGenerated:           c.handleGeneratedReport,
+		Routes: []nats.Route{
+			{Subjects: []string{subjects.WebhookPRChanged}, Handler: c.handlePREvent},
+			{Subjects: []string{subjects.ArgoFileParseFailed}, Handler: c.handleFileErrors},
+			{Subjects: []string{subjects.ArgoTotalUpdated}, Handler: c.handleTotalAppUpdate},
+			{
+				Subjects: []string{
+					subjects.GitChartFetchFailed,
+					subjects.HelmChartFetchFailed,
+					subjects.GitDirectoryFetchFailed,
+					subjects.DirectoryManifestRenderFailed,
+					subjects.HelmManifestRenderFailed,
+				},
+				Handler: c.handleAppErrors,
+			},
+			{Subjects: []string{subjects.ArgoEmptyParsed}, Handler: c.handleEmptyManifest},
+			{
+				Subjects: []string{
+					subjects.DirectoryManifestRendered,
+					subjects.HelmManifestRendered,
+					subjects.EmptyManifestRendered,
+				},
+				Handler: c.handleRenderedManifest,
+			},
+			{Subjects: []string{subjects.DiffReportGenerated}, Handler: c.handleGeneratedReport},
 		},
 	})
 	if err != nil {
