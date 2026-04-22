@@ -55,14 +55,14 @@ spec:
         volumeMounts:
         - name: argocd-diff-reporter-data
           mountPath: /data
-        - name: /argocd-diff-reporter-config
+        - name: config
           mountPath: /app
+      volumes:
+        - name: config
+          configMap:
+            name: argocd-diff-reporter-config
   updateStrategy:
     type: RollingUpdate
-  volumes:
-    - name: argocd-diff-reporter-config
-      configMap:
-        name: argocd-diff-reporter-config
   volumeClaimTemplates:
   - apiVersion: v1
     kind: PersistentVolumeClaim
