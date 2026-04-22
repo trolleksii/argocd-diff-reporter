@@ -85,9 +85,7 @@ jobs:
           cache-to: type=gha,scope=main,mode=max
 
       - id: get-tag
-        run: |
-          tag=$(echo '${{ steps.meta.outputs.tags }}' | grep sha- | cut -d : -f 2 | uniq)
-          echo "tag=${tag}" | tee -a $GITHUB_OUTPUT
+        run: echo "tag=$(echo '${{ steps.meta.outputs.tags }}' | grep sha- | cut -d : -f 2 | uniq)" | tee -a $GITHUB_OUTPUT
 
   deploy:
     name: Deploy to k8s
@@ -104,7 +102,7 @@ jobs:
       - name: Bump image tag
         run: |
           cd k8s
-          yq -P -i e '.spec.source.images[0].newTag ] "${{ needs.build.outputs.tag }}"' system/manifests/argoapps/argocd-diff-reporter.yaml
+          yq -P -i e '.spec.source.images[0].newTag = "${{ needs.build.outputs.tag }}"' system/manifests/argoapps/argocd-diff-reporter.yaml
           git config --global user.email 'ci@trollabs.com'
           git config --global user.name 'ci automation'
           git add system/manifests/argoapps/argocd-diff-reporter.yaml
