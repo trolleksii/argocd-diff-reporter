@@ -127,6 +127,9 @@ func (c *Config) ApplyEnv() error {
 	if v := os.Getenv("GITHUB_APP_PRIVATE_KEY"); v != "" {
 		c.Github.PrivateKey = v
 	}
+	if v := os.Getenv("GITHUB_WEBHOOK_SECRET"); v != "" {
+		c.Webhook.Secret = v
+	}
 	if v := os.Getenv("OTEL_ENDPOINT"); v != "" {
 		c.Tracing.Endpoint = v
 	}

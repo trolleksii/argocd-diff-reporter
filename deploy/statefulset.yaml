@@ -30,7 +30,7 @@ spec:
               secretKeyRef:
                 key: githubAppId
                 name: argocd-diff-reporter
-          - name: GITHUB_APP_INSTALLATION_ID
+          - name: GITHUB_INSTALLATION_ID
             valueFrom:
               secretKeyRef:
                 key: githubAppInstallationId
