@@ -101,7 +101,7 @@ jobs:
       - name: Bump image tag
         run: |
           cd k8s
-          yq -P -i e '.spec.source.images[0] = "${{ needs.build.outputs.tag }}"' system/manifests/argoapps/argocd-diff-reporter.yaml
+          yq -P -i e '.spec.source.kustomize.images[0] = "${{ needs.build.outputs.tag }}"' system/manifests/argoapps/argocd-diff-reporter.yaml
           git config --global user.email 'ci@trollabs.com'
           git config --global user.name 'ci automation'
           git add system/manifests/argoapps/argocd-diff-reporter.yaml
