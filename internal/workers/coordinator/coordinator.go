@@ -251,9 +251,14 @@ func (c *Coordinator) handleTotalAppUpdate(ctx context.Context, headers nats.Hea
 	if err != nil {
 		progress = models.Progress{}
 	}
-	progress.TotalApps += total
-	c.store.SetValue(ctx, key, progress)
-	ack()
+
+	// events might come from either base or head commit
+	// whichever recorded more apps is the winner
+	if total > progress.TotalApps {
+		progress.TotalApps += total
+		c.store.SetValue(ctx, key, progress)
+		ack()
+	}
 }
 
 func (c *Coordinator) handleRenderedManifest(ctx context.Context, headers nats.Headers, _ []byte, ack, nak func() error) {
@@ -368,6 +373,7 @@ func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.He
 		nak()
 	}
 	progress.ProcessedApps += 1
+	c.log.Info("progress updated", "owner", owner, "repo", repo, "number", number, "progress", progress)
 	c.store.SetValue(ctx, progressId, progress)
 	if pr.Status == models.PipelineInProgress && progress.TotalApps == progress.ProcessedApps {
 		pr.Status = models.PipelineSucceeded
