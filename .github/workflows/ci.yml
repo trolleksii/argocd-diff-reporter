@@ -86,7 +86,7 @@ jobs:
 
       - id: get-tag
         run: |
-          tag=$(echo {{ steps.meta.outputs.tags }} | grep sha- | cut -d : -f 2 | uniq)
+          tag=$(echo '${{ steps.meta.outputs.tags }}' | grep sha- | cut -d : -f 2 | uniq)
           echo "tag=${tag}" | tee -a $GITHUB_OUTPUT
 
   deploy:
