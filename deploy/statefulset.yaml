@@ -18,6 +18,8 @@ spec:
       - name: diff-reporte
         image: trolleksii/argocd-diff-reporter:latest
         env:
+          - name: CONFIG_PATH
+            value: /app/config.yaml
           - name: GITHUB_WEBHOOK_SECRET
             valueFrom:
               secretKeyRef:

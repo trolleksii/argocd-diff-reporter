@@ -30,7 +30,11 @@ import (
 
 func main() {
 	log := slog.Default()
-	cfg, err := config.Load("config.yml")
+	configPath := os.Getenv("CONFIG_PATH")
+	if configPath == "" {
+		configPath = "config.yml"
+	}
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		log.Error("failed to load config", "error", err)
 	}
