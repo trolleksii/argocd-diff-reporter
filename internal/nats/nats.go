@@ -57,7 +57,7 @@ func New(ctx context.Context, cfg config.NatsConfig, log *slog.Logger) (*Nats, e
 	kvStore, err := js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{
 		Bucket:      "orchestration",
 		Description: "Task orchestration",
-		TTL:         1 * time.Hour,
+		TTL:         31 * 24 * time.Hour,
 	})
 	if err != nil {
 		nc.Drain()
