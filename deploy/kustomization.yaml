@@ -1,0 +1,9 @@
+yamlapiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: argocd
+resources:
+- config.yaml
+- secrets.yaml
+- statefulset.yaml
+- service.yaml
+- ingressroute.yaml

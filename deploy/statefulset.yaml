@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: argocd-diff-reporter
+  namespace: argocd
+spec:
+  replicas: 1
+  serviceName: argocd-diff-reporter
+  selector:
+    matchLabels:
+      app: argocd-diff-reporter
+  template:
+    metadata:
+      labels:
+        app: argocd-diff-reporter
+    spec:
+      containers:
+      - name: diff-reporte
+        image: trolleksii/argocd-diff-reporter:latest
+        env:
+          - name: GITHUB_WEBHOOK_SECRET
+            valueFrom:
+              secretKeyRef:
+                key: githubWebhookSecret
+                name: argocd-diff-reporter
+          - name: GITHUB_APP_ID
+            valueFrom:
+              secretKeyRef:
+                key: githubAppId
+                name: argocd-diff-reporter
+          - name: GITHUB_APP_INSTALLATION_ID
+            valueFrom:
+              secretKeyRef:
+                key: githubAppInstallationId
+                name: argocd-diff-reporter
+          - name: GITHUB_APP_PRIVATE_KEY
+            valueFrom:
+              secretKeyRef:
+                key: githubAppPrivateKey
+                name: argocd-diff-reporter
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /healthz
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          successThreshold: 1
+          timeoutSeconds: 5
+        volumeMounts:
+        - name: argocd-diff-reporter-data
+          mountPath: /data
+        - name: config
+          mountPath: /app
+  updateStrategy:
+    type: RollingUpdate
+  volumes:
+    - name: config
+      configMap:
+        name: argocd-diff-reporter-config
+  volumeClaimTemplates:
+  - apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
+      name: argocd-diff-reporter-data
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 10Gi
+      storageClassName: standard
+      volumeMode: Filesystem

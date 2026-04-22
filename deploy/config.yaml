@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-diff-reporter-config
+  namespace: argocd
+data:
+  config.yaml: |
+    server:
+      addr: 0.0.0.0:8080
+    nats:
+      domain: hub
+      serverName: argocd-diff-reporter
+      storeDir: /data/nats
+    webhook:
+      repositories:
+        - owner: trolleksii
+          repo: k8s-argo-apps
+    log:
+      level: info
+      format: json
+    tracing:
+      endpoint: tempo.observability.svc:4318
+      version: v0.1
+    workers:
+      gitWorker:
+        cloneBaseDir: /data/repositories
+        snapshotBaseDir: /data/snapshots
+        fileGlobs: ["system/manifests/argoapps/*.yaml"]
+      helmWorker:
+        chartCacheDir: /data/charts

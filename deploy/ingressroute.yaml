@@ -1,0 +1,17 @@
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: argocd-diff-reporter
+  namespace: argocd
+spec:
+  routes:
+  - kind: Rule
+    match: Host(`diff.dev.trollabs.com`)
+    services:
+    - kind: Service
+      name: argocd-diff-reporter
+      port: 8080
+  tls:
+    domains:
+    - main: diff.dev.trollabs.com
+    secretName: argocd-diff-reporter-tls

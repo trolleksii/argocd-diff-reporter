@@ -39,10 +39,14 @@ jobs:
       contents: read
       id-token: write
       packages: write
+    outputs:
+      tag: steps.get-tag.outputs.tag
     steps:
       - uses: actions/checkout@v6
 
       - uses: docker/setup-buildx-action@v4
+        with:
+          platforms: linux/amd64 #,linux/arm64
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v4
@@ -79,3 +83,30 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=main
           cache-to: type=gha,scope=main,mode=max
+
+      - id: get-tag
+        run: |
+          tag=$(echo {{ steps.meta.outputs.tags }} | grep sha- | cut -d : -f 2 | uniq)
+          echo "tag=${tag}" | tee -a $GITHUB_OUTPUT
+
+  deploy:
+    name: Deploy to k8s
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: trolleksii/k8s-argo-apps
+          ref: main
+          path: k8s
+          ssh-key: "${{ secrets.K8S_DEPLOY_KEY }}"
+
+      - name: Bump image tag
+        run: |
+          cd k8s
+          yq -P -i e '.spec.source.images[0].newTag ] "${{ needs.build.outputs.tag }}"' system/manifests/argoapps/argocd-diff-reporter.yaml
+          git config --global user.email 'ci@trollabs.com'
+          git config --global user.name 'ci automation'
+          git add system/manifests/argoapps/argocd-diff-reporter.yaml
+          git commit -m "bump argocd-diff-reporter image tag"
+          git push -u origin main
