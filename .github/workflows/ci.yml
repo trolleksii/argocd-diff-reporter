@@ -85,7 +85,8 @@ jobs:
           cache-to: type=gha,scope=main,mode=max
 
       - id: get-tag
-        run: echo "tag=$(echo '${{ steps.meta.outputs.tags }}' | grep sha- | cut -d : -f 2 | uniq)" | tee -a $GITHUB_OUTPUT
+        run: |
+          echo "tag=$(echo '${{ steps.meta.outputs.tags }}' | grep sha- | cut -d : -f 2 | uniq)" | tee -a $GITHUB_OUTPUT
 
   deploy:
     name: Deploy to k8s
