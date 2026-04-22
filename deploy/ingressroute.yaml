@@ -6,12 +6,12 @@ metadata:
 spec:
   routes:
   - kind: Rule
-    match: Host(`diff.dev.trollabs.com`)
+    match: Host(`diff.trollabs.com`)
     services:
     - kind: Service
       name: argocd-diff-reporter
       port: 8080
   tls:
     domains:
-    - main: diff.dev.trollabs.com
+    - main: diff.trollabs.com
     secretName: argocd-diff-reporter-tls

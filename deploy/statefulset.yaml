@@ -17,6 +17,7 @@ spec:
       containers:
       - name: diff-reporte
         image: trolleksii/argocd-diff-reporter:latest
+        imagePullPolicy: IfNotPresent
         env:
           - name: CONFIG_PATH
             value: /app/config.yaml
@@ -44,16 +45,16 @@ spec:
         - containerPort: 8080
           name: http
           protocol: TCP
-        livenessProbe:
-          failureThreshold: 3
+        readinessProbe:
+          failureThreshold: 2
           httpGet:
             path: /healthz
             port: 8080
             scheme: HTTP
           initialDelaySeconds: 10
-          periodSeconds: 30
+          periodSeconds: 3
           successThreshold: 1
-          timeoutSeconds: 5
+          timeoutSeconds: 1
         volumeMounts:
         - name: argocd-diff-reporter-data
           mountPath: /data
