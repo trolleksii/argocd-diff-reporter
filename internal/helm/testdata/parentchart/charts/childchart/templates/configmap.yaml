@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-child-config
+data:
+  source: child
+  key: {{ .Values.key | default "child-value" }}

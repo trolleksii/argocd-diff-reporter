@@ -1,0 +1,7 @@
+apiVersion: v2
+name: parentchart
+version: 0.1.0
+description: A test parent chart with a sub-chart dependency
+dependencies:
+  - name: childchart
+    version: 0.1.0

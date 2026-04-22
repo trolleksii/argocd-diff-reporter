@@ -1,0 +1,7 @@
+apiVersion: v2
+name: badchart
+version: 0.1.0
+description: intentionally malformed chart fixture for render-failure tests
+keywords:
+  - broken
+  - [unclosed

@@ -1,0 +1,44 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: my-app
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/example/repo
+    targetRevision: HEAD
+    path: charts/my-app
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: my-appset
+  namespace: argocd
+spec:
+  generators:
+    - list:
+        elements:
+          - cluster: staging
+  template:
+    metadata:
+      name: '{{cluster}}-app'
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/example/repo
+        targetRevision: HEAD
+        path: charts/app
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: default
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: my-config
+data:
+  key: value

@@ -1,0 +1,4 @@
+apiVersion: v2
+name: badtemplate
+version: 0.1.0
+description: chart with a template that fails at render time

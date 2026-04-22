@@ -1,0 +1,42 @@
+kind: Deployment
+apiVersion: apps/v1
+spec:
+  replicas: 2
+  template:
+    spec:
+      containers:
+        - name: nginx
+          ports:
+            - containerPort: 80
+          image: nginx:1.24
+    metadata:
+      labels:
+        app: web-app
+  selector:
+    matchLabels:
+      app: web-app
+metadata:
+  namespace: default
+  name: web-app
+---
+kind: Service
+apiVersion: v1
+spec:
+  type: ClusterIP
+  ports:
+    - targetPort: 80
+      port: 80
+  selector:
+    app: web-app
+metadata:
+  namespace: default
+  name: web-app-svc
+---
+kind: ConfigMap
+apiVersion: v1
+data:
+  LOG_LEVEL: info
+  APP_ENV: production
+metadata:
+  namespace: default
+  name: web-app-config
