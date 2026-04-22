@@ -1,0 +1,18 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: argocd-diff-reporter-tls
+  namespace: argocd
+spec:
+  commonName: diff.trollabs.com
+  dnsNames:
+  - diff.trollabs.com
+  issuerRef:
+    kind: ClusterIssuer
+    name: letsencrypt-prod
+  privateKey:
+    algorithm: RSA
+    encoding: PKCS1
+    rotationPolicy: Never
+    size: 2048
+  secretName: argocd-diff-reporter-tls
