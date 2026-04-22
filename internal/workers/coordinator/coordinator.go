@@ -349,13 +349,14 @@ func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.He
 	if f, ok := pr.Files[origin]; ok {
 		if a, ok := f.Apps[appName]; ok {
 			a.DiffStats = ds
+			f.Apps[appName] = a
 		} else {
 			f.Apps[appName] = models.App{DiffStats: ds}
 		}
 	} else {
 		pr.Files[origin] = models.FileResult{
 			Apps: map[string]models.App{
-				appName: models.App{DiffStats: ds},
+				appName: {DiffStats: ds},
 			},
 		}
 	}
