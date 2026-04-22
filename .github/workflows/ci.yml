@@ -23,13 +23,11 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - run: go test ./... -race -coverprofile=coverage.out
+      - name: Run tests
+        run: go test ./... -tags=integration -race -coverprofile=coverage.out -covermode=atomic
 
-      - run: go tool cover -func=coverage.out
-
-      - run: go test ./... -tags=integration -race -coverprofile=integration.out
-
-      - run: go tool cover -func=integration.out
+      - name: Print coverage
+        run: go tool cover -func=coverage.out
 
   build:
     name: Build container image
@@ -86,7 +84,7 @@ jobs:
 
       - id: get-tag
         run: |
-          echo "tag=$(echo '${{ steps.meta.outputs.tags }}' | grep sha- | cut -d : -f 2 | uniq)" | tee -a $GITHUB_OUTPUT
+          echo "tag=$(echo '${{ steps.meta.outputs.tags }}' | grep sha- | grep trolleksii | uniq)" | tee -a $GITHUB_OUTPUT
 
   deploy:
     name: Deploy to k8s
@@ -103,7 +101,7 @@ jobs:
       - name: Bump image tag
         run: |
           cd k8s
-          yq -P -i e '.spec.source.images[0].newTag = "${{ needs.build.outputs.tag }}"' system/manifests/argoapps/argocd-diff-reporter.yaml
+          yq -P -i e '.spec.source.images[0] = "${{ needs.build.outputs.tag }}"' system/manifests/argoapps/argocd-diff-reporter.yaml
           git config --global user.email 'ci@trollabs.com'
           git config --global user.name 'ci automation'
           git add system/manifests/argoapps/argocd-diff-reporter.yaml
