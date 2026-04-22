@@ -48,8 +48,6 @@ func (h *UIHandler) ServeIndex(w http.ResponseWriter, r *http.Request) {
 	index, err := nats.GetValue[[]models.PullRequest](r.Context(), h.store, "index")
 	if err != nil {
 		h.log.Error("failed to fetch index", "error", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
 	}
 	if err := h.templateManager[templateName].Execute(w, index); err != nil {
 		h.log.Error("failed to execute index template", "error", err)
