@@ -63,7 +63,7 @@ func (h *UIHandler) ServeSummary(w http.ResponseWriter, r *http.Request) {
 	summary, err := nats.GetValue[models.PullRequest](r.Context(), h.store, key)
 	if err != nil {
 		h.log.Error("failed to find summary for a pr", "error", err)
-		w.WriteHeader(http.StatusInternalServerError)
+		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 
