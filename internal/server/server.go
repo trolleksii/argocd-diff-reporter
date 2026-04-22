@@ -24,6 +24,7 @@ func New(cfg config.ServerConfig, log *slog.Logger, opts ...MuxOption) *Server {
 		fn(mux, log)
 	}
 
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	return &Server{
 		log: log.With("component", "server"),
 		httpServer: &http.Server{
