@@ -84,7 +84,7 @@ jobs:
 
       - id: get-tag
         run: |
-          echo "tag=$(echo '${{ steps.meta.outputs.tags }}' | grep sha- | grep trolleksii | uniq)" | tee -a $GITHUB_OUTPUT
+          echo "tag=$(echo '${{ steps.meta.outputs.tags }}' | grep sha- | grep -v ghcr | uniq)" | tee -a $GITHUB_OUTPUT
 
   deploy:
     name: Deploy to k8s
