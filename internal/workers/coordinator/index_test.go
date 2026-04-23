@@ -34,38 +34,39 @@ func numbers(prs []models.PullRequest) []string {
 // ---------------------------------------------------------------------------
 
 func TestNewIndex_EmptyState(t *testing.T) {
-	idx := NewIndex(5, nil)
+	idx := NewIndex(5)
 	require.NotNil(t, idx)
 	assert.Empty(t, idx.GetElements())
 }
 
-func TestNewIndex_WithState(t *testing.T) {
+func TestLoad_WithState(t *testing.T) {
 	state := []models.PullRequest{
 		pr("1", "org", "repo", models.PipelineSucceeded),
 		pr("2", "org", "repo", models.PipelineInProgress),
 	}
-	idx := NewIndex(5, state)
+	idx := NewIndex(5)
+	idx.Load(state)
 	elems := idx.GetElements()
 	require.Len(t, elems, 2)
 	assert.Equal(t, "1", elems[0].Number)
 	assert.Equal(t, "2", elems[1].Number)
 }
 
-func TestNewIndex_StateTruncatedToMaxCap(t *testing.T) {
+func TestLoad_StateTruncatedToMaxCap(t *testing.T) {
 	state := []models.PullRequest{
 		pr("1", "org", "repo", models.PipelineSucceeded),
 		pr("2", "org", "repo", models.PipelineSucceeded),
 		pr("3", "org", "repo", models.PipelineSucceeded),
 	}
-	idx := NewIndex(2, state)
+	idx := NewIndex(2)
+	idx.Load(state)
 	elems := idx.GetElements()
-	// only the first maxCap items are kept
 	require.Len(t, elems, 2)
 	assert.Equal(t, []string{"1", "2"}, numbers(elems))
 }
 
 func TestNewIndex_ZeroCapacity(t *testing.T) {
-	idx := NewIndex(0, nil)
+	idx := NewIndex(0)
 	require.NotNil(t, idx)
 	assert.Empty(t, idx.GetElements())
 }
@@ -75,7 +76,7 @@ func TestNewIndex_ZeroCapacity(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestUpdate_NewPRAddedToFront(t *testing.T) {
-	idx := NewIndex(5, nil)
+	idx := NewIndex(5)
 	idx.Update(pr("1", "org", "repo", models.PipelineInProgress))
 	idx.Update(pr("2", "org", "repo", models.PipelineInProgress))
 
@@ -86,7 +87,7 @@ func TestUpdate_NewPRAddedToFront(t *testing.T) {
 }
 
 func TestUpdate_ExistingPRMovedToFront(t *testing.T) {
-	idx := NewIndex(5, nil)
+	idx := NewIndex(5)
 	idx.Update(pr("1", "org", "repo", models.PipelineInProgress))
 	idx.Update(pr("2", "org", "repo", models.PipelineInProgress))
 	idx.Update(pr("3", "org", "repo", models.PipelineInProgress))
@@ -105,7 +106,7 @@ func TestUpdate_ExistingPRMovedToFront(t *testing.T) {
 
 func TestUpdate_LRUEviction(t *testing.T) {
 	maxCap := 3
-	idx := NewIndex(maxCap, nil)
+	idx := NewIndex(maxCap)
 
 	idx.Update(pr("1", "org", "repo", models.PipelineSucceeded))
 	idx.Update(pr("2", "org", "repo", models.PipelineSucceeded))
@@ -124,7 +125,7 @@ func TestUpdate_LRUEviction(t *testing.T) {
 
 func TestUpdate_LRUEviction_ReinsertedPRNotDoubleEvicted(t *testing.T) {
 	// Filling to cap then re-inserting an existing PR should not shrink the list
-	idx := NewIndex(3, nil)
+	idx := NewIndex(3)
 	idx.Update(pr("1", "org", "repo", models.PipelineSucceeded))
 	idx.Update(pr("2", "org", "repo", models.PipelineSucceeded))
 	idx.Update(pr("3", "org", "repo", models.PipelineSucceeded))
@@ -142,7 +143,7 @@ func TestUpdate_LRUEviction_ReinsertedPRNotDoubleEvicted(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestUpdateStatus_ExistingPR(t *testing.T) {
-	idx := NewIndex(5, nil)
+	idx := NewIndex(5)
 	idx.Update(pr("1", "org", "repo", models.PipelineInProgress))
 	idx.Update(pr("2", "org", "repo", models.PipelineInProgress))
 
@@ -166,7 +167,7 @@ func TestUpdateStatus_ExistingPR(t *testing.T) {
 }
 
 func TestUpdateStatus_NonexistentPR_NoOp(t *testing.T) {
-	idx := NewIndex(5, nil)
+	idx := NewIndex(5)
 	idx.Update(pr("1", "org", "repo", models.PipelineInProgress))
 
 	// Should not panic and should not change anything
@@ -185,7 +186,7 @@ func TestUpdateStatus_NonexistentPR_NoOp(t *testing.T) {
 func TestUpdateStatus_MatchesOwnerRepoAndNumber(t *testing.T) {
 	// UpdateStatus matches on Owner+Repo+Number; use distinct numbers to keep both in the index
 	// (Update deduplicates by Number alone, so use different numbers for different repos).
-	idx := NewIndex(5, nil)
+	idx := NewIndex(5)
 	idx.Update(pr("10", "org-a", "repo", models.PipelineInProgress))
 	idx.Update(pr("11", "org-b", "repo", models.PipelineInProgress))
 
@@ -209,7 +210,7 @@ func TestUpdateStatus_MatchesOwnerRepoAndNumber(t *testing.T) {
 }
 
 func TestUpdateStatus_DoesNotChangeOrder(t *testing.T) {
-	idx := NewIndex(5, nil)
+	idx := NewIndex(5)
 	idx.Update(pr("1", "org", "repo", models.PipelineInProgress))
 	idx.Update(pr("2", "org", "repo", models.PipelineInProgress))
 	idx.Update(pr("3", "org", "repo", models.PipelineInProgress))
@@ -229,7 +230,7 @@ func TestUpdateStatus_DoesNotChangeOrder(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestGetElements_ReturnsClone(t *testing.T) {
-	idx := NewIndex(5, nil)
+	idx := NewIndex(5)
 	idx.Update(pr("1", "org", "repo", models.PipelineInProgress))
 	idx.Update(pr("2", "org", "repo", models.PipelineInProgress))
 
@@ -245,7 +246,7 @@ func TestGetElements_ReturnsClone(t *testing.T) {
 }
 
 func TestGetElements_MostRecentFirst(t *testing.T) {
-	idx := NewIndex(5, nil)
+	idx := NewIndex(5)
 	idx.Update(pr("1", "org", "repo", models.PipelineSucceeded))
 	idx.Update(pr("2", "org", "repo", models.PipelineSucceeded))
 	idx.Update(pr("3", "org", "repo", models.PipelineSucceeded))

@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 	internalnats "github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server/notifications"
@@ -45,8 +46,7 @@ func newTestCoordinator(t *testing.T) (*Coordinator, *internalnats.Bus, *interna
 	require.NoError(t, err, "failed to create NATS stream")
 
 	notifier := notifications.NewNotificationServer(testutil.NoopLogger())
-	c := New(testutil.NoopLogger(), bus, store, notifier)
-	c.index = NewIndex(10, nil) // initialise index as Run() would
+	c := New(config.CoordinatorConfig{IndexCapacity: 10}, testutil.NoopLogger(), bus, store, notifier)
 	return c, bus, store
 }
 
@@ -559,8 +559,7 @@ func TestHandleEmptyManifest_StoreFailure_Naks(t *testing.T) {
 	require.NoError(t, err)
 
 	notifier := notifications.NewNotificationServer(testutil.NoopLogger())
-	c := New(testutil.NoopLogger(), bus, store, notifier)
-	c.index = NewIndex(10, nil)
+	c := New(config.CoordinatorConfig{IndexCapacity: 10}, testutil.NoopLogger(), bus, store, notifier)
 
 	headers := internalnats.Headers{
 		"pr.owner":   "org",
