@@ -244,6 +244,9 @@ func (c *Coordinator) handleTotalAppUpdate(ctx context.Context, headers nats.Hea
 		attribute.String("app.total", headers["app.total"]),
 	)
 	total, err := strconv.Atoi(headers["app.total"])
+	if err != nil {
+		c.log.Error("failed to parse app totals", "error", err)
+	}
 	key := fmt.Sprintf("%s.%s.%s.%s.%s", owner, repo, number, baseSha, headSha)
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -257,8 +260,8 @@ func (c *Coordinator) handleTotalAppUpdate(ctx context.Context, headers nats.Hea
 	if total > progress.TotalApps {
 		progress.TotalApps += total
 		c.store.SetValue(ctx, key, progress)
-		ack()
 	}
+	ack()
 }
 
 func (c *Coordinator) handleRenderedManifest(ctx context.Context, headers nats.Headers, _ []byte, ack, nak func() error) {
