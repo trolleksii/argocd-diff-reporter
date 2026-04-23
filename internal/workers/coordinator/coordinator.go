@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 
+	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server/notifications"
@@ -30,11 +31,12 @@ type Coordinator struct {
 	mu sync.Mutex
 }
 
-func New(log *slog.Logger, b *nats.Bus, s *nats.Store, n *notifications.NotificationServer) *Coordinator {
+func New(cfg config.CoordinatorConfig, log *slog.Logger, b *nats.Bus, s *nats.Store, n *notifications.NotificationServer) *Coordinator {
 	return &Coordinator{
 		bus:      b,
 		store:    s,
 		notifier: n,
+		index:    NewIndex(cfg.IndexCapacity),
 		log:      log.With("component", "coordinator"),
 	}
 }
@@ -42,11 +44,11 @@ func New(log *slog.Logger, b *nats.Bus, s *nats.Store, n *notifications.Notifica
 func (c *Coordinator) Run(ctx context.Context) error {
 	c.log.Info("starting coordinator...")
 	storedState, err := nats.GetValue[[]models.PullRequest](ctx, c.store, "index")
-	if err != nil {
-		storedState = []models.PullRequest{}
+	if err == nil {
+		c.index.Load(storedState)
+	} else {
+		c.store.SetValue(ctx, "index", c.index.GetElements())
 	}
-	c.index = NewIndex(10, storedState) // TODO: get the max capacity into the config
-	c.store.SetValue(ctx, "index", c.index.GetElements())
 	err = c.bus.Consume(ctx, nats.ConsumerConfig{
 		Name:       "coordinator",
 		MaxDeliver: 3,

@@ -95,7 +95,7 @@ func main() {
 	helmWorker := helmworker.New(cfg.Workers.HelmWorker, logger, bus, store)
 	directoryWorker := directoryworker.New(logger, bus, store)
 	diffWorker := diffworker.New(logger, bus, store, notifier)
-	coordinator := coord.New(logger, bus, store, notifier)
+	coordinator := coord.New(cfg.Workers.Coordinator, logger, bus, store, notifier)
 
 	workers := []wrk.Worker{
 		natsSrv,

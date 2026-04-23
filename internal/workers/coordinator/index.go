@@ -13,15 +13,18 @@ type Index struct {
 }
 
 // NewIndex creates a new index of processed PRs of certain maximum capacity, and an optional initial state.
-func NewIndex(maxCap int, state []models.PullRequest) *Index {
+func NewIndex(maxCap int) *Index {
 	items := make([]models.PullRequest, 0, maxCap)
-	if state != nil {
-		//append at most maxCap items from the state into the index
-		items = append(items, state[:min(len(state), maxCap)]...)
-	}
 	return &Index{
 		items:  items,
 		maxCap: maxCap,
+	}
+}
+
+func (idx *Index) Load(state []models.PullRequest) {
+	if state != nil {
+		//append at most maxCap items from the state into the index
+		idx.items = append(idx.items, state[:min(len(state), idx.maxCap)]...)
 	}
 }
 

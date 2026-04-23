@@ -41,8 +41,9 @@ type GitRepoFilter struct {
 }
 
 type WorkersConfig struct {
-	GitWorker  GitWorkerConfig  `yaml:"gitWorker"`
-	HelmWorker HelmWorkerConfig `yaml:"helmWorker"`
+	GitWorker   GitWorkerConfig   `yaml:"gitWorker"`
+	HelmWorker  HelmWorkerConfig  `yaml:"helmWorker"`
+	Coordinator CoordinatorConfig `yaml:"coordinator"`
 }
 
 type GitWorkerConfig struct {
@@ -53,6 +54,10 @@ type GitWorkerConfig struct {
 
 type HelmWorkerConfig struct {
 	ChartCacheDir string `yaml:"chartCacheDir"`
+}
+
+type CoordinatorConfig struct {
+	IndexCapacity int `yaml:"indexCapacity"`
 }
 
 type NatsConfig struct {
@@ -95,6 +100,9 @@ func Load(path string) (*Config, error) {
 			},
 			HelmWorker: HelmWorkerConfig{
 				ChartCacheDir: "charts",
+			},
+			Coordinator: CoordinatorConfig{
+				IndexCapacity: 10,
 			},
 		},
 		Tracing: TracingConfig{
