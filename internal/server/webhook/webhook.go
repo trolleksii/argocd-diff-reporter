@@ -64,6 +64,9 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+	span.SetAttributes(
+		attribute.String("event.type", github.WebHookType(r)),
+	)
 	switch event := event.(type) {
 	case *github.PullRequestEvent:
 		action := event.GetAction()
@@ -71,6 +74,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		owner := repo.GetOwner().GetLogin()
 		repoName := repo.GetName()
 		span.SetAttributes(
+			attribute.String("pr.action", action),
 			attribute.String("pr.owner", owner),
 			attribute.String("pr.repo", repoName),
 		)
@@ -103,7 +107,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				span.SetStatus(codes.Error, err.Error())
 				return
 			}
-			h.bus.Publish(r.Context(), subjects.WebhookPRClosed, headers, data)
+			h.bus.Publish(trCtx, subjects.WebhookPRClosed, headers, data)
 		case "opened", "synchronize", "reopened":
 			pr := event.GetPullRequest()
 			prObj := models.PullRequest{
@@ -133,7 +137,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				span.SetStatus(codes.Error, err.Error())
 				return
 			}
-			h.bus.Publish(r.Context(), subjects.WebhookPRChanged, headers, data)
+			h.bus.Publish(trCtx, subjects.WebhookPRChanged, headers, data)
 		}
 	default:
 		h.log.Warn("unknown event type", "etype", github.WebHookType(r))
