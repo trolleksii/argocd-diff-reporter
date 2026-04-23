@@ -220,17 +220,17 @@ func (w *GitWorker) handleFilesResolved(ctx context.Context, headers nats.Header
 }
 
 func (w *GitWorker) handleHelmGitParsed(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
-	w.snapshotFetch(ctx, headers, data, ack, nak, subjects.GitChartFetched, subjects.GitChartFetchFailed)
+	w.fetchSource(ctx, headers, data, ack, nak, subjects.GitChartFetched, subjects.GitChartFetchFailed)
 }
 
 func (w *GitWorker) handleDirectoryGitParsed(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
-	w.snapshotFetch(ctx, headers, data, ack, nak, subjects.GitDirectoryFetched, subjects.GitDirectoryFetchFailed)
+	w.fetchSource(ctx, headers, data, ack, nak, subjects.GitDirectoryFetched, subjects.GitDirectoryFetchFailed)
 }
 
-func (w *GitWorker) snapshotFetch(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error, successSubject, failSubject string) {
+func (w *GitWorker) fetchSource(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error, successSubject, failSubject string) {
 	ctx, span := tracer.Start(
 		otel.GetTextMapPropagator().Extract(ctx, headers),
-		"snapshotFetch",
+		"fetchSource",
 	)
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
