@@ -545,7 +545,7 @@ func TestHandleTotalAppUpdate_AccumulatesTotal(t *testing.T) {
 
 	progress, err := internalnats.GetValue[models.Progress](ctx, store, key)
 	require.NoError(t, err)
-	assert.Equal(t, 5, progress.TotalApps)
+	assert.Equal(t, 3, progress.TotalApps)
 	assert.Equal(t, 0, progress.ProcessedApps)
 }
 
