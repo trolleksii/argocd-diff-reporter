@@ -23,10 +23,9 @@ import (
 	"helm.sh/helm/v3/pkg/downloader"
 	"helm.sh/helm/v3/pkg/getter"
 	"helm.sh/helm/v3/pkg/registry"
-	"helm.sh/helm/v3/pkg/repo"
 )
 
-const fallbackKubeVersion = "v1.33.0"
+const fallbackKubeVersion = "v1.34.0"
 
 func initActionConfig(settings *cli.EnvSettings) (*action.Configuration, error) {
 	if settings == nil {
@@ -71,7 +70,7 @@ func createRegistryClient(settings *cli.EnvSettings, logger *slog.Logger, instal
 		installClient.InsecureSkipTLSverify
 
 	if hasTLSConfig {
-		return createRegistryClientWithTLS(settings, logger, installClient)
+		return createRegistryClientWithTLS(settings, installClient)
 	}
 
 	return createBasicRegistryClient(settings, installClient.PlainHTTP)
@@ -101,7 +100,7 @@ func createBasicRegistryClient(settings *cli.EnvSettings, plainHTTP bool) (*regi
 }
 
 // createRegistryClientWithTLS creates a registry client with TLS configuration.
-func createRegistryClientWithTLS(settings *cli.EnvSettings, logger *slog.Logger, installClient *action.Install) (*registry.Client, error) {
+func createRegistryClientWithTLS(settings *cli.EnvSettings, installClient *action.Install) (*registry.Client, error) {
 	registryClient, err := registry.NewRegistryClientWithTLS(
 		io.Discard,
 		installClient.CertFile,
@@ -184,44 +183,6 @@ func updateDependenciesWithContext(ctx context.Context, manager *downloader.Mana
 	}
 }
 
-func ensureRepository(settings *cli.EnvSettings, name, url string) error {
-	if f, err := repo.LoadFile(settings.RepositoryConfig); err != nil || !f.Has(name) {
-		repoFile := settings.RepositoryConfig
-		f, err := repo.LoadFile(repoFile)
-		if err != nil {
-			f = repo.NewFile()
-		}
-
-		c := &repo.Entry{Name: name, URL: url}
-
-		r, err := repo.NewChartRepository(c, getter.All(settings))
-		if err != nil {
-			return fmt.Errorf("failed to create chart repository: %w", err)
-		}
-
-		if _, err := r.DownloadIndexFile(); err != nil {
-			return fmt.Errorf("failed to download repository index for %s: %w", name, err)
-		}
-
-		f.Update(c)
-
-		if err := f.WriteFile(repoFile, 0644); err != nil {
-			return fmt.Errorf("failed to save repository file: %w", err)
-		}
-	}
-	return nil
-}
-
-// generateRepoName creates a repository name from URL components
-func generateRepoName(host, path string) string {
-	name := strings.ReplaceAll(host, ".", "-")
-	if path != "" {
-		pathName := strings.ReplaceAll(strings.ReplaceAll(path, "/", "-"), ".", "-")
-		name = fmt.Sprintf("%s-%s", name, pathName)
-	}
-	return name
-}
-
 type CredsProvider interface {
 	GetUsername() string
 	GetPassword() string
@@ -267,6 +228,7 @@ func FetchChartOCI(chartRef, chartVersion string, credsProvider CredsProvider, c
 		}
 
 		// Use Helm's built-in OCI support to pull the chart
+		installClient.ChartPathOptions.Version = chartVersion
 		chartPath, err := installClient.ChartPathOptions.LocateChart(chartRef, settings)
 		if err != nil {
 			return "", fmt.Errorf("failed to pull OCI chart: %w", err)
@@ -285,12 +247,19 @@ func fetchHTTPChart(chartRef, chartVersion string, installClient *action.Install
 	cacheKey := GenerateCacheKey(chartRef, chartVersion)
 
 	return chartCache.GetOrFetch(cacheKey, func() (string, error) {
-		resolvedChartRef, err := loadHelmRepository(settings, chartRef)
+		repoURL, chartName, err := splitHTTPChartRef(chartRef)
 		if err != nil {
-			return "", fmt.Errorf("Failed to update repository index: %w", err)
+			return "", err
 		}
 
-		chartPath, err := installClient.ChartPathOptions.LocateChart(resolvedChartRef, settings)
+		installClient.ChartPathOptions.RepoURL = repoURL
+		installClient.ChartPathOptions.Version = chartVersion
+
+		// TODO: ChartPathOptions have attributes for authentication
+		// installClient.ChartPathOptions.Username = ""
+		// installClient.ChartPathOptions.Password = ""
+
+		chartPath, err := installClient.ChartPathOptions.LocateChart(chartName, settings)
 		if err != nil {
 			return "", fmt.Errorf("failed to download HTTP chart: %w", err)
 		}
@@ -304,63 +273,26 @@ func fetchHTTPChart(chartRef, chartVersion string, installClient *action.Install
 	})
 }
 
-func loadHelmRepository(settings *cli.EnvSettings, chartURL string) (string, error) {
-	u, err := url.Parse(chartURL)
+func splitHTTPChartRef(chartRef string) (string, string, error) {
+	u, err := url.Parse(chartRef)
 	if err != nil {
-		return "", fmt.Errorf("invalid chart URL: %w", err)
+		return "", "", fmt.Errorf("invalid chart URL %q: %w", chartRef, err)
 	}
 
-	// Extract repository base URL and chart name
 	pathParts := strings.Split(strings.Trim(u.Path, "/"), "/")
-	if len(pathParts) == 0 {
-		return "", fmt.Errorf("invalid chart URL path")
+	chartName := pathParts[len(pathParts)-1]
+	if chartName == "" {
+		return "", "", fmt.Errorf("chart reference %q is missing a chart name", chartRef)
 	}
 
-	chartName := pathParts[len(pathParts)-1]
-
-	// Build repository URL (remove chart name from path)
-	repoPath := strings.Join(pathParts[:len(pathParts)-1], "/")
 	repoURL := fmt.Sprintf("%s://%s", u.Scheme, u.Host)
-	if repoPath != "" {
+	if repoPath := strings.Join(pathParts[:len(pathParts)-1], "/"); repoPath != "" {
 		repoURL = fmt.Sprintf("%s/%s", repoURL, repoPath)
 	}
 
-	// Generate repository name from URL. Include the port (if non-standard) so
-	// that repos on different ports of the same host get distinct names.
-	host := u.Hostname()
-	if port := u.Port(); port != "" {
-		host = host + "-" + port
-	}
-	repoName := generateRepoName(host, repoPath)
-
-	// Ensure repository is added
-	if err := ensureRepository(settings, repoName, repoURL); err != nil {
-		return "", fmt.Errorf("failed to add repository %s: %w", repoName, err)
-	}
-
-	repoFile := settings.RepositoryConfig
-	f, err := repo.LoadFile(repoFile)
-	if err != nil {
-		return "", fmt.Errorf("failed to load repository file: %w", err)
-	}
-
-	for _, cfg := range f.Repositories {
-		if cfg.Name == repoName {
-			r, err := repo.NewChartRepository(cfg, getter.All(settings))
-			if err != nil {
-				return "", fmt.Errorf("failed to create chart repository: %w", err)
-			}
-
-			if _, err := r.DownloadIndexFile(); err != nil {
-				return "", fmt.Errorf("failed to download repository index for %s: %w", repoName, err)
-			}
-			slog.Info("Updated repository index", "repository", repoName)
-			break
-		}
-	}
-
-	return fmt.Sprintf("%s/%s", repoName, chartName), nil
+	return repoURL, chartName, nil
 }
+
 
 func cacheHelmChart(chartPath, cacheKey string, chartCache *HelmChartCache) (string, error) {
 	// Check if the chart path is a .tgz file or directory

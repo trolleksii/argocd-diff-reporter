@@ -75,27 +75,6 @@ func testdataChart(t *testing.T) string {
 	return filepath.Join(wd, "testdata", "mychart")
 }
 
-// ---- generateRepoName -------------------------------------------------------
-
-func TestGenerateRepoName(t *testing.T) {
-	tests := []struct {
-		host string
-		path string
-		want string
-	}{
-		{"charts.example.com", "stable", "charts-example-com-stable"},
-		{"charts.example.com", "", "charts-example-com"},
-		{"charts.example.com", "my.path", "charts-example-com-my-path"},
-		// dots inside path segment replaced too
-		{"charts.example.com", "a/b.c", "charts-example-com-a-b-c"},
-	}
-
-	for _, tc := range tests {
-		got := generateRepoName(tc.host, tc.path)
-		assert.Equal(t, tc.want, got, "generateRepoName(%q, %q)", tc.host, tc.path)
-	}
-}
-
 // ---- GenerateCacheKey -------------------------------------------------------
 
 func TestGenerateCacheKey_DifferentInputs(t *testing.T) {
