@@ -216,6 +216,11 @@ func setupInstallClient(settings *cli.EnvSettings, chartVersion string) *action.
 func FetchChartHTTPS(chartRef, chartVersion string, credsProvider CredsProvider, cache *HelmChartCache) (string, error) {
 	settings := cli.New()
 	installClient := setupInstallClient(settings, chartVersion)
+	if credsProvider != nil && credsProvider.IsReady() {
+		installClient.ChartPathOptions.Username = credsProvider.GetUsername()
+		installClient.ChartPathOptions.Password = credsProvider.GetPassword()
+	}
+
 	return fetchHTTPChart(chartRef, chartVersion, installClient, settings, cache)
 }
 
@@ -225,6 +230,10 @@ func FetchChartOCI(chartRef, chartVersion string, credsProvider CredsProvider, c
 	}
 	settings := cli.New()
 	installClient := setupInstallClient(settings, chartVersion)
+	if credsProvider != nil && credsProvider.IsReady() {
+		installClient.ChartPathOptions.Username = credsProvider.GetUsername()
+		installClient.ChartPathOptions.Password = credsProvider.GetPassword()
+	}
 
 	cacheKey := GenerateCacheKey(chartRef, chartVersion)
 
@@ -268,10 +277,6 @@ func fetchHTTPChart(chartRef, chartVersion string, installClient *action.Install
 		installClient.ChartPathOptions.RepoURL = repoURL
 		installClient.ChartPathOptions.Version = chartVersion
 
-		// TODO: ChartPathOptions have attributes for authentication
-		// installClient.ChartPathOptions.Username = ""
-		// installClient.ChartPathOptions.Password = ""
-
 		chartPath, err := installClient.ChartPathOptions.LocateChart(chartName, settings)
 		if err != nil {
 			return "", fmt.Errorf("failed to download HTTP chart: %w", err)
@@ -305,7 +310,6 @@ func splitHTTPChartRef(chartRef string) (string, string, error) {
 
 	return repoURL, chartName, nil
 }
-
 
 func cacheHelmChart(chartPath, cacheKey string, chartCache *HelmChartCache) (string, error) {
 	// Check if the chart path is a .tgz file or directory
@@ -474,7 +478,6 @@ func detectKubernetesVersion(settings *cli.EnvSettings) (*chartutil.KubeVersion,
 }
 
 // RenderChart renders a Helm chart to Kubernetes manifests without installing it.
-// Value precedence follows ArgoCD conventions: ValueFiles → Values → Parameters.
 func RenderChart(ctx context.Context, namespace, releaseName, chartPath, chartVersion string, rv RenderValues) (string, error) {
 	if namespace == "" {
 		namespace = "default"
