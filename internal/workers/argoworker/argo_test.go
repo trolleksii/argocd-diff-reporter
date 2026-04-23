@@ -130,6 +130,7 @@ func testHeaders(prNumber, snapshotDir string) internalnats.Headers {
 func helmApp(name, repoURL, path, chart string) appv1alpha1.Application {
 	valuesJSON, _ := json.Marshal(map[string]any{})
 	return appv1alpha1.Application{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Spec: appv1alpha1.ApplicationSpec{
 			Source: &appv1alpha1.ApplicationSource{
 				RepoURL:        repoURL,
@@ -139,6 +140,53 @@ func helmApp(name, repoURL, path, chart string) appv1alpha1.Application {
 				Helm: &appv1alpha1.ApplicationSourceHelm{
 					ReleaseName:  name + "-release",
 					ValuesObject: &runtime.RawExtension{Raw: valuesJSON},
+				},
+			},
+			Destination: appv1alpha1.ApplicationDestination{
+				Namespace: "default",
+			},
+		},
+	}
+}
+
+// helmAppWithParams builds a Helm Application with ValueFiles, Parameters, and Values.
+func helmAppWithParams(name, repoURL, chart string) appv1alpha1.Application {
+	valuesJSON, _ := json.Marshal(map[string]any{"image": map[string]any{"tag": "v1.0.0"}})
+	return appv1alpha1.Application{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: appv1alpha1.ApplicationSpec{
+			Source: &appv1alpha1.ApplicationSource{
+				RepoURL:        repoURL,
+				TargetRevision: "1.0.0",
+				Chart:          chart,
+				Helm: &appv1alpha1.ApplicationSourceHelm{
+					ReleaseName:  name + "-release",
+					ValuesObject: &runtime.RawExtension{Raw: valuesJSON},
+					ValueFiles:   []string{"values-prod.yaml", "values-secrets.yaml"},
+					Parameters: []appv1alpha1.HelmParameter{
+						{Name: "replicas", Value: "3"},
+						{Name: "debug", Value: "true", ForceString: true},
+					},
+				},
+			},
+			Destination: appv1alpha1.ApplicationDestination{
+				Namespace: "production",
+			},
+		},
+	}
+}
+
+// helmAppNoValues builds a Helm Application with no values, valueFiles, or parameters.
+func helmAppNoValues(name, repoURL, chart string) appv1alpha1.Application {
+	return appv1alpha1.Application{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: appv1alpha1.ApplicationSpec{
+			Source: &appv1alpha1.ApplicationSource{
+				RepoURL:        repoURL,
+				TargetRevision: "1.0.0",
+				Chart:          chart,
+				Helm: &appv1alpha1.ApplicationSourceHelm{
+					ReleaseName: name + "-release",
 				},
 			},
 			Destination: appv1alpha1.ApplicationDestination{
@@ -1188,5 +1236,83 @@ func TestRouteApp_Kustomize_Patches(t *testing.T) {
 		assert.Nil(t, decoded.Kustomize.Patches[1].Target, "patch 1 target should be nil")
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for ArgoDirectoryGitParsed message for kustomize patches")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Helm ValueFiles + Parameters propagation
+// ---------------------------------------------------------------------------
+
+func TestRouteApp_Helm_ParametersAndValueFiles(t *testing.T) {
+	rendererFunc := func(_ appv1alpha1.ApplicationSet) ([]appv1alpha1.Application, error) {
+		return []appv1alpha1.Application{
+			helmAppWithParams("helm-params", "oci://registry.example.com/charts", "my-chart"),
+		}, nil
+	}
+	w, bus := newTestArgoWorker(t, rendererFunc)
+	hdrCh, bodyCh := testutil.SubscribeOnceWithBody(t, bus, subjects.ArgoHelmOCIParsed)
+
+	snapshotDir := makeSnapshotDir(t, "applicationset.yaml")
+	specs := []models.FileProcessingSpec{
+		{FileName: "applicationset.yaml", ArtifactName: "apps/applicationset.yaml"},
+	}
+	headers := testHeaders("80", snapshotDir)
+
+	w.handleSnapshottedFiles(context.Background(), headers, makeSpecsPayload(t, specs), testutil.NoopAck, testutil.NoopNak)
+
+	select {
+	case <-hdrCh:
+		body := <-bodyCh
+		decoded, err := internalnats.Unmarshal[models.AppSpec](body)
+		require.NoError(t, err)
+
+		assert.Equal(t, models.SourceType(models.SourceTypeHelm), decoded.SourceType)
+		assert.Equal(t, "helm-params-release", decoded.Helm.ReleaseName)
+		assert.Equal(t, map[string]any{"image": map[string]any{"tag": "v1.0.0"}}, decoded.Helm.Values)
+		assert.Equal(t, []string{"values-prod.yaml", "values-secrets.yaml"}, decoded.Helm.ValueFiles)
+
+		require.Len(t, decoded.Helm.Parameters, 2)
+		assert.Equal(t, "replicas", decoded.Helm.Parameters[0].Name)
+		assert.Equal(t, "3", decoded.Helm.Parameters[0].Value)
+		assert.False(t, decoded.Helm.Parameters[0].ForceString)
+		assert.Equal(t, "debug", decoded.Helm.Parameters[1].Name)
+		assert.Equal(t, "true", decoded.Helm.Parameters[1].Value)
+		assert.True(t, decoded.Helm.Parameters[1].ForceString)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for ArgoHelmOCIParsed message")
+	}
+}
+
+func TestRouteApp_Helm_NoValues_NoPanic(t *testing.T) {
+	rendererFunc := func(_ appv1alpha1.ApplicationSet) ([]appv1alpha1.Application, error) {
+		return []appv1alpha1.Application{
+			helmAppNoValues("helm-empty", "oci://registry.example.com/charts", "my-chart"),
+		}, nil
+	}
+	w, bus := newTestArgoWorker(t, rendererFunc)
+	hdrCh, bodyCh := testutil.SubscribeOnceWithBody(t, bus, subjects.ArgoHelmOCIParsed)
+
+	snapshotDir := makeSnapshotDir(t, "applicationset.yaml")
+	specs := []models.FileProcessingSpec{
+		{FileName: "applicationset.yaml", ArtifactName: "apps/applicationset.yaml"},
+	}
+	headers := testHeaders("81", snapshotDir)
+
+	require.NotPanics(t, func() {
+		w.handleSnapshottedFiles(context.Background(), headers, makeSpecsPayload(t, specs), testutil.NoopAck, testutil.NoopNak)
+	})
+
+	select {
+	case <-hdrCh:
+		body := <-bodyCh
+		decoded, err := internalnats.Unmarshal[models.AppSpec](body)
+		require.NoError(t, err)
+
+		assert.Equal(t, "helm-empty-release", decoded.Helm.ReleaseName)
+		assert.Nil(t, decoded.Helm.Values)
+		assert.Nil(t, decoded.Helm.ValueFiles)
+		assert.Nil(t, decoded.Helm.Parameters)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for ArgoHelmOCIParsed message")
 	}
 }

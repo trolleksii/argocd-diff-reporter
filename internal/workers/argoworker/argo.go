@@ -2,7 +2,6 @@ package argoworker
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -241,15 +240,26 @@ func (w *ArgoWorker) routeApp(ctx context.Context, app appv1alpha1.Application, 
 		}
 
 	case *sourceType == appv1alpha1.ApplicationSourceTypeHelm:
-		// TODO: check values and valueFiles and add support if necessary
-		var values map[string]any
-		if err := json.Unmarshal(app.Spec.Source.Helm.ValuesObject.Raw, &values); err != nil {
-			w.log.Error("failed to unmarshal helm values", "error", err)
-		}
+		h := app.Spec.Source.Helm
 		appSpec.SourceType = models.SourceTypeHelm
 		appSpec.Helm = models.HelmSpec{
-			ReleaseName: app.Spec.Source.Helm.ReleaseName,
-			Values:      values,
+			ReleaseName: h.ReleaseName,
+			ValueFiles:  h.ValueFiles,
+		}
+		if !h.ValuesIsEmpty() {
+			var values map[string]any
+			if err := yaml.Unmarshal(h.ValuesYAML(), &values); err != nil {
+				w.log.Error("failed to unmarshal helm values", "error", err)
+			} else {
+				appSpec.Helm.Values = values
+			}
+		}
+		for _, p := range h.Parameters {
+			appSpec.Helm.Parameters = append(appSpec.Helm.Parameters, models.HelmParameter{
+				Name:        p.Name,
+				Value:       p.Value,
+				ForceString: p.ForceString,
+			})
 		}
 		switch {
 		// Spec with git reference will have non empty path

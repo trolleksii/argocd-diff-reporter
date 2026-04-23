@@ -3,6 +3,7 @@ package helm
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -257,4 +258,51 @@ func TestDetectKubernetesVersion_FallsBackWhenClusterUnreachable(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, want.Version, got.Version, "expected the pinned fallback version")
+}
+
+// ---- RenderChart value merging ---------------------------------------------
+
+func TestRenderChart_WithValues(t *testing.T) {
+	manifest, err := RenderChart(context.Background(), "default", "test", testdataChart(t), "", RenderValues{
+		Values: map[string]any{"key": "from-values"},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, manifest, "key: from-values")
+}
+
+func TestRenderChart_WithValueFiles(t *testing.T) {
+	vf := filepath.Join(t.TempDir(), "values-override.yaml")
+	require.NoError(t, os.WriteFile(vf, []byte("key: from-file\n"), 0o644))
+
+	manifest, err := RenderChart(context.Background(), "default", "test", testdataChart(t), "", RenderValues{
+		ValueFiles: []string{vf},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, manifest, "key: from-file")
+}
+
+func TestRenderChart_WithSetParams(t *testing.T) {
+	manifest, err := RenderChart(context.Background(), "default", "test", testdataChart(t), "", RenderValues{
+		SetParams: []SetParam{{Name: "key", Value: "from-set"}},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, manifest, "key: from-set")
+}
+
+func TestRenderChart_WithSetStringParams(t *testing.T) {
+	manifest, err := RenderChart(context.Background(), "default", "test", testdataChart(t), "", RenderValues{
+		SetParams: []SetParam{{Name: "key", Value: "from-set-string", ForceString: true}},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, manifest, "key: from-set-string")
+}
+
+func TestRenderChart_SetParamsOverrideValues(t *testing.T) {
+	manifest, err := RenderChart(context.Background(), "default", "test", testdataChart(t), "", RenderValues{
+		Values:    map[string]any{"key": "from-values"},
+		SetParams: []SetParam{{Name: "key", Value: "from-set"}},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, manifest, "key: from-set")
+	assert.NotContains(t, manifest, "key: from-values")
 }

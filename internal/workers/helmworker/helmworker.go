@@ -143,7 +143,18 @@ func (w *HelmWorker) handleChartRender(ctx context.Context, headers nats.Headers
 		"revision", spec.Source.Revision)
 
 	chartDir := headers["chart.location"]
-	manifest, err := helm.RenderChart(ctx, spec.Namespace, spec.Helm.ReleaseName, chartDir, spec.Source.Revision, spec.Helm.Values)
+	rv := helm.RenderValues{
+		Values:     spec.Helm.Values,
+		ValueFiles: spec.Helm.ValueFiles,
+	}
+	for _, p := range spec.Helm.Parameters {
+		rv.SetParams = append(rv.SetParams, helm.SetParam{
+			Name:        p.Name,
+			Value:       p.Value,
+			ForceString: p.ForceString,
+		})
+	}
+	manifest, err := helm.RenderChart(ctx, spec.Namespace, spec.Helm.ReleaseName, chartDir, spec.Source.Revision, rv)
 	if err != nil {
 		headers["error.msg"] = err.Error()
 		headers["error.origin.file"] = origin

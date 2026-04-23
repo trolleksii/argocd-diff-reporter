@@ -20,12 +20,26 @@ import (
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/chartutil"
 	"helm.sh/helm/v3/pkg/cli"
+	"helm.sh/helm/v3/pkg/cli/values"
 	"helm.sh/helm/v3/pkg/downloader"
 	"helm.sh/helm/v3/pkg/getter"
 	"helm.sh/helm/v3/pkg/registry"
+	"helm.sh/helm/v3/pkg/strvals"
 )
 
 const fallbackKubeVersion = "v1.34.0"
+
+type SetParam struct {
+	Name        string
+	Value       string
+	ForceString bool
+}
+
+type RenderValues struct {
+	Values     map[string]any
+	ValueFiles []string
+	SetParams  []SetParam
+}
 
 func initActionConfig(settings *cli.EnvSettings) (*action.Configuration, error) {
 	if settings == nil {
@@ -202,7 +216,6 @@ func setupInstallClient(settings *cli.EnvSettings, chartVersion string) *action.
 func FetchChartHTTPS(chartRef, chartVersion string, credsProvider CredsProvider, cache *HelmChartCache) (string, error) {
 	settings := cli.New()
 	installClient := setupInstallClient(settings, chartVersion)
-	// TODO: maybe this should support basicauth in some distant future
 	return fetchHTTPChart(chartRef, chartVersion, installClient, settings, cache)
 }
 
@@ -461,40 +474,31 @@ func detectKubernetesVersion(settings *cli.EnvSettings) (*chartutil.KubeVersion,
 }
 
 // RenderChart renders a Helm chart to Kubernetes manifests without installing it.
-// This is the main public API function that provides a simplified interface for chart rendering.
-// It automatically handles repository management for URL-based chart references.
-func RenderChart(ctx context.Context, namespace, releaseName, chartPath, chartVersion string, releaseValues map[string]any) (string, error) {
-	// Input validation
+// Value precedence follows ArgoCD conventions: ValueFiles → Values → Parameters.
+func RenderChart(ctx context.Context, namespace, releaseName, chartPath, chartVersion string, rv RenderValues) (string, error) {
 	if namespace == "" {
 		namespace = "default"
 	}
 	if releaseName == "" {
 		return "", fmt.Errorf("release name cannot be empty")
 	}
-	if releaseValues == nil {
-		releaseValues = make(map[string]any)
-	}
 
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	// Initialize CLI settings
 	settings := cli.New()
 	settings.SetNamespace(namespace)
 
-	// Initialize action configuration with proper error context
 	actionConfig, err := initActionConfig(settings)
 	if err != nil {
 		return "", fmt.Errorf("failed to initialize Helm action configuration: %w", err)
 	}
 
-	// Parse Kubernetes version with error handling
 	kubeVersion, err := detectKubernetesVersion(settings)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse Kubernetes version: %w", err)
 	}
 
-	// Create and configure install client
 	installClient := action.NewInstall(actionConfig)
 	installClient.DryRunOption = "true"
 	installClient.ReleaseName = releaseName
@@ -504,20 +508,18 @@ func RenderChart(ctx context.Context, namespace, releaseName, chartPath, chartVe
 	installClient.DryRun = true
 	installClient.Replace = true
 	installClient.KubeVersion = kubeVersion
-	installClient.DisableHooks = true // Disable hooks for template rendering
-	installClient.IncludeCRDs = true  // Include CRDs in output
+	installClient.DisableHooks = true
+	installClient.IncludeCRDs = true
 
 	chart, err := loadAndValidateChart(chartPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to load chart from %q: %w", chartPath, err)
 	}
 
-	// Handle dependencies if present
 	if err := resolveDependencies(ctx, chart, chartPath, installClient, settings); err != nil {
 		return "", fmt.Errorf("failed to resolve chart dependencies: %w", err)
 	}
 
-	// Reload chart after dependency resolution
 	if chart.Metadata.Dependencies != nil {
 		if reloadedChart, err := loader.Load(chartPath); err != nil {
 			return "", fmt.Errorf("failed to reload chart after dependency resolution: %w", err)
@@ -526,7 +528,11 @@ func RenderChart(ctx context.Context, namespace, releaseName, chartPath, chartVe
 		}
 	}
 
-	// Run installation in dry-run mode
+	releaseValues, err := mergeHelmValues(rv, settings)
+	if err != nil {
+		return "", fmt.Errorf("failed to merge helm values: %w", err)
+	}
+
 	release, err := installClient.RunWithContext(ctx, chart, releaseValues)
 	if err != nil {
 		return "", fmt.Errorf("failed to render chart templates for %q: %w", releaseName, err)
@@ -537,4 +543,33 @@ func RenderChart(ctx context.Context, namespace, releaseName, chartPath, chartVe
 	}
 
 	return release.Manifest, nil
+}
+
+// mergeHelmValues merges values from all sources in ArgoCD precedence order:
+// ValueFiles (lowest) → Values/ValuesObject → Parameters (highest).
+func mergeHelmValues(rv RenderValues, settings *cli.EnvSettings) (map[string]any, error) {
+	valOpts := values.Options{ValueFiles: rv.ValueFiles}
+	merged, err := valOpts.MergeValues(getter.All(settings))
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve value files: %w", err)
+	}
+
+	if rv.Values != nil {
+		chartutil.CoalesceTables(rv.Values, merged)
+		merged = rv.Values
+	}
+
+	for _, p := range rv.SetParams {
+		if p.ForceString {
+			if err := strvals.ParseIntoString(p.Name+"="+p.Value, merged); err != nil {
+				return nil, fmt.Errorf("failed to apply string parameter %q: %w", p.Name, err)
+			}
+		} else {
+			if err := strvals.ParseInto(p.Name+"="+p.Value, merged); err != nil {
+				return nil, fmt.Errorf("failed to apply parameter %q: %w", p.Name, err)
+			}
+		}
+	}
+
+	return merged, nil
 }

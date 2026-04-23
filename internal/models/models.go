@@ -78,9 +78,17 @@ type AppSource struct {
 	ChartName string `json:"chart,omitempty"`
 }
 
+type HelmParameter struct {
+	Name        string `json:"name"`
+	Value       string `json:"value"`
+	ForceString bool   `json:"forceString,omitempty"`
+}
+
 type HelmSpec struct {
-	ReleaseName string         `json:"release"`
-	Values      map[string]any `json:"values,omitempty"`
+	ReleaseName string          `json:"release"`
+	Values      map[string]any  `json:"values,omitempty"`
+	ValueFiles  []string        `json:"valueFiles,omitempty"`
+	Parameters  []HelmParameter `json:"parameters,omitempty"`
 }
 
 type Progress struct {
