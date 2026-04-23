@@ -80,7 +80,6 @@ func newTestWorker(t *testing.T) (*GitWorker, *internalnats.Bus) {
 	return w, bus
 }
 
-
 // ---------------------------------------------------------------------------
 // Part 1: Pure function tests
 // ---------------------------------------------------------------------------

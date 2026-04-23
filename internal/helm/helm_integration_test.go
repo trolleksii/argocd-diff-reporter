@@ -283,7 +283,7 @@ type noopCredsProvider struct{}
 
 func (n noopCredsProvider) GetUsername() string { return "" }
 func (n noopCredsProvider) GetPassword() string { return "" }
-func (n noopCredsProvider) IsReady() bool        { return false }
+func (n noopCredsProvider) IsReady() bool       { return false }
 
 // TestOCIChartFetch verifies that FetchChartOCI can pull a real chart from a
 // public OCI registry, cache it on disk, and produce a directory that the Helm

@@ -354,7 +354,6 @@ func TestHandleChartRender_RenderFailurePublishesEvent(t *testing.T) {
 	assert.Error(t, getErr, "no manifest should be stored when render fails")
 }
 
-
 func TestHandleChartRender_WithValues_OverridesReflected(t *testing.T) {
 	chartDir := testdataChartPath(t)
 

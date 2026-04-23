@@ -149,7 +149,6 @@ func isKustomizeSpecUnset(k models.KustomizeSpec) bool {
 		len(k.Patches) == 0 && len(k.Components) == 0
 }
 
-
 func (w *DirectoryWorker) renderKustomize(ctx context.Context, spec models.AppSpec, kustomizationDir, key string) error {
 	runDir := kustomizationDir
 	var tempDir string
@@ -157,7 +156,7 @@ func (w *DirectoryWorker) renderKustomize(ctx context.Context, spec models.AppSp
 	if !isKustomizeSpecUnset(spec.Kustomize) {
 		tempDir, err = buildKustomizeOverlay(kustomizationDir, spec.Kustomize)
 		if err != nil {
-			return err 
+			return err
 		}
 		defer os.RemoveAll(tempDir)
 		runDir = tempDir
