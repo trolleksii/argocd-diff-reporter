@@ -1,7 +1,6 @@
 package notifications
 
 import (
-	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -11,6 +10,13 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const (
+	writeWait  = 10 * time.Second
+	pongWait   = 60 * time.Second
+	pingPeriod = 54 * time.Second
+	sendBufSize = 32
+)
+
 // NewRouteFunc returns a function that registers the webhook handler on the provided mux.
 func NewRouteFunc(notifier *NotificationServer) func(*http.ServeMux, *slog.Logger) {
 	return func(mux *http.ServeMux, log *slog.Logger) {
@@ -18,22 +24,26 @@ func NewRouteFunc(notifier *NotificationServer) func(*http.ServeMux, *slog.Logge
 	}
 }
 
+type client struct {
+	conn *websocket.Conn
+	send chan []byte
+}
+
 // NotificationServer handles WebSocket connections for PR report updates
 type NotificationServer struct {
 	log         *slog.Logger
-	subscribers map[string][]*websocket.Conn // PR number -> connections
+	subscribers map[string][]*client
 	mu          sync.RWMutex
 	upgrader    websocket.Upgrader
 }
 
-// NewManager creates a new WebSocket manager
+// NewNotificationServer creates a new WebSocket manager
 func NewNotificationServer(log *slog.Logger) *NotificationServer {
 	return &NotificationServer{
 		log:         log.With("module", "server", "handler", "notification"),
-		subscribers: make(map[string][]*websocket.Conn),
+		subscribers: make(map[string][]*client),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
-				// Allow all origins for now - in production, you should validate origins
 				return true
 			},
 			ReadBufferSize:  1024,
@@ -49,24 +59,28 @@ func (m *NotificationServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		m.log.Error("failed to upgrade connection to WebSocket", "error", err)
 		return
 	}
-	m.subscribe(id, conn)
-	go m.handleConnection(conn, id)
+	c := &client{
+		conn: conn,
+		send: make(chan []byte, sendBufSize),
+	}
+	m.subscribe(id, c)
+	go m.writePump(c, id)
+	go m.readPump(c, id)
 }
 
-// addConnection adds a new connection to the manager
-func (m *NotificationServer) subscribe(id string, conn *websocket.Conn) {
+func (m *NotificationServer) subscribe(id string, c *client) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.subscribers[id] = append(m.subscribers[id], conn)
+	m.subscribers[id] = append(m.subscribers[id], c)
 }
 
-func (m *NotificationServer) unsubscribe(id string, conn *websocket.Conn) {
+func (m *NotificationServer) unsubscribe(id string, c *client) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	subscribers := m.subscribers[id]
-	for i, c := range subscribers {
-		if c == conn {
+	for i, sub := range subscribers {
+		if sub == c {
 			m.subscribers[id] = append(subscribers[:i], subscribers[i+1:]...)
 			break
 		}
@@ -77,56 +91,58 @@ func (m *NotificationServer) unsubscribe(id string, conn *websocket.Conn) {
 	}
 }
 
-func (m *NotificationServer) handleConnection(conn *websocket.Conn, id string) {
+func (m *NotificationServer) readPump(c *client, id string) {
 	defer func() {
-		m.unsubscribe(id, conn)
-		conn.Close()
+		m.unsubscribe(id, c)
+		c.conn.Close()
+		close(c.send)
 	}()
 
-	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-	conn.SetPongHandler(func(string) error {
-		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	c.conn.SetReadDeadline(time.Now().Add(pongWait))
+	c.conn.SetPongHandler(func(string) error {
+		c.conn.SetReadDeadline(time.Now().Add(pongWait))
 		return nil
 	})
 
-	// Start ping ticker
-	ticker := time.NewTicker(54 * time.Second)
-	defer ticker.Stop()
-
-	// Handle ping/pong and connection management
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go func() {
-		for {
-			select {
-			case <-ticker.C:
-				conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-					m.log.Error("failed to send ping", "error", err)
-					cancel()
-					return
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
 	for {
-		_, _, err := conn.ReadMessage()
+		_, _, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				m.log.Error("websocket connection error", "error", err)
 			}
-			break
+			return
+		}
+	}
+}
+
+func (m *NotificationServer) writePump(c *client, id string) {
+	ticker := time.NewTicker(pingPeriod)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case msg, ok := <-c.send:
+			if !ok {
+				c.conn.WriteControl(websocket.CloseMessage, nil, time.Now().Add(writeWait))
+				return
+			}
+			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := c.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+				m.log.Error("failed to send websocket message", "error", err, "id", id)
+				return
+			}
+		case <-ticker.C:
+			if err := c.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(writeWait)); err != nil {
+				m.log.Error("failed to send ping", "error", err)
+				return
+			}
 		}
 	}
 }
 
 func (m *NotificationServer) Notify(subscriber string, data any) {
 	m.mu.RLock()
-	subscribers := make([]*websocket.Conn, len(m.subscribers[subscriber]))
+	subscribers := make([]*client, len(m.subscribers[subscriber]))
 	copy(subscribers, m.subscribers[subscriber])
 	m.mu.RUnlock()
 
@@ -140,12 +156,11 @@ func (m *NotificationServer) Notify(subscriber string, data any) {
 		return
 	}
 
-	for _, conn := range subscribers {
-		go func(c *websocket.Conn) {
-			c.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if err := c.WriteMessage(websocket.TextMessage, encodedData); err != nil {
-				m.log.Error("failed to send websocket message", "error", err, "id", subscriber)
-			}
-		}(conn)
+	for _, c := range subscribers {
+		select {
+		case c.send <- encodedData:
+		default:
+			m.log.Warn("dropping websocket message, client send buffer full", "id", subscriber)
+		}
 	}
 }
