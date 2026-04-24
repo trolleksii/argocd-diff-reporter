@@ -218,7 +218,12 @@ func (c *Coordinator) handlePREvent(ctx context.Context, headers nats.Headers, d
 		"owner", pr.Owner,
 		"repo", pr.Repo)
 
-	key := fmt.Sprintf("%s.%s.%s", pr.Owner, pr.Repo, pr.Number)
+	key := fmt.Sprintf("%s.%s.%s.%s.%s", pr.Owner, pr.Repo, pr.Number, pr.BaseSHA, pr.HeadSHA)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.store.SetValue(ctx, key, models.Progress{})
+
+	key = fmt.Sprintf("%s.%s.%s", pr.Owner, pr.Repo, pr.Number)
 	c.store.SetValue(ctx, key, pr)
 	c.index.Update(pr)
 	c.store.SetValue(ctx, "index", c.index.GetElements())
@@ -252,15 +257,12 @@ func (c *Coordinator) handleTotalAppUpdate(ctx context.Context, headers nats.Hea
 	key := fmt.Sprintf("%s.%s.%s.%s.%s", owner, repo, number, baseSha, headSha)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	progress, err := nats.GetValue[models.Progress](ctx, c.store, key)
-	if err != nil {
-		progress = models.Progress{}
-	}
+	progress, _ := nats.GetValue[models.Progress](ctx, c.store, key)
 
 	// events might come from either base or head commit
 	// whichever recorded more apps is the winner
 	if total > progress.TotalApps {
-		progress.TotalApps += total
+		progress.TotalApps = total
 		c.store.SetValue(ctx, key, progress)
 	}
 	ack()
@@ -298,7 +300,7 @@ func (c *Coordinator) handleRenderedManifest(ctx context.Context, headers nats.H
 	)
 	baseKey := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, baseSha, origin, appName)
 	headKey := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, headSha, origin, appName)
-	headers.Set("Nats-Msg-Id", owner+repo+baseSha+headKey)
+	//delete(headers, "Nats-Msg-Id")
 	if sha == headSha {
 		c.store.SetValue(ctx, headKey, manifestLocation)
 		if _, err := nats.GetValue[string](ctx, c.store, baseKey); err == nil {
@@ -385,8 +387,7 @@ func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.He
 
 	if progress.TotalApps == progress.ProcessedApps {
 		if data, err := nats.Marshal(pr); err == nil {
-			headSha := headers["pr.sha.head"]
-			headers["Nats-Msg-Id"] = fmt.Sprintf("checks.%s.%s.%s.%s", owner, repo, number, headSha)
+			//delete(headers, "Nats-Msg-Id")
 			c.bus.Publish(ctx, subjects.PRProcessingCompleted, headers, data)
 		} else {
 			c.log.Error("faled to marshall progress data", "error", err)

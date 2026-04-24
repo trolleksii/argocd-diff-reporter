@@ -68,6 +68,42 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		attribute.String("event.type", github.WebHookType(r)),
 	)
 	switch event := event.(type) {
+	case *github.CheckSuiteEvent:
+		if action := event.GetAction(); action != "rerequested" {
+			break
+		}
+		repo := event.GetRepo()
+		owner := repo.GetOwner().GetLogin()
+		repoName := repo.GetName()
+		pr := event.CheckSuite.PullRequests[0]
+		prObj := models.PullRequest{
+			Owner:   owner,
+			Repo:    repoName,
+			Number:  strconv.Itoa(pr.GetNumber()),
+			Title:   pr.GetTitle(),
+			Author:  pr.GetUser().GetLogin(),
+			BaseSHA: pr.GetBase().GetSHA(),
+			HeadSHA: pr.GetHead().GetSHA(),
+			Files:   make(map[string]models.FileResult),
+		}
+
+		span.SetAttributes(
+			attribute.String("pr.number", prObj.Number),
+			attribute.String("pr.title", prObj.Title),
+			attribute.String("pr.author", prObj.Author),
+			attribute.String("pr.baseSha", prObj.BaseSHA),
+			attribute.String("pr.headSha", prObj.HeadSHA),
+		)
+		var headers nats.Headers = make(map[string]string)
+		otel.GetTextMapPropagator().Inject(trCtx, headers)
+
+		data, err := nats.Marshal(prObj)
+		if err != nil {
+			h.log.Error("failed to marshal pr object", "error", err)
+			span.SetStatus(codes.Error, err.Error())
+			return
+		}
+		h.bus.Publish(trCtx, subjects.WebhookPRChanged, headers, data)
 	case *github.PullRequestEvent:
 		action := event.GetAction()
 		repo := event.GetRepo()

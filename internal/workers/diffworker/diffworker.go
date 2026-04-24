@@ -80,7 +80,7 @@ func (w *DiffWorker) handleDiffReport(ctx context.Context, headers nats.Headers,
 		attribute.String("app.origin", origin),
 	)
 	w.log.Debug("new coordinator.app.ready event", "appName", appName)
-	headers.Set("Nats-Msg-Id", baseSha+headSha+origin+appName)
+	//headers.Set("Nats-Msg-Id", baseSha+headSha+origin+appName)
 
 	data, err := nats.GetObject[string](ctx, w.store, headers["app.from"])
 	if err != nil {
