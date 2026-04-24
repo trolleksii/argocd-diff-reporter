@@ -217,7 +217,7 @@
     <script>
         function handleReportUpdate(event) {
             const reportId = JSON.parse(event.detail.message);
-            window.location.href = `/reports/{{.PRNumber}}/${reportId}`;
+            window.location.href = `/reports/{{.Owner}}/{{.Repo}}/{{.PRNumber}}/${reportId}`;
         }
         document.addEventListener('htmx:wsOpen', function() {
             const indicator = document.getElementById('update-indicator');

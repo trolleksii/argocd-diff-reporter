@@ -131,7 +131,7 @@ func (w *DiffWorker) handleDiffReport(ctx context.Context, headers nats.Headers,
 	}
 	w.bus.Publish(ctx, subjects.DiffReportGenerated, headers, d)
 	nk := fmt.Sprintf("report:%s.%s.%s.%s.%s", owner, repo, number, origin, appName)
-	w.notifier.Notify(nk, report)
+	w.notifier.Notify(nk, fmt.Sprintf("%s:%s:%s:%s", baseSha, headSha, origin, appName))
 	span.SetStatus(codes.Ok, "")
 	ack()
 }
