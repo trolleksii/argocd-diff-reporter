@@ -217,6 +217,7 @@ func FetchChartHTTPS(chartRef, chartVersion string, credsProvider CredsProvider,
 	cacheKey := GenerateCacheKey(chartRef, chartVersion)
 
 	return cache.GetOrFetch(cacheKey, func() (string, error) {
+		slog.Debug("helm cache miss", "ref", chartRef)
 		u, err := url.Parse(chartRef)
 		if err != nil {
 			return "", fmt.Errorf("invalid chart URL %q: %w", chartRef, err)
