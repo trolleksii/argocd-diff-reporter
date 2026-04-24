@@ -25,6 +25,7 @@ import (
 	coord "github.com/trolleksii/argocd-diff-reporter/internal/workers/coordinator"
 	"github.com/trolleksii/argocd-diff-reporter/internal/workers/diffworker"
 	"github.com/trolleksii/argocd-diff-reporter/internal/workers/directoryworker"
+	"github.com/trolleksii/argocd-diff-reporter/internal/workers/githubintegration"
 	"github.com/trolleksii/argocd-diff-reporter/internal/workers/gitworker"
 	"github.com/trolleksii/argocd-diff-reporter/internal/workers/helmworker"
 )
@@ -98,6 +99,7 @@ func main() {
 	directoryWorker := directoryworker.New(logger, bus, store)
 	diffWorker := diffworker.New(logger, bus, store, notifier)
 	coordinator := coord.New(cfg.Workers.Coordinator, logger, bus, store, notifier)
+	checks := githubintegration.New(cfg.Workers.GithubChecks, logger, bus, store, auth.GetTokenSource())
 
 	workers := []wrk.Worker{
 		natsSrv,
@@ -108,6 +110,7 @@ func main() {
 		directoryWorker,
 		diffWorker,
 		coordinator,
+		checks,
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)

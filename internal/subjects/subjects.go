@@ -36,6 +36,7 @@ const (
 	// Coordinator subjects
 	CoordinatorAppReady   = "coordinator.app.ready"
 	EmptyManifestRendered = "coordinator.manifest.empty.rendered"
+	PRProcessingCompleted = "coordinator.pr.ready"
 
 	// Diff subjects
 	DiffReportGenerated = "diff.report.generated"

@@ -41,9 +41,10 @@ type GitRepoFilter struct {
 }
 
 type WorkersConfig struct {
-	GitWorker   GitWorkerConfig   `yaml:"gitWorker"`
-	HelmWorker  HelmWorkerConfig  `yaml:"helmWorker"`
-	Coordinator CoordinatorConfig `yaml:"coordinator"`
+	GitWorker    GitWorkerConfig    `yaml:"gitWorker"`
+	HelmWorker   HelmWorkerConfig   `yaml:"helmWorker"`
+	Coordinator  CoordinatorConfig  `yaml:"coordinator"`
+	GithubChecks GithubChecksConfig `yaml:"githubChecks"`
 }
 
 type GitWorkerConfig struct {
@@ -58,6 +59,10 @@ type HelmWorkerConfig struct {
 
 type CoordinatorConfig struct {
 	IndexCapacity int `yaml:"indexCapacity"`
+}
+
+type GithubChecksConfig struct {
+	UIBaseURL string `yaml:"uiBaseUrl"`
 }
 
 type NatsConfig struct {

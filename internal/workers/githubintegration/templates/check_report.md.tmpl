@@ -1,0 +1,37 @@
+## ArgoCD Diff Report
+
+{{- if eq .Status -1 }}
+
+### ❌ Errors
+
+{{range $k, $v := .Files}}{{if $v.Errors}}**{{$k}}**:
+{{range $v.Errors}}- {{.}}
+{{end}}
+{{end}}
+{{- end}}
+{{- end}}
+
+### 📋 Summary
+
+- **Files processed**: {{len .Files}}
+- **Successful**: {{.SuccessCount}}
+{{- if gt .ErrorCount 0}}
+- **Failed**: {{.ErrorCount}}
+{{- end}}
+- **Total applications**: {{.TotalApps}}
+- **Total changes**: {{.TotalChanges}}
+
+{{- if .Files}}
+
+### 📄 File Details
+
+{{range $k, $v := .Files}}{{statusIcon $v}} **{{$k}}** ({{$.Status}})
+{{range $kk, $vv := $v.Apps}}- {{diffIcon $vv.DiffStats.DiffCount}} [{{$kk}}]({{report $k $kk}}): {{$vv.DiffStats.DiffCount}} change(s)
+{{end}}
+{{- range $v.Errors}}  - ❌ {{.}}
+{{end}}
+{{end}}
+{{- end}}
+
+---
+*Generated at {{now}}*

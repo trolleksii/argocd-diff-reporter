@@ -355,6 +355,7 @@ func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.He
 	if err != nil {
 		c.log.Error("failed to unmarshal diffstats", "error", err)
 		nak()
+		return
 	}
 	if f, ok := pr.Files[origin]; ok {
 		if a, ok := f.Apps[appName]; ok {
@@ -376,15 +377,26 @@ func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.He
 	if err != nil {
 		c.log.Error("failed to unmarshal progress object", "error", err)
 		nak()
+		return
 	}
 	progress.ProcessedApps += 1
 	c.log.Info("progress updated", "owner", owner, "repo", repo, "number", number, "progress", progress)
 	c.store.SetValue(ctx, progressId, progress)
-	if pr.Status == models.PipelineInProgress && progress.TotalApps == progress.ProcessedApps {
-		pr.Status = models.PipelineSucceeded
-		c.index.UpdateStatus(pr)
-		c.store.SetValue(ctx, "index", c.index.GetElements())
-		c.notifier.Notify("index", c.index.GetElements())
+
+	if progress.TotalApps == progress.ProcessedApps {
+		if data, err := nats.Marshal(pr); err == nil {
+			headSha := headers["pr.sha.head"]
+			headers["Nats-Msg-Id"] = fmt.Sprintf("checks.%s.%s.%s.%s", owner, repo, number, headSha)
+			c.bus.Publish(ctx, subjects.PRProcessingCompleted, headers, data)
+		} else {
+			c.log.Error("faled to marshall progress data", "error", err)
+		}
+		if pr.Status == models.PipelineInProgress {
+			pr.Status = models.PipelineSucceeded
+			c.index.UpdateStatus(pr)
+			c.store.SetValue(ctx, "index", c.index.GetElements())
+			c.notifier.Notify("index", c.index.GetElements())
+		}
 	}
 	c.mu.Unlock()
 	c.notifier.Notify("summary:"+key, pr)

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
-	"github.com/google/go-github/v82/github"
 	"github.com/jferrl/go-githubauth"
 	"golang.org/x/oauth2"
 
@@ -42,10 +41,8 @@ func New(ctx context.Context, cfg config.GithubAppConfig, log *slog.Logger) (*Gi
 	return m, nil
 }
 
-// NewAuthenticatedClient returns a ready to used authenticated Github API client
-func NewAuthenticatedClient(ctx context.Context, auth *GithubCredManager) *github.Client {
-	httpClient := oauth2.NewClient(ctx, auth.tokenSource)
-	return github.NewClient(httpClient)
+func (a *GithubCredManager) GetTokenSource() oauth2.TokenSource {
+	return a.tokenSource
 }
 
 func (a *GithubCredManager) GetBasicHTTPAuth() (*githttp.BasicAuth, error) {
