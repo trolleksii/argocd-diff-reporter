@@ -45,7 +45,8 @@ func newTestHelmWorker(t *testing.T) (*HelmWorker, *internalnats.Bus, *internaln
 	require.NoError(t, err, "failed to create NATS test stream")
 
 	log := testutil.NoopLogger()
-	w := New(config.HelmWorkerConfig{}, log, bus, store)
+	cc := helm.NewCredsCache()
+	w := New(config.HelmWorkerConfig{}, log, bus, store, cc)
 	return w, bus, store
 }
 

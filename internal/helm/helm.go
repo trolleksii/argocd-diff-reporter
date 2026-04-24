@@ -198,9 +198,7 @@ func updateDependenciesWithContext(ctx context.Context, manager *downloader.Mana
 }
 
 type CredsProvider interface {
-	GetUsername() string
-	GetPassword() string
-	IsReady() bool
+	GetCreds(string) struct{ Username, Password string }
 }
 
 func setupInstallClient(settings *cli.EnvSettings, chartVersion string) *action.Install {
@@ -209,43 +207,77 @@ func setupInstallClient(settings *cli.EnvSettings, chartVersion string) *action.
 	installClient.Version = chartVersion
 	registryClient, _ := createRegistryClient(settings, logger, installClient)
 	installClient.SetRegistryClient(registryClient)
+	installClient.ChartPathOptions.Version = chartVersion
 	return installClient
 }
 
-// FetchChart fetches a chart based on its reference kind with caching support
 func FetchChartHTTPS(chartRef, chartVersion string, credsProvider CredsProvider, cache *HelmChartCache) (string, error) {
 	settings := cli.New()
 	installClient := setupInstallClient(settings, chartVersion)
-	if credsProvider != nil && credsProvider.IsReady() {
-		installClient.ChartPathOptions.Username = credsProvider.GetUsername()
-		installClient.ChartPathOptions.Password = credsProvider.GetPassword()
-	}
+	cacheKey := GenerateCacheKey(chartRef, chartVersion)
 
-	return fetchHTTPChart(chartRef, chartVersion, installClient, settings, cache)
+	return cache.GetOrFetch(cacheKey, func() (string, error) {
+		u, err := url.Parse(chartRef)
+		if err != nil {
+			return "", fmt.Errorf("invalid chart URL %q: %w", chartRef, err)
+		}
+
+		pathParts := strings.Split(strings.Trim(u.Path, "/"), "/")
+		chartName := pathParts[len(pathParts)-1]
+		if chartName == "" {
+			return "", fmt.Errorf("chart reference %q is missing a chart name", chartRef)
+		}
+
+		repoURL := fmt.Sprintf("%s://%s", u.Scheme, u.Host)
+		if repoPath := strings.Join(pathParts[:len(pathParts)-1], "/"); repoPath != "" {
+			repoURL = fmt.Sprintf("%s/%s", repoURL, repoPath)
+		}
+		installClient.ChartPathOptions.RepoURL = repoURL
+
+		creds := credsProvider.GetCreds(repoURL)
+		installClient.ChartPathOptions.Username = creds.Username
+		installClient.ChartPathOptions.Password = creds.Password
+
+		chartPath, err := installClient.ChartPathOptions.LocateChart(chartName, settings)
+		if err != nil {
+			return "", fmt.Errorf("failed to download HTTP chart: %w", err)
+		}
+
+		finalChartPath, err := cacheHelmChart(chartPath, cacheKey, cache)
+		if err != nil {
+			slog.Error("Failed to cache HTTP chart", "error", err)
+			return chartPath, nil
+		}
+		return finalChartPath, nil
+	})
 }
 
 func FetchChartOCI(chartRef, chartVersion string, credsProvider CredsProvider, cache *HelmChartCache) (string, error) {
-	if !strings.HasPrefix(chartRef, "oci://") {
-		chartRef = "oci://" + chartRef
-	}
 	settings := cli.New()
 	installClient := setupInstallClient(settings, chartVersion)
-	if credsProvider != nil && credsProvider.IsReady() {
-		installClient.ChartPathOptions.Username = credsProvider.GetUsername()
-		installClient.ChartPathOptions.Password = credsProvider.GetPassword()
-	}
-
 	cacheKey := GenerateCacheKey(chartRef, chartVersion)
 
 	return cache.GetOrFetch(cacheKey, func() (string, error) {
 		// Set up registry authentication if credentials are available
-		if credsProvider != nil && credsProvider.IsReady() {
-			registryClient := installClient.GetRegistryClient()
-			if registryClient != nil {
-				err := registryClient.Login(chartRef, registry.LoginOptBasicAuth(credsProvider.GetUsername(), credsProvider.GetPassword()))
-				if err != nil {
-					slog.Error("OCI registry login failed", "error", err)
-				}
+		
+		slog.Debug("helm cache miss", "ref", chartRef)
+		if !strings.HasPrefix(chartRef, "oci://") {
+			chartRef = "oci://" + chartRef
+		}
+		u, err := url.Parse(chartRef)
+		if err != nil {
+			return "", fmt.Errorf("invalid chart URL %q: %w", chartRef, err)
+		}
+
+		creds := credsProvider.GetCreds(u.Host)
+		installClient.ChartPathOptions.Username = creds.Username
+		installClient.ChartPathOptions.Password = creds.Password
+
+		registryClient := installClient.GetRegistryClient()
+		if registryClient != nil {
+			err := registryClient.Login(chartRef, registry.LoginOptBasicAuth(creds.Username, creds.Password))
+			if err != nil {
+				slog.Error("OCI registry login failed", "error", err)
 			}
 		}
 
@@ -263,52 +295,6 @@ func FetchChartOCI(chartRef, chartVersion string, credsProvider CredsProvider, c
 		}
 		return finalChartPath, nil
 	})
-}
-
-func fetchHTTPChart(chartRef, chartVersion string, installClient *action.Install, settings *cli.EnvSettings, chartCache *HelmChartCache) (string, error) {
-	cacheKey := GenerateCacheKey(chartRef, chartVersion)
-
-	return chartCache.GetOrFetch(cacheKey, func() (string, error) {
-		repoURL, chartName, err := splitHTTPChartRef(chartRef)
-		if err != nil {
-			return "", err
-		}
-
-		installClient.ChartPathOptions.RepoURL = repoURL
-		installClient.ChartPathOptions.Version = chartVersion
-
-		chartPath, err := installClient.ChartPathOptions.LocateChart(chartName, settings)
-		if err != nil {
-			return "", fmt.Errorf("failed to download HTTP chart: %w", err)
-		}
-
-		finalChartPath, err := cacheHelmChart(chartPath, cacheKey, chartCache)
-		if err != nil {
-			slog.Error("Failed to cache HTTP chart", "error", err)
-			return chartPath, nil
-		}
-		return finalChartPath, nil
-	})
-}
-
-func splitHTTPChartRef(chartRef string) (string, string, error) {
-	u, err := url.Parse(chartRef)
-	if err != nil {
-		return "", "", fmt.Errorf("invalid chart URL %q: %w", chartRef, err)
-	}
-
-	pathParts := strings.Split(strings.Trim(u.Path, "/"), "/")
-	chartName := pathParts[len(pathParts)-1]
-	if chartName == "" {
-		return "", "", fmt.Errorf("chart reference %q is missing a chart name", chartRef)
-	}
-
-	repoURL := fmt.Sprintf("%s://%s", u.Scheme, u.Host)
-	if repoPath := strings.Join(pathParts[:len(pathParts)-1], "/"); repoPath != "" {
-		repoURL = fmt.Sprintf("%s/%s", repoURL, repoPath)
-	}
-
-	return repoURL, chartName, nil
 }
 
 func cacheHelmChart(chartPath, cacheKey string, chartCache *HelmChartCache) (string, error) {

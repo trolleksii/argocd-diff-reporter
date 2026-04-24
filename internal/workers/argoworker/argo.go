@@ -51,26 +51,66 @@ type ArgoWorker struct {
 	cfg          config.ArgoCDConfig
 	log          *slog.Logger
 	bus          *nats.Bus
+	db           db.ArgoDB
 	rendererFunc AppSetRendererFunc
+	credsCache   CredsCacher
 }
 
-func New(cfg config.ArgoCDConfig, log *slog.Logger, b *nats.Bus, customRendererFunc AppSetRendererFunc) *ArgoWorker {
+type CredsCacher interface {
+	Cache(string, string, string)
+}
+
+func New(cfg config.ArgoCDConfig, log *slog.Logger, b *nats.Bus, customRendererFunc AppSetRendererFunc, credsCache CredsCacher) *ArgoWorker {
 	return &ArgoWorker{
 		cfg:          cfg,
 		log:          log.With("worker", "argo"),
 		bus:          b,
 		rendererFunc: customRendererFunc,
+		credsCache:   credsCache,
 	}
 }
 
 func (w *ArgoWorker) Run(ctx context.Context) error {
 	w.log.Info("starting argo worker...")
 	if w.rendererFunc == nil {
-		fn, err := newDefaultRendererFunc(ctx, w.cfg)
-		if err != nil {
-			return err
+		scheme := runtime.NewScheme()
+		clientgoscheme.AddToScheme(scheme)
+		appv1alpha1.AddToScheme(scheme)
+
+		cfg := ctrl.GetConfigOrDie()
+		if err := appv1alpha1.SetK8SConfigDefaults(cfg); err != nil {
+			return fmt.Errorf("failed to apply k8s config defaults: %w", err)
 		}
-		w.rendererFunc = fn
+
+		k8sClientSet, err := kubernetes.NewForConfig(cfg)
+		if err != nil {
+			return fmt.Errorf("failed to create kubernetes client: %w", err)
+		}
+		dynamicClient, err := dynamic.NewForConfig(cfg)
+		if err != nil {
+			return fmt.Errorf("failed to create dynamic client: %w", err)
+		}
+		ctrlClient, err := ctrlclient.New(cfg, ctrlclient.Options{Scheme: scheme})
+		if err != nil {
+			return fmt.Errorf("failed to create controller-runtime client: %w", err)
+		}
+
+		argoSettingsMgr := argosettings.NewSettingsManager(ctx, k8sClientSet, w.cfg.Namespace)
+		w.db = db.NewDB(w.cfg.Namespace, argoSettingsMgr, k8sClientSet)
+		scmConfig := generators.NewSCMConfig("", nil, true, false, github_app.NewAuthCredentials(w.db.(db.RepoCredsDB)), false)
+		repoClientset := apiclient.NewRepoServerClientset(w.cfg.RepoServerAddr, w.cfg.RepoServerTimeoutSec, apiclient.TLSConfiguration{DisableTLS: true})
+		argoCDService := services.NewArgoCDService(w.db, true, repoClientset, false)
+
+		gen := generators.GetGenerators(
+			ctx, ctrlClient, k8sClientSet, w.cfg.Namespace,
+			argoCDService, dynamicClient, scmConfig,
+		)
+		logctx := logrus.NewEntry(logrus.StandardLogger())
+		logrus.SetOutput(io.Discard)
+		w.rendererFunc = func(appset appv1alpha1.ApplicationSet) ([]appv1alpha1.Application, error) {
+			apps, _, err := template.GenerateApplications(logctx, appset, gen, &utils.Render{}, ctrlClient)
+			return apps, err
+		}
 	}
 	err := w.bus.Consume(ctx, nats.ConsumerConfig{
 		Name:        "argotemplateengine",
@@ -246,6 +286,14 @@ func (w *ArgoWorker) routeApp(ctx context.Context, app appv1alpha1.Application, 
 			ReleaseName: h.ReleaseName,
 			ValueFiles:  h.ValueFiles,
 		}
+		if w.db != nil {
+			r, err := w.db.GetRepository(ctx, app.Spec.Source.RepoURL, app.Spec.Project)
+			if err != nil {
+				w.log.Error("failed to get repository from url", "error", err)
+			}
+			w.log.Debug("stored creds", "repo", app.Spec.Source.RepoURL, "username", r.Username, "password", r.Password)
+			w.credsCache.Cache(app.Spec.Source.RepoURL, r.Username, r.Password)
+		}
 		if !h.ValuesIsEmpty() {
 			var values map[string]any
 			if err := yaml.Unmarshal(h.ValuesYAML(), &values); err != nil {
@@ -288,48 +336,6 @@ func (w *ArgoWorker) routeApp(ctx context.Context, app appv1alpha1.Application, 
 		w.bus.Publish(ctx, subjects.ArgoEmptyParsed, headers, nil)
 	}
 	return nil
-}
-
-func newDefaultRendererFunc(ctx context.Context, c config.ArgoCDConfig) (AppSetRendererFunc, error) {
-	scheme := runtime.NewScheme()
-	clientgoscheme.AddToScheme(scheme)
-	appv1alpha1.AddToScheme(scheme)
-
-	cfg := ctrl.GetConfigOrDie()
-	if err := appv1alpha1.SetK8SConfigDefaults(cfg); err != nil {
-		return nil, fmt.Errorf("failed to apply k8s config defaults: %w", err)
-	}
-
-	k8sClientSet, err := kubernetes.NewForConfig(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create kubernetes client: %w", err)
-	}
-	dynamicClient, err := dynamic.NewForConfig(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create dynamic client: %w", err)
-	}
-	ctrlClient, err := ctrlclient.New(cfg, ctrlclient.Options{Scheme: scheme})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create controller-runtime client: %w", err)
-	}
-
-	argoSettingsMgr := argosettings.NewSettingsManager(ctx, k8sClientSet, c.Namespace)
-	argoCDDB := db.NewDB(c.Namespace, argoSettingsMgr, k8sClientSet)
-	scmConfig := generators.NewSCMConfig("", nil, true, false, github_app.NewAuthCredentials(argoCDDB.(db.RepoCredsDB)), false)
-	tlsConfig := apiclient.TLSConfiguration{DisableTLS: true}
-	repoClientset := apiclient.NewRepoServerClientset(c.RepoServerAddr, c.RepoServerTimeoutSec, tlsConfig)
-	argoCDService := services.NewArgoCDService(argoCDDB, true, repoClientset, false)
-
-	gen := generators.GetGenerators(
-		ctx, ctrlClient, k8sClientSet, c.Namespace,
-		argoCDService, dynamicClient, scmConfig,
-	)
-	logctx := logrus.NewEntry(logrus.StandardLogger())
-	logrus.SetOutput(io.Discard)
-	return func(appset appv1alpha1.ApplicationSet) ([]appv1alpha1.Application, error) {
-		apps, _, err := template.GenerateApplications(logctx, appset, gen, &utils.Render{}, ctrlClient)
-		return apps, err
-	}, nil
 }
 
 func parseFileResources(filePath string) ([]appv1alpha1.ApplicationSet, []appv1alpha1.Application, error) {

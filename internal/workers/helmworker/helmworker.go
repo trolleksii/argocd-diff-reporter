@@ -25,15 +25,16 @@ type HelmWorker struct {
 	bus   *nats.Bus
 	store *nats.Store
 	cache *helm.HelmChartCache
-	creds *helm.CredsProvider
+	creds helm.CredsProvider
 }
 
-func New(cfg config.HelmWorkerConfig, log *slog.Logger, b *nats.Bus, s *nats.Store) *HelmWorker {
+func New(cfg config.HelmWorkerConfig, log *slog.Logger, b *nats.Bus, s *nats.Store, creds helm.CredsProvider) *HelmWorker {
 	return &HelmWorker{
 		cfg:   cfg,
 		log:   log.With("worker", "helm"),
 		bus:   b,
 		store: s,
+		creds: creds,
 	}
 }
 
@@ -92,7 +93,7 @@ func (w *HelmWorker) handleChartFetch(fetchFn func(string, string, helm.CredsPro
 			"revision", spec.Source.Revision)
 		appOrigin := headers["app.origin"]
 		chartRef := fmt.Sprintf("%s/%s", spec.Source.RepoURL, spec.Source.ChartName)
-		chartLocation, err := fetchFn(chartRef, spec.Source.Revision, nil, w.cache)
+		chartLocation, err := fetchFn(chartRef, spec.Source.Revision, w.creds, w.cache)
 		if err != nil {
 			headers["error.origin.file"] = appOrigin
 			headers["error.origin.app"] = spec.AppName

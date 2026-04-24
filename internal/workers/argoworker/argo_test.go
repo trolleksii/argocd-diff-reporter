@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
+	"github.com/trolleksii/argocd-diff-reporter/internal/helm"
 	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 	internalnats "github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/subjects"
@@ -110,7 +111,8 @@ func newTestArgoWorker(t *testing.T, fn AppSetRendererFunc) (*ArgoWorker, *inter
 	err := bus.EnsureStream(ctx, argoTestStream, argoStreamSubjects)
 	require.NoError(t, err, "failed to create NATS test stream")
 
-	w := New(config.ArgoCDConfig{}, testutil.NoopLogger(), bus, fn)
+	cc := helm.NewCredsCache()
+	w := New(config.ArgoCDConfig{}, testutil.NoopLogger(), bus, fn, cc)
 	return w, bus
 }
 

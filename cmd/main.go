@@ -11,6 +11,7 @@ import (
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 	"github.com/trolleksii/argocd-diff-reporter/internal/githubauth"
+	"github.com/trolleksii/argocd-diff-reporter/internal/helm"
 	"github.com/trolleksii/argocd-diff-reporter/internal/logging"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server"
@@ -91,8 +92,9 @@ func main() {
 	}
 
 	gitWorker := gitworker.New(cfg.Workers.GitWorker, logger, auth, bus)
-	argoWorker := argoworker.New(cfg.ArgoCD, logger, bus, nil)
-	helmWorker := helmworker.New(cfg.Workers.HelmWorker, logger, bus, store)
+	credsCache := helm.NewCredsCache()
+	argoWorker := argoworker.New(cfg.ArgoCD, logger, bus, nil, credsCache)
+	helmWorker := helmworker.New(cfg.Workers.HelmWorker, logger, bus, store, credsCache)
 	directoryWorker := directoryworker.New(logger, bus, store)
 	diffWorker := diffworker.New(logger, bus, store, notifier)
 	coordinator := coord.New(cfg.Workers.Coordinator, logger, bus, store, notifier)

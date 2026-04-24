@@ -1,5 +1,4 @@
 //go:build integration
-
 package helm
 
 import (
@@ -150,7 +149,8 @@ func TestHTTPChartFetchAndRender(t *testing.T) {
 	chartRef := srv.URL + "/mychart"
 	chartVersion := "0.1.0"
 
-	chartPath, err := FetchChartHTTPS(chartRef, chartVersion, nil, cache)
+	cc := NewCredsCache()
+	chartPath, err := FetchChartHTTPS(chartRef, chartVersion, cc, cache)
 	require.NoError(t, err)
 	assert.NotEmpty(t, chartPath)
 
@@ -180,7 +180,8 @@ func TestHTTPChartCacheHit(t *testing.T) {
 	chartVersion := "0.1.0"
 
 	// First fetch — should contact the server.
-	path1, err := FetchChartHTTPS(chartRef, chartVersion, nil, cache)
+	cc := NewCredsCache()
+	path1, err := FetchChartHTTPS(chartRef, chartVersion, cc, cache)
 	require.NoError(t, err)
 	require.NotEmpty(t, path1)
 
@@ -188,7 +189,7 @@ func TestHTTPChartCacheHit(t *testing.T) {
 	assert.Positive(t, countAfterFirst, "expected HTTP requests during first fetch")
 
 	// Second fetch — must come from cache, server must not receive new requests.
-	path2, err := FetchChartHTTPS(chartRef, chartVersion, nil, cache)
+	path2, err := FetchChartHTTPS(chartRef, chartVersion, cc, cache)
 	require.NoError(t, err)
 	assert.Equal(t, path1, path2, "second fetch must return same cached path")
 
@@ -276,15 +277,6 @@ func TestGitChartFetchAndRender(t *testing.T) {
 	assert.Equal(t, cachedPath, result)
 }
 
-// noopCredsProvider is a CredsProvider that never attempts authentication.
-// IsReady returns false so FetchChartOCI skips the registry login step,
-// which is sufficient for public OCI registries.
-type noopCredsProvider struct{}
-
-func (n noopCredsProvider) GetUsername() string { return "" }
-func (n noopCredsProvider) GetPassword() string { return "" }
-func (n noopCredsProvider) IsReady() bool       { return false }
-
 // TestOCIChartFetch verifies that FetchChartOCI can pull a real chart from a
 // public OCI registry, cache it on disk, and produce a directory that the Helm
 // chart loader can successfully parse.
@@ -297,7 +289,8 @@ func TestOCIChartFetch(t *testing.T) {
 	chartRef := "public.ecr.aws/karpenter/karpenter"
 	chartVersion := "1.4.0"
 
-	chartPath, err := FetchChartOCI(chartRef, chartVersion, noopCredsProvider{}, cache)
+	cc := NewCredsCache()
+	chartPath, err := FetchChartOCI(chartRef, chartVersion, cc, cache)
 	require.NoError(t, err, "FetchChartOCI must succeed for a public OCI chart")
 	require.NotEmpty(t, chartPath, "returned chart path must not be empty")
 
@@ -325,7 +318,8 @@ func TestHTTPSChartFetch(t *testing.T) {
 	chartRef := "https://argoproj.github.io/argo-helm/argo-cd"
 	chartVersion := "7.8.14"
 
-	chartPath, err := FetchChartHTTPS(chartRef, chartVersion, noopCredsProvider{}, cache)
+	cc := NewCredsCache()
+	chartPath, err := FetchChartHTTPS(chartRef, chartVersion, cc, cache)
 	require.NoError(t, err, "FetchChartHTTPS must succeed for a public HTTPS chart")
 	require.NotEmpty(t, chartPath, "returned chart path must not be empty")
 
