@@ -258,8 +258,6 @@ func FetchChartOCI(chartRef, chartVersion string, credsProvider CredsProvider, c
 	cacheKey := GenerateCacheKey(chartRef, chartVersion)
 
 	return cache.GetOrFetch(cacheKey, func() (string, error) {
-		// Set up registry authentication if credentials are available
-		
 		slog.Debug("helm cache miss", "ref", chartRef)
 		if !strings.HasPrefix(chartRef, "oci://") {
 			chartRef = "oci://" + chartRef
