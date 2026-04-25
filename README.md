@@ -4,16 +4,16 @@ A tool that generates Kubernetes manifest diffs for pull requests that modify Ar
 
 ## Why
 
-You bought the GitOps idea and started using ArgoCD in auto-sync mode for kubernetes deployment but you want full transparency in what will happen in Kubernetes before you hit the merge button in you Pull Requests.
+You bought into the GitOps idea and run ArgoCD in auto-sync mode, but you want full transparency into what will change in your cluster before hitting merge on your Pull Requests.
 Reviewing raw YAML changes in a PR rarely tells the full story — Helm values, Kustomize overlays, and ApplicationSet generators all produce manifests that look nothing like the source files. This tool fills the gap.
 
 
 ## Features
 
 - **ApplicationSet expansion** — automatically generates concrete Applications from ApplicationSets so every generated app gets its own diff
-- **Multi-file, multi-document PRs** - accomodates various possible GitOps layouts, whether you use ApplicationSets, Applications, or mix of both, single-document or multi-document yaml files
+- **Multi-file, multi-document PRs** — accommodates various possible GitOps layouts, whether you use ApplicationSets, Applications, or a mix of both, single-document or multi-document yaml files
 - **Helm, Kustomize, and directory sources** — supports three major sources for ArgoCD Applications.
-- **Private Helm/OCI registries** -  uses repositories configured in the ArgoCD to pull sources from private repositories
+- **Private Helm/OCI registries** — uses repositories configured in ArgoCD to pull sources from private repositories
 - **Interactive web UI** — dashboard of recent PRs, per-PR summary of affected apps, and detailed side-by-side diffs with live progress updates over WebSocket
 - **GitHub Check Runs** — creates a check on each PR with a summary and a link to the full report; supports re-runs via CheckSuite events
 
@@ -32,7 +32,7 @@ Built on top of embedded NATS server for coordination and artifact storage.
 ## Prerequisites
 
 - A **GitHub App** with permissions for Check Runs and webhook events (PullRequest, CheckSuite)
-- Access to an **ArgoCD repo server** (normally you would deploy it in Kubernetes cluster along with your ArgoCD deployment)
+- Access to an **ArgoCD repo server** (normally you would deploy it in a Kubernetes cluster along with your ArgoCD deployment)
 - **Go 1.25+** (to build from source)
 
 ## Configuration
@@ -63,11 +63,16 @@ log:
   format: json
 
 # optional
-# provides a clance into where time is spent during pr processing
+# provides a glance into where time is spent during pr processing
 tracing:
   endpoint: 127.0.0.1:4318
   service: argocd-diff-reporter
   version: v1.0
+
+# optional
+# by default assumes it is deployed in the same namespace as argocd
+argocd:
+  namespace: argocd
 
 workers:
   gitWorker:
@@ -83,6 +88,8 @@ Sensitive values (`appId`, `installationId`, `privateKey`, `webhook.secret`) can
 ## Running
 
 ### Locally
+
+You will need kubeconfig context set to a cluster with ArgoCD.
 
 ```bash
 make local
