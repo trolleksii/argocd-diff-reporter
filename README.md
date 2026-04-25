@@ -4,9 +4,7 @@ A tool that generates Kubernetes manifest diffs for pull requests that modify Ar
 
 ## Why
 
-You bought into the GitOps idea and run ArgoCD in auto-sync mode, but you want full transparency into what will change in your cluster before hitting merge on your Pull Requests.
-Reviewing raw YAML changes in a PR rarely tells the full story — Helm values, Kustomize overlays, and ApplicationSet generators all produce manifests that look nothing like the source files. This tool fills the gap.
-
+You bought into the GitOps idea and run ArgoCD in auto-sync mode, but you want full transparency into what will change in your cluster before hitting merge on your Pull Requests. A single line change in the Application YAML file may cascade into a massive diff across multiple raw manifests. This tool fills the gap in change transparenty.
 
 ## Features
 
