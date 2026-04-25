@@ -1,3 +1,5 @@
-# ArgoCD Diff Reporter
+# ArgoC Diff Reporter
 
-Rewrite from scratch.
+## Description
+
+
