@@ -3,13 +3,14 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	Target  string          `yaml:"targetModule"`
+	Global  GlobalConfig    `yaml:"global"`
 	Nats    NatsConfig      `yaml:"nats"`
 	Server  ServerConfig    `yaml:"server"`
 	Github  GithubAppConfig `yaml:"github"`
@@ -18,6 +19,10 @@ type Config struct {
 	Workers WorkersConfig   `yaml:"workers"`
 	ArgoCD  ArgoCDConfig    `yaml:"argocd"`
 	Tracing TracingConfig   `yaml:"tracing"`
+}
+
+type GlobalConfig struct {
+	StorageDir string `yaml:"storageDir"`
 }
 
 type ArgoCDConfig struct {
@@ -95,17 +100,10 @@ func Load(path string) (*Config, error) {
 	}
 
 	cfg := &Config{
-		Target: "all",
+		Global: GlobalConfig{StorageDir: "."},
 		Log:    LogConfig{Level: "info", Format: "text"},
 		Server: ServerConfig{Addr: "0.0.0.0:8000"},
 		Workers: WorkersConfig{
-			GitWorker: GitWorkerConfig{
-				CloneBaseDir:    "repositories",
-				SnapshotBaseDir: "snapshots",
-			},
-			HelmWorker: HelmWorkerConfig{
-				ChartCacheDir: "charts",
-			},
 			Coordinator: CoordinatorConfig{
 				IndexCapacity: 10,
 			},
@@ -120,10 +118,26 @@ func Load(path string) (*Config, error) {
 	if err := cfg.ApplyEnv(); err != nil {
 		return nil, fmt.Errorf("invalid environment variable: %w", err)
 	}
+	cfg.Expand()
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
 	return cfg, nil
+}
+
+func (c *Config) Expand() {
+	if c.Nats.StoreDir == "" {
+		c.Nats.StoreDir = filepath.Join(c.Global.StorageDir, "nats")
+	}
+	if c.Workers.HelmWorker.ChartCacheDir == "" {
+		c.Workers.HelmWorker.ChartCacheDir = filepath.Join(c.Global.StorageDir, "helm")
+	}
+	if c.Workers.GitWorker.CloneBaseDir == "" {
+		c.Workers.GitWorker.CloneBaseDir = filepath.Join(c.Global.StorageDir, "repositories")
+	}
+	if c.Workers.GitWorker.SnapshotBaseDir == "" {
+		c.Workers.GitWorker.SnapshotBaseDir = filepath.Join(c.Global.StorageDir, "snapshots")
+	}
 }
 
 func (c *Config) ApplyEnv() error {

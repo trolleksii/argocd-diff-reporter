@@ -38,19 +38,16 @@ github:
 	assert.Equal(t, "test-key", cfg.Github.PrivateKey)
 
 	// Defaults applied for unspecified fields
-	assert.Equal(t, "all", cfg.Target)
 	assert.Equal(t, "info", cfg.Log.Level)
 	assert.Equal(t, "text", cfg.Log.Format)
 	assert.Equal(t, "0.0.0.0:8000", cfg.Server.Addr)
 	assert.Equal(t, "repositories", cfg.Workers.GitWorker.CloneBaseDir)
 	assert.Equal(t, "snapshots", cfg.Workers.GitWorker.SnapshotBaseDir)
-	assert.Equal(t, "charts", cfg.Workers.HelmWorker.ChartCacheDir)
 	assert.Equal(t, "argocd-diff-reporter", cfg.Tracing.Service)
 }
 
 func TestLoad_YAMLOverridesDefaults(t *testing.T) {
 	yaml := `
-targetModule: "git"
 log:
   level: "debug"
   format: "json"
@@ -72,7 +69,6 @@ github:
 	cfg, err := Load(writeConfig(t, yaml))
 	require.NoError(t, err)
 
-	assert.Equal(t, "git", cfg.Target)
 	assert.Equal(t, "debug", cfg.Log.Level)
 	assert.Equal(t, "json", cfg.Log.Format)
 	assert.Equal(t, "127.0.0.1:9090", cfg.Server.Addr)

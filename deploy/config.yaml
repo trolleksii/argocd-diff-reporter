@@ -5,12 +5,10 @@ metadata:
   namespace: argocd
 data:
   config.yaml: |
+    global:
+      storageDir: /data
     server:
       addr: 0.0.0.0:8080
-    nats:
-      domain: hub
-      serverName: argocd-diff-reporter
-      storeDir: /data/nats
     webhook:
       repositories:
         - owner: trolleksii
@@ -20,11 +18,9 @@ data:
       format: json
     tracing:
       endpoint: tempo.observability.svc:4318
-      version: v0.1
+      version: v1.0
     workers:
       gitWorker:
-        cloneBaseDir: /data/repositories
-        snapshotBaseDir: /data/snapshots
         fileGlobs: ["system/manifests/argoapps/*.yaml"]
-      helmWorker:
-        chartCacheDir: /data/charts
+      githubChecks:
+        UIBaseURL: https://diff.trollabs.com
