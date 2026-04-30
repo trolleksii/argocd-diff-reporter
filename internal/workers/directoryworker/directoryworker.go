@@ -235,16 +235,16 @@ func isYAMLFile(name string) bool {
 // ([old_name=]name[:tag][@digest]) to a types.Image struct.
 func parseKustomizeImageString(img string) types.Image {
 	var oldName, rest string
-	if idx := strings.Index(img, "="); idx >= 0 {
-		oldName = img[:idx]
-		rest = img[idx+1:]
+	if before, after, found := strings.Cut(img, "="); found {
+		oldName = before
+		rest = after
 	} else {
 		rest = img
 	}
 	var name, tag, digest string
-	if idx := strings.Index(rest, "@"); idx >= 0 {
-		digest = rest[idx+1:]
-		rest = rest[:idx]
+	if before, after, found := strings.Cut(rest, "@"); found {
+		digest = after
+		rest = before
 	}
 	if idx := strings.LastIndex(rest, ":"); idx >= 0 {
 		name = rest[:idx]
