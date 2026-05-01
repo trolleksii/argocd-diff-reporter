@@ -126,7 +126,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		sc := trace.SpanFromContext(trCtx).SpanContext()
 		h.log.Debug("context",
-			"ctx", trCtx,
+			"isValid", sc.IsValid(),
 			"traceId", sc.TraceID().String(),
 			"spanId", sc.SpanID().String(),
 		)
