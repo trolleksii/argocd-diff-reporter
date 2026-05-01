@@ -19,6 +19,8 @@ data:
     tracing:
       endpoint: tempo.observability.svc:4318
       version: v1.0
+    argocd:
+      namespace: argocd
     workers:
       gitWorker:
         fileGlobs: ["system/manifests/argoapps/*.yaml"]
