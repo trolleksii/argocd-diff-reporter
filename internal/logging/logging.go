@@ -1,10 +1,13 @@
 package logging
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
 	"strings"
+
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 )
@@ -27,7 +30,22 @@ func New(cfg config.LogConfig) (*slog.Logger, error) {
 		return nil, fmt.Errorf("unknown log format: %q", cfg.Format)
 	}
 
-	return slog.New(handler), nil
+	return slog.New(&TraceHandler{handler}), nil
+}
+
+type TraceHandler struct {
+	slog.Handler
+}
+
+func (h *TraceHandler) Handle(ctx context.Context, r slog.Record) error {
+	sc := trace.SpanFromContext(ctx).SpanContext()
+	if sc.IsValid() {
+		r.Add(
+			"traceId", sc.TraceID().String(),
+			"spanId", sc.SpanID().String(),
+		)
+	}
+	return h.Handler.Handle(ctx, r)
 }
 
 func parseLevel(s string) (slog.Level, error) {

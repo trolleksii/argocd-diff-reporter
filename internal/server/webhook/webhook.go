@@ -50,14 +50,14 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	payload, err := github.ValidatePayload(r, []byte(h.cfg.Secret))
 	if err != nil {
-		h.log.Error("invalid webhook signature", "error", err)
+		h.log.ErrorContext(trCtx, "invalid webhook signature", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 	event, err := github.ParseWebHook(github.WebHookType(r), payload)
 	if err != nil {
-		h.log.Error("Failed to parse webhook", "error", err)
+		h.log.ErrorContext(trCtx, "Failed to parse webhook", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
@@ -99,7 +99,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		data, err := nats.Marshal(prObj)
 		if err != nil {
-			h.log.Error("failed to marshal pr object", "error", err)
+			h.log.ErrorContext(trCtx, "failed to marshal pr object", "error", err)
 			span.SetStatus(codes.Error, err.Error())
 			return
 		}
@@ -115,7 +115,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			attribute.String("pr.repo", repoName),
 		)
 		if !MatchesRepoFilters(repoName, owner, h.cfg.AllowedRepos) {
-			h.log.Info("event blocked by repo filters",
+			h.log.InfoContext(trCtx, "event blocked by repo filters",
 				"repo", repoName,
 				"owner", owner,
 				"allowedRepos", h.cfg.AllowedRepos)
@@ -142,7 +142,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			otel.GetTextMapPropagator().Inject(trCtx, headers)
 			data, err := nats.Marshal(prObj)
 			if err != nil {
-				h.log.Error("failed to marshal pr object", "error", err)
+				h.log.ErrorContext(trCtx, "failed to marshal pr object", "error", err)
 				span.SetStatus(codes.Error, err.Error())
 				return
 			}
@@ -172,14 +172,14 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 			data, err := nats.Marshal(prObj)
 			if err != nil {
-				h.log.Error("failed to marshal pr object", "error", err)
+				h.log.ErrorContext(trCtx, "failed to marshal pr object", "error", err)
 				span.SetStatus(codes.Error, err.Error())
 				return
 			}
 			h.bus.Publish(trCtx, subjects.WebhookPRChanged, headers, data)
 		}
 	default:
-		h.log.Warn("unknown event type", "etype", github.WebHookType(r))
+		h.log.WarnContext(trCtx, "unknown event type", "etype", github.WebHookType(r))
 	}
 	span.SetStatus(codes.Ok, "")
 }
