@@ -122,6 +122,9 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			span.SetStatus(codes.Ok, "")
 			return
 		}
+		h.log.Info("new event from allowed repo",
+			"repo", repoName,
+			"owner", owner)
 		switch action {
 		case "closed":
 			pr := event.GetPullRequest()

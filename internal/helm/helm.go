@@ -27,7 +27,7 @@ import (
 	"helm.sh/helm/v3/pkg/strvals"
 )
 
-const fallbackKubeVersion = "v1.34.0"
+const fallbackKubeVersion = "v1.34.2"
 
 type SetParam struct {
 	Name        string
