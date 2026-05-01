@@ -23,4 +23,4 @@ data:
       gitWorker:
         fileGlobs: ["system/manifests/argoapps/*.yaml"]
       githubChecks:
-        UIBaseURL: https://diff.trollabs.com
+        uiBaseUrl: https://diff.trollabs.com

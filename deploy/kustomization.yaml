@@ -4,6 +4,7 @@ namespace: argocd
 resources:
 - config.yaml
 - secrets.yaml
+- rbac.yaml
 - statefulset.yaml
 - service.yaml
 - certificate.yaml

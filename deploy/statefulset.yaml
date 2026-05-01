@@ -14,8 +14,9 @@ spec:
       labels:
         app: argocd-diff-reporter
     spec:
+      serviceAccountName: argocd-diff-reporter
       containers:
-      - name: diff-reporte
+      - name: argocd-diff-reporter
         image: trolleksii/argocd-diff-reporter:latest
         imagePullPolicy: IfNotPresent
         env:
