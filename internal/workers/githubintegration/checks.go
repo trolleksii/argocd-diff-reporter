@@ -40,7 +40,7 @@ func New(cfg config.GithubChecksConfig, log *slog.Logger, b *nats.Bus, s *nats.S
 }
 
 func (w *GithubChecks) Run(ctx context.Context) error {
-	w.log.Info("starting github checks integration...")
+	w.log.InfoContext(ctx, "starting github checks integration...")
 	w.client = github.NewClient(oauth2.NewClient(ctx, w.tsrc))
 	err := w.bus.Consume(ctx, nats.ConsumerConfig{
 		Name:       "githubchecks",
@@ -60,7 +60,7 @@ func (w *GithubChecks) Run(ctx context.Context) error {
 func (w *GithubChecks) CreatePendingCheck(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
 	pr, err := nats.Unmarshal[models.PullRequest](data)
 	if err != nil {
-		w.log.Error("failed to unmarshal pr object", "error", err)
+		w.log.ErrorContext(ctx, "failed to unmarshal pr object", "error", err)
 		nak()
 		return
 	}
@@ -75,7 +75,7 @@ func (w *GithubChecks) CreatePendingCheck(ctx context.Context, headers nats.Head
 		DetailsURL: github.Ptr(fmt.Sprintf("%s/pulls/%s/%s/%s", w.cfg.UIBaseURL, pr.Owner, pr.Repo, pr.Number)),
 	})
 	if err != nil {
-		w.log.Error("failed to create a check run", "error", err)
+		w.log.ErrorContext(ctx, "failed to create a check run", "error", err)
 		nak()
 	}
 
@@ -92,12 +92,12 @@ func (w *GithubChecks) UpdateCheckResult(ctx context.Context, headers nats.Heade
 	key := fmt.Sprintf("checks.%s.%s.%s.%s", owner, repo, number, headSHA)
 	checkId, err := nats.GetValue[int64](ctx, w.store, key)
 	if err != nil {
-		w.log.Error("failed to find check id", "owner", owner, "repo", repo, "number", number)
+		w.log.ErrorContext(ctx, "failed to find check id", "owner", owner, "repo", repo, "number", number)
 		nak()
 	}
 	pr, err := nats.Unmarshal[models.PullRequest](data)
 	if err != nil {
-		w.log.Error("failed to unmarshal pr object", "error", err)
+		w.log.ErrorContext(ctx, "failed to unmarshal pr object", "error", err)
 		nak()
 		return
 	}
@@ -146,7 +146,7 @@ func (w *GithubChecks) UpdateCheckResult(ctx context.Context, headers nats.Heade
 		DetailsURL: github.Ptr(fmt.Sprintf("%s/pulls/%s/%s/%s", w.cfg.UIBaseURL, owner, repo, number)),
 	})
 	if err != nil {
-		w.log.Error("failed to update github check status", "error", err)
+		w.log.ErrorContext(ctx, "failed to update github check status", "error", err)
 		nak()
 	}
 	ack()

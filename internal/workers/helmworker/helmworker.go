@@ -39,7 +39,7 @@ func New(cfg config.HelmWorkerConfig, log *slog.Logger, b *nats.Bus, s *nats.Sto
 }
 
 func (w *HelmWorker) Run(ctx context.Context) error {
-	w.log.Info("starting helm worker...")
+	w.log.InfoContext(ctx, "starting helm worker...")
 	c, err := helm.NewChartDiskCache(w.cfg.ChartCacheDir)
 	if err != nil {
 		return err
@@ -73,7 +73,7 @@ func (w *HelmWorker) handleChartFetch(fetchFn func(string, string, helm.CredsPro
 
 		spec, err := nats.Unmarshal[models.AppSpec](data)
 		if err != nil {
-			w.log.Error("failed to unmarshal pr object", "error", err)
+			w.log.ErrorContext(ctx, "failed to unmarshal pr object", "error", err)
 			span.SetStatus(codes.Error, err.Error())
 			nak()
 			return
@@ -85,7 +85,7 @@ func (w *HelmWorker) handleChartFetch(fetchFn func(string, string, helm.CredsPro
 			attribute.String("app.name", spec.AppName),
 			attribute.String("app.origin", headers["app.origin"]),
 		)
-		w.log.Debug("new argo.helm.(oci|http}.parsed event",
+		w.log.Debug("new argo.helm.Context(ctx, oci|http}.parsed event",
 			"app", spec.AppName,
 			"repo", spec.Source.RepoURL,
 			"chart", spec.Source.ChartName,
@@ -98,7 +98,7 @@ func (w *HelmWorker) handleChartFetch(fetchFn func(string, string, helm.CredsPro
 			headers["error.origin.file"] = appOrigin
 			headers["error.origin.app"] = spec.AppName
 			headers["error.msg"] = err.Error()
-			w.log.Error("failed to feth the chart", "error", err)
+			w.log.ErrorContext(ctx, "failed to feth the chart", "error", err)
 			w.bus.Publish(ctx, subjects.HelmChartFetchFailed, headers, nil)
 			ack()
 			return
@@ -125,7 +125,7 @@ func (w *HelmWorker) handleChartRender(ctx context.Context, headers nats.Headers
 	origin := headers["app.origin"]
 	spec, err := nats.Unmarshal[models.AppSpec](data)
 	if err != nil {
-		w.log.Error("failed to unmarshal pr object", "error", err)
+		w.log.ErrorContext(ctx, "failed to unmarshal pr object", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
@@ -138,7 +138,7 @@ func (w *HelmWorker) handleChartRender(ctx context.Context, headers nats.Headers
 		attribute.String("app.name", spec.AppName),
 		attribute.String("app.origin", origin),
 	)
-	w.log.Debug("new *.chart.fetched event",
+	w.log.DebugContext(ctx, "new *.chart.fetched event",
 		"app", spec.AppName,
 		"repo", spec.Source.RepoURL,
 		"revision", spec.Source.Revision)
@@ -160,7 +160,7 @@ func (w *HelmWorker) handleChartRender(ctx context.Context, headers nats.Headers
 		headers["error.msg"] = err.Error()
 		headers["error.origin.file"] = origin
 		headers["error.origin.app"] = spec.AppName
-		w.log.Error("failed to render the manifest", "error", err)
+		w.log.ErrorContext(ctx, "failed to render the manifest", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		w.bus.Publish(ctx, subjects.HelmManifestRenderFailed, headers, nil)
 		ack()
@@ -168,7 +168,7 @@ func (w *HelmWorker) handleChartRender(ctx context.Context, headers nats.Headers
 	}
 	key := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, spec.AppName)
 	if err := w.store.StoreObject(ctx, key, manifest); err != nil {
-		w.log.Error("failed to store the manifest", "error", err)
+		w.log.ErrorContext(ctx, "failed to store the manifest", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return

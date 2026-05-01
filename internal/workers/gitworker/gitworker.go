@@ -54,7 +54,7 @@ func New(cfg config.GitWorkerConfig, log *slog.Logger, auth AuthProvider, b *nat
 }
 
 func (w *GitWorker) Run(ctx context.Context) error {
-	w.log.Info("starting git worker...")
+	w.log.InfoContext(ctx, "starting git worker...")
 	err := w.bus.Consume(ctx, nats.ConsumerConfig{
 		Name:        "gitrepomanager",
 		MaxDeliver:  3,
@@ -83,7 +83,7 @@ func (w *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 
 	pr, err := nats.Unmarshal[models.PullRequest](data)
 	if err != nil {
-		w.log.Error("failed to unmarshal pr object", "error", err)
+		w.log.ErrorContext(ctx, "failed to unmarshal pr object", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
@@ -95,7 +95,7 @@ func (w *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 		attribute.String("pr.baseSha", pr.BaseSHA),
 		attribute.String("pr.headSha", pr.HeadSHA),
 	)
-	w.log.Debug("new webhook.pr.changed event",
+	w.log.DebugContext(ctx, "new webhook.pr.changed event",
 		"prNum", pr.Number,
 		"owner", pr.Owner,
 		"repo", pr.Repo)
@@ -112,7 +112,7 @@ func (w *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 	repoUrl := fmt.Sprintf("https://github.com/%s/%s", pr.Owner, pr.Repo)
 	r, err := w.getOrCreateRepo(ctx, repoUrl)
 	if err != nil {
-		w.log.Error("failed to find git repo", "error", err)
+		w.log.ErrorContext(ctx, "failed to find git repo", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		leafSpan.End()
@@ -123,7 +123,7 @@ func (w *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 	_, leafSpan = tracer.Start(ctx, "ListChangedFiles")
 	changes, err := r.ListChangedFiles(pr.BaseSHA, pr.HeadSHA)
 	if err != nil {
-		w.log.Error("failed to list changed files")
+		w.log.ErrorContext(ctx, "failed to list changed files")
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		leafSpan.End()
@@ -137,7 +137,7 @@ func (w *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 	if len(from) > 0 {
 		data, err := nats.Marshal(from)
 		if err != nil {
-			w.log.Error("failed to marshal base files", "error", err)
+			w.log.ErrorContext(ctx, "failed to marshal base files", "error", err)
 			span.SetStatus(codes.Error, err.Error())
 			nak()
 			return
@@ -150,7 +150,7 @@ func (w *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 	if len(to) > 0 {
 		data, err = nats.Marshal(to)
 		if err != nil {
-			w.log.Error("failed to marshal head files", "error", err)
+			w.log.ErrorContext(ctx, "failed to marshal head files", "error", err)
 			span.SetStatus(codes.Error, err.Error())
 			nak()
 			return
@@ -181,7 +181,7 @@ func (w *GitWorker) handleFilesResolved(ctx context.Context, headers nats.Header
 		attribute.String("pr.number", num),
 		attribute.String("sha.active", sha),
 	)
-	w.log.Debug("new git.files.resolved event",
+	w.log.DebugContext(ctx, "new git.files.resolved event",
 		"prNum", num,
 		"owner", owner,
 		"repo", repo,
@@ -189,7 +189,7 @@ func (w *GitWorker) handleFilesResolved(ctx context.Context, headers nats.Header
 
 	specs, err := nats.Unmarshal[[]models.FileProcessingSpec](data)
 	if err != nil {
-		w.log.Error("failed to unmarshal pr object", "error", err)
+		w.log.ErrorContext(ctx, "failed to unmarshal pr object", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
@@ -197,7 +197,7 @@ func (w *GitWorker) handleFilesResolved(ctx context.Context, headers nats.Header
 	repoUrl := fmt.Sprintf("https://github.com/%s/%s", owner, repo)
 	r, err := w.getOrCreateRepo(ctx, repoUrl)
 	if err != nil {
-		w.log.Error("failed to find git repo", "error", err)
+		w.log.ErrorContext(ctx, "failed to find git repo", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
@@ -208,7 +208,7 @@ func (w *GitWorker) handleFilesResolved(ctx context.Context, headers nats.Header
 	}
 	snapshotPath, err := r.GetOrCreateSnapshot(sha, "", files)
 	if err != nil {
-		w.log.Error("failed to create snapshot", "error", err)
+		w.log.ErrorContext(ctx, "failed to create snapshot", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
@@ -237,7 +237,7 @@ func (w *GitWorker) fetchSource(ctx context.Context, headers nats.Headers, data 
 
 	spec, err := nats.Unmarshal[models.AppSpec](data)
 	if err != nil {
-		w.log.Error("failed to unmarshal pr object", "error", err)
+		w.log.ErrorContext(ctx, "failed to unmarshal pr object", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
@@ -249,7 +249,7 @@ func (w *GitWorker) fetchSource(ctx context.Context, headers nats.Headers, data 
 		attribute.String("app.name", spec.AppName),
 		attribute.String("app.origin", headers["app.origin"]),
 	)
-	w.log.Debug("new snapshot fetch event",
+	w.log.DebugContext(ctx, "new snapshot fetch event",
 		"app", spec.AppName,
 		"repo", spec.Source.RepoURL,
 		"revision", spec.Source.Revision)
@@ -260,7 +260,7 @@ func (w *GitWorker) fetchSource(ctx context.Context, headers nats.Headers, data 
 		headers["error.origin.file"] = appOrigin
 		headers["error.origin.app"] = spec.AppName
 		headers["error.msg"] = err.Error()
-		w.log.Error("failed to find git repo", "error", err)
+		w.log.ErrorContext(ctx, "failed to find git repo", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		w.bus.Publish(ctx, failSubject, headers, nil)
 		ack()
@@ -271,7 +271,7 @@ func (w *GitWorker) fetchSource(ctx context.Context, headers nats.Headers, data 
 		headers["error.origin.file"] = appOrigin
 		headers["error.origin.app"] = spec.AppName
 		headers["error.msg"] = err.Error()
-		w.log.Error("failed to create snapshot", "error", err)
+		w.log.ErrorContext(ctx, "failed to create snapshot", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		w.bus.Publish(ctx, failSubject, headers, nil)
 		ack()

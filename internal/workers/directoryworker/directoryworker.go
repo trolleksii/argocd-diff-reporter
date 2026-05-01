@@ -42,7 +42,7 @@ func New(log *slog.Logger, b *nats.Bus, s *nats.Store) *DirectoryWorker {
 }
 
 func (w *DirectoryWorker) Run(ctx context.Context) error {
-	w.log.Info("starting directory worker...")
+	w.log.InfoContext(ctx, "starting directory worker...")
 	err := w.bus.Consume(ctx, nats.ConsumerConfig{
 		Name:        "directoryworker",
 		MaxDeliver:  3,
@@ -75,7 +75,7 @@ func (w *DirectoryWorker) handleDirectoryRender(ctx context.Context, headers nat
 
 	spec, err := nats.Unmarshal[models.AppSpec](data)
 	if err != nil {
-		w.log.Error("failed to unmarshal pr object", "error", err)
+		w.log.ErrorContext(ctx, "failed to unmarshal pr object", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
@@ -88,7 +88,7 @@ func (w *DirectoryWorker) handleDirectoryRender(ctx context.Context, headers nat
 		attribute.String("app.name", spec.AppName),
 		attribute.String("app.origin", origin),
 	)
-	w.log.Debug("new git.directory.fetched event",
+	w.log.DebugContext(ctx, "new git.directory.fetched event",
 		"app", spec.AppName,
 		"path", spec.Source.Path,
 		"revision", spec.Source.Revision)
@@ -102,7 +102,7 @@ func (w *DirectoryWorker) handleDirectoryRender(ctx context.Context, headers nat
 			headers["error.msg"] = msg
 			headers["error.origin.file"] = origin
 			headers["error.origin.app"] = spec.AppName
-			w.log.Error(msg, "app", spec.AppName, "path", sourcePath)
+			w.log.ErrorContext(ctx, msg, "app", spec.AppName, "path", sourcePath)
 			span.SetStatus(codes.Error, msg)
 			w.bus.Publish(ctx, subjects.DirectoryManifestRenderFailed, headers, nil)
 			ack()
@@ -129,7 +129,7 @@ func (w *DirectoryWorker) handleDirectoryRender(ctx context.Context, headers nat
 		headers["error.msg"] = err.Error()
 		headers["error.origin.file"] = origin
 		headers["error.origin.app"] = spec.AppName
-		w.log.Error("failed to render manifest", "error", err)
+		w.log.ErrorContext(ctx, "failed to render manifest", "error", err)
 		w.bus.Publish(ctx, subjects.DirectoryManifestRenderFailed, headers, nil)
 		ack()
 		return

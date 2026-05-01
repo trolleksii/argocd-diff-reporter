@@ -71,7 +71,7 @@ func New(cfg config.ArgoCDConfig, log *slog.Logger, b *nats.Bus, customRendererF
 }
 
 func (w *ArgoWorker) Run(ctx context.Context) error {
-	w.log.Info("starting argo worker...")
+	w.log.InfoContext(ctx, "starting argo worker...")
 	if w.rendererFunc == nil {
 		scheme := runtime.NewScheme()
 		clientgoscheme.AddToScheme(scheme)
@@ -130,7 +130,7 @@ func (w *ArgoWorker) Run(ctx context.Context) error {
 func (w *ArgoWorker) reportError(ctx context.Context, headers nats.Headers, origin string, e error) {
 	headers["error.origin"] = origin
 	headers["error.msg"] = e.Error()
-	w.log.Error("failed to load file", "error", e)
+	w.log.ErrorContext(ctx, "failed to load file", "error", e)
 	w.bus.Publish(ctx, subjects.ArgoAppGenerationFailed, headers, nil)
 	delete(headers, "error.origin")
 	delete(headers, "error.msg")
@@ -155,7 +155,7 @@ func (w *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.He
 		attribute.String("pr.number", num),
 		attribute.String("sha.active", sha),
 	)
-	w.log.Debug("new git.files.snapshotted event",
+	w.log.DebugContext(ctx, "new git.files.snapshotted event",
 		"prNum", num,
 		"owner", owner,
 		"repo", repo,
@@ -163,7 +163,7 @@ func (w *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.He
 
 	specs, err := nats.Unmarshal[[]models.FileProcessingSpec](data)
 	if err != nil {
-		w.log.Error("failed to unmarshal files", "error", err)
+		w.log.ErrorContext(ctx, "failed to unmarshal files", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
@@ -289,15 +289,15 @@ func (w *ArgoWorker) routeApp(ctx context.Context, app appv1alpha1.Application, 
 		if w.db != nil {
 			r, err := w.db.GetRepository(ctx, app.Spec.Source.RepoURL, app.Spec.Project)
 			if err != nil {
-				w.log.Error("failed to get repository from url", "error", err)
+				w.log.ErrorContext(ctx, "failed to get repository from url", "error", err)
 			}
-			w.log.Debug("stored creds", "repo", app.Spec.Source.RepoURL, "username", r.Username, "password", r.Password)
+			w.log.DebugContext(ctx, "stored creds", "repo", app.Spec.Source.RepoURL, "username", r.Username, "password", r.Password)
 			w.credsCache.Cache(app.Spec.Source.RepoURL, r.Username, r.Password)
 		}
 		if !h.ValuesIsEmpty() {
 			var values map[string]any
 			if err := yaml.Unmarshal(h.ValuesYAML(), &values); err != nil {
-				w.log.Error("failed to unmarshal helm values", "error", err)
+				w.log.ErrorContext(ctx, "failed to unmarshal helm values", "error", err)
 			} else {
 				appSpec.Helm.Values = values
 			}
@@ -326,7 +326,7 @@ func (w *ArgoWorker) routeApp(ctx context.Context, app appv1alpha1.Application, 
 
 	data, err := nats.Marshal(appSpec)
 	if err != nil {
-		w.log.Error("failed to marshal application", "error", err)
+		w.log.ErrorContext(ctx, "failed to marshal application", "error", err)
 		return err
 	}
 	w.bus.Publish(ctx, subject, headers, data)

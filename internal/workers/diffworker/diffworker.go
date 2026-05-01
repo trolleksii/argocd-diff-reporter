@@ -39,7 +39,7 @@ func New(log *slog.Logger, b *nats.Bus, s *nats.Store, n *notifications.Notifica
 }
 
 func (w *DiffWorker) Run(ctx context.Context) error {
-	w.log.Info("starting diffworker...")
+	w.log.InfoContext(ctx, "starting diffworker...")
 	err := w.bus.Consume(ctx, nats.ConsumerConfig{
 		Name:        "diffworker",
 		MaxDeliver:  3,
@@ -79,31 +79,31 @@ func (w *DiffWorker) handleDiffReport(ctx context.Context, headers nats.Headers,
 		attribute.String("app.name", appName),
 		attribute.String("app.origin", origin),
 	)
-	w.log.Debug("new coordinator.app.ready event", "appName", appName)
+	w.log.DebugContext(ctx, "new coordinator.app.ready event", "appName", appName)
 	//headers.Set("Nats-Msg-Id", baseSha+headSha+origin+appName)
 
 	data, err := nats.GetObject[string](ctx, w.store, headers["app.from"])
 	if err != nil {
-		w.log.Error("failed to find from manifest", "error", err, "id", headers["app.from"])
+		w.log.ErrorContext(ctx, "failed to find from manifest", "error", err, "id", headers["app.from"])
 		nak()
 		return
 	}
 	fromDoc, err := reports.LoadManifest(appName, []byte(data))
 	if err != nil {
-		w.log.Error("failed to load from manifest", "error", err, "id", headers["app.from"])
+		w.log.ErrorContext(ctx, "failed to load from manifest", "error", err, "id", headers["app.from"])
 		nak()
 		return
 	}
 
 	data, err = nats.GetObject[string](ctx, w.store, headers["app.to"])
 	if err != nil {
-		w.log.Error("failed to find to manifest", "error", err, "id", headers["app.to"])
+		w.log.ErrorContext(ctx, "failed to find to manifest", "error", err, "id", headers["app.to"])
 		nak()
 		return
 	}
 	toDoc, err := reports.LoadManifest(appName, []byte(data))
 	if err != nil {
-		w.log.Error("failed to load to manifest", "error", err, "id", headers["app.to"])
+		w.log.ErrorContext(ctx, "failed to load to manifest", "error", err, "id", headers["app.to"])
 		nak()
 		return
 	}
@@ -121,12 +121,12 @@ func (w *DiffWorker) handleDiffReport(ctx context.Context, headers nats.Headers,
 	key := fmt.Sprintf("%s.%s.%s.%s.%s.%s.%s", owner, repo, number, baseSha, headSha, origin, appName)
 	reports.WriteDiffReport(w.tplCat, fromDoc, toDoc, excludedPaths, &report)
 	if err := w.store.StoreObject(ctx, key, report); err != nil {
-		w.log.Error("failed to store report", "error", err)
+		w.log.ErrorContext(ctx, "failed to store report", "error", err)
 	}
 	headers["report.id"] = key
 	d, err := nats.Marshal(report.DiffStats)
 	if err != nil {
-		w.log.Error("failed to marshal diffstats message", "error", err)
+		w.log.ErrorContext(ctx, "failed to marshal diffstats message", "error", err)
 		return
 	}
 	w.bus.Publish(ctx, subjects.DiffReportGenerated, headers, d)

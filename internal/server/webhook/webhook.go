@@ -11,7 +11,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
-	"go.opentelemetry.io/otel/trace"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 	"github.com/trolleksii/argocd-diff-reporter/internal/models"
@@ -124,12 +123,6 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		sc := trace.SpanFromContext(trCtx).SpanContext()
-		h.log.Debug("context",
-			"isValid", sc.IsValid(),
-			"traceId", sc.TraceID().String(),
-			"spanId", sc.SpanID().String(),
-		)
 		h.log.InfoContext(trCtx, "new event from allowed repo",
 			"repo", repoName,
 			"owner", owner)

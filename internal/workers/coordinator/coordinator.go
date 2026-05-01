@@ -42,7 +42,7 @@ func New(cfg config.CoordinatorConfig, log *slog.Logger, b *nats.Bus, s *nats.St
 }
 
 func (c *Coordinator) Run(ctx context.Context) error {
-	c.log.Info("starting coordinator...")
+	c.log.InfoContext(ctx, "starting coordinator...")
 	storedState, err := nats.GetValue[[]models.PullRequest](ctx, c.store, "index")
 	if err == nil {
 		c.index.Load(storedState)
@@ -109,7 +109,7 @@ func (c *Coordinator) handleFileErrors(ctx context.Context, headers nats.Headers
 	defer c.mu.Unlock()
 	pr, err := nats.GetValue[models.PullRequest](ctx, c.store, key)
 	if err != nil {
-		c.log.Error("failed to unmarshal files", "error", err)
+		c.log.ErrorContext(ctx, "failed to unmarshal files", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
@@ -157,7 +157,7 @@ func (c *Coordinator) handleAppErrors(ctx context.Context, headers nats.Headers,
 	defer c.mu.Unlock()
 	pr, err := nats.GetValue[models.PullRequest](ctx, c.store, key)
 	if err != nil {
-		c.log.Error("failed to unmarshal files", "error", err)
+		c.log.ErrorContext(ctx, "failed to unmarshal files", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
@@ -203,7 +203,7 @@ func (c *Coordinator) handlePREvent(ctx context.Context, headers nats.Headers, d
 
 	pr, err := nats.Unmarshal[models.PullRequest](data)
 	if err != nil {
-		c.log.Error("failed to unmarshal pr object", "error", err)
+		c.log.ErrorContext(ctx, "failed to unmarshal pr object", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
@@ -213,7 +213,7 @@ func (c *Coordinator) handlePREvent(ctx context.Context, headers nats.Headers, d
 		attribute.String("pr.repo", pr.Repo),
 		attribute.String("pr.number", pr.Number),
 	)
-	c.log.Debug("coordinating webhook.pr.changed event",
+	c.log.DebugContext(ctx, "coordinating webhook.pr.changed event",
 		"prNum", pr.Number,
 		"owner", pr.Owner,
 		"repo", pr.Repo)
@@ -252,7 +252,7 @@ func (c *Coordinator) handleTotalAppUpdate(ctx context.Context, headers nats.Hea
 	)
 	total, err := strconv.Atoi(headers["app.total"])
 	if err != nil {
-		c.log.Error("failed to parse app totals", "error", err)
+		c.log.ErrorContext(ctx, "failed to parse app totals", "error", err)
 	}
 	key := fmt.Sprintf("%s.%s.%s.%s.%s", owner, repo, number, baseSha, headSha)
 	c.mu.Lock()
@@ -293,7 +293,7 @@ func (c *Coordinator) handleRenderedManifest(ctx context.Context, headers nats.H
 		attribute.String("app.name", appName),
 		attribute.String("app.origin", origin),
 	)
-	c.log.Debug("new helm.manifest.rendered event",
+	c.log.DebugContext(ctx, "new helm.manifest.rendered event",
 		"prNum", number,
 		"appName", appName,
 		"sha", sha,
@@ -340,7 +340,7 @@ func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.He
 		attribute.String("app.name", appName),
 		attribute.String("app.origin", origin),
 	)
-	c.log.Debug("new diff.report.generated event",
+	c.log.DebugContext(ctx, "new diff.report.generated event",
 		"owner", owner,
 		"repo", repo,
 		"pr", number,
@@ -349,13 +349,13 @@ func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.He
 	key := fmt.Sprintf("%s.%s.%s", owner, repo, number)
 	pr, err := nats.GetValue[models.PullRequest](ctx, c.store, key)
 	if err != nil {
-		c.log.Error("failed to fetch pull request data", "error", err)
+		c.log.ErrorContext(ctx, "failed to fetch pull request data", "error", err)
 		nak()
 		return
 	}
 	ds, err := nats.Unmarshal[models.DiffStats](data)
 	if err != nil {
-		c.log.Error("failed to unmarshal diffstats", "error", err)
+		c.log.ErrorContext(ctx, "failed to unmarshal diffstats", "error", err)
 		nak()
 		return
 	}
@@ -377,12 +377,12 @@ func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.He
 	progressId := fmt.Sprintf("%s.%s.%s.%s.%s", owner, repo, number, pr.BaseSHA, pr.HeadSHA)
 	progress, err := nats.GetValue[models.Progress](ctx, c.store, progressId)
 	if err != nil {
-		c.log.Error("failed to unmarshal progress object", "error", err)
+		c.log.ErrorContext(ctx, "failed to unmarshal progress object", "error", err)
 		nak()
 		return
 	}
 	progress.ProcessedApps += 1
-	c.log.Info("progress updated", "owner", owner, "repo", repo, "number", number, "progress", progress)
+	c.log.InfoContext(ctx, "progress updated", "owner", owner, "repo", repo, "number", number, "progress", progress)
 	c.store.SetValue(ctx, progressId, progress)
 
 	if progress.TotalApps == progress.ProcessedApps {
@@ -390,7 +390,7 @@ func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.He
 			//delete(headers, "Nats-Msg-Id")
 			c.bus.Publish(ctx, subjects.PRProcessingCompleted, headers, data)
 		} else {
-			c.log.Error("faled to marshall progress data", "error", err)
+			c.log.ErrorContext(ctx, "faled to marshall progress data", "error", err)
 		}
 		if pr.Status == models.PipelineInProgress {
 			pr.Status = models.PipelineSucceeded
@@ -430,7 +430,7 @@ func (c *Coordinator) handleEmptyManifest(ctx context.Context, headers nats.Head
 	)
 	key := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, appName)
 	if err := c.store.StoreObject(ctx, key, "---"); err != nil {
-		c.log.Error("failed to store the manifest", "error", err)
+		c.log.ErrorContext(ctx, "failed to store the manifest", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
