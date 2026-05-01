@@ -30,7 +30,7 @@ Built on top of embedded NATS server for coordination and artifact storage.
 ## Prerequisites
 
 - A **GitHub App** with permissions for Check Runs and webhook events (PullRequest, CheckSuite)
-- Access to an **ArgoCD repo server** (normally you would deploy it in a Kubernetes cluster along with your ArgoCD deployment)
+- RBAC rules to allow access to secrets and configmaps. This is necessary for app to discover secrets with Cluster and Repo credentials necessary to render ApplicationSets and pull charts from private Repositories.
 - **Go 1.25+** (to build from source)
 
 ## Configuration
