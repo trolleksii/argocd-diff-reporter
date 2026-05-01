@@ -37,6 +37,14 @@ type TraceHandler struct {
 	slog.Handler
 }
 
+func (h *TraceHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return &TraceHandler{h.Handler.WithAttrs(attrs)}
+}
+
+func (h *TraceHandler) WithGroup(name string) slog.Handler {
+	return &TraceHandler{h.Handler.WithGroup(name)}
+}
+
 func (h *TraceHandler) Handle(ctx context.Context, r slog.Record) error {
 	sc := trace.SpanFromContext(ctx).SpanContext()
 	if sc.IsValid() {
