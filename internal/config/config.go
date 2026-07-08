@@ -80,6 +80,7 @@ type GithubAppConfig struct {
 	AppID          int64  `yaml:"appId"`
 	InstallationID int64  `yaml:"installationId"`
 	PrivateKey     string `yaml:"privateKey"`
+	Token          string `yaml:"token"`
 }
 
 type LogConfig struct {
@@ -154,6 +155,9 @@ func (c *Config) ApplyEnv() error {
 	if v := os.Getenv("GITHUB_APP_PRIVATE_KEY"); v != "" {
 		c.Github.PrivateKey = v
 	}
+	if v := os.Getenv("GITHUB_TOKEN"); v != "" {
+		c.Github.Token = v
+	}
 	if v := os.Getenv("GITHUB_WEBHOOK_SECRET"); v != "" {
 		c.Webhook.Secret = v
 	}
@@ -170,6 +174,9 @@ func (c *Config) ApplyEnv() error {
 }
 
 func (c *Config) Validate() error {
+	if c.Github.Token != "" {
+		return nil
+	}
 	if c.Github.AppID == 0 {
 		return fmt.Errorf("Github Application ID is required")
 	}

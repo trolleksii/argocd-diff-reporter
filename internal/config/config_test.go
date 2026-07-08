@@ -117,6 +117,16 @@ github:
 	assert.Contains(t, err.Error(), "Private Key")
 }
 
+func TestLoad_TokenOnly(t *testing.T) {
+	yaml := `
+github:
+  token: "ghp_test"
+`
+	cfg, err := Load(writeConfig(t, yaml))
+	require.NoError(t, err)
+	assert.Equal(t, "ghp_test", cfg.Github.Token)
+}
+
 func TestLoad_FileNotFound(t *testing.T) {
 	_, err := Load(filepath.Join(t.TempDir(), "nonexistent.yaml"))
 	require.Error(t, err)
@@ -151,6 +161,15 @@ func TestApplyEnv_OverridesTracingFields(t *testing.T) {
 	assert.Equal(t, "http://otel.example.com", cfg.Tracing.Endpoint)
 	assert.Equal(t, "my-service", cfg.Tracing.Service)
 	assert.Equal(t, "v1.2.3", cfg.Tracing.Version)
+}
+
+func TestApplyEnv_OverridesGithubToken(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "ghp_env")
+
+	cfg := &Config{}
+	require.NoError(t, cfg.ApplyEnv())
+
+	assert.Equal(t, "ghp_env", cfg.Github.Token)
 }
 
 func TestApplyEnv_InvalidAppIDSilentlyIgnored(t *testing.T) {
@@ -199,6 +218,20 @@ func TestValidate_EmptyPrivateKey(t *testing.T) {
 func TestValidate_AllFieldsSet_NoError(t *testing.T) {
 	cfg := &Config{
 		Github: GithubAppConfig{AppID: 1, InstallationID: 2, PrivateKey: "key"},
+	}
+	assert.NoError(t, cfg.Validate())
+}
+
+func TestValidate_TokenAlone_NoError(t *testing.T) {
+	cfg := &Config{
+		Github: GithubAppConfig{Token: "ghp_test"},
+	}
+	assert.NoError(t, cfg.Validate())
+}
+
+func TestValidate_TokenWithPartialAppConfig_NoError(t *testing.T) {
+	cfg := &Config{
+		Github: GithubAppConfig{AppID: 1, Token: "ghp_test"},
 	}
 	assert.NoError(t, cfg.Validate())
 }

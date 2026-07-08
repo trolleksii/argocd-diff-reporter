@@ -48,6 +48,9 @@ github:
   appId: <your-github-app-id>
   installationId: <your-installation-id>
   privateKey: <your-rsa-private-key>   # or set GITHUB_APP_PRIVATE_KEY env var
+  # alternatively, use a personal access token instead of a GitHub App;
+  # takes precedence over app credentials when both are set
+  # token: <your-pat>                  # or set GITHUB_TOKEN env var
 
 webhook:
   secret: <your-webhook-secret>        # or set GITHUB_WEBHOOK_SECRET env var
@@ -81,7 +84,7 @@ workers:
     uiBaseUrl: https://diff-reporter.example.com
 ```
 
-Sensitive values (`appId`, `installationId`, `privateKey`, `webhook.secret`) can be set via environment variables: `GITHUB_APP_ID`, `GITHUB_INSTALLATION_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`.
+Sensitive values (`appId`, `installationId`, `privateKey`, `token`, `webhook.secret`) can be set via environment variables: `GITHUB_APP_ID`, `GITHUB_INSTALLATION_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_TOKEN`, `GITHUB_WEBHOOK_SECRET`.
 
 ## Running
 

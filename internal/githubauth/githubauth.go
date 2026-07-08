@@ -23,16 +23,23 @@ type GithubCredManager struct {
 }
 
 func New(ctx context.Context, cfg config.GithubAppConfig, log *slog.Logger) (*GithubCredManager, error) {
+	m := &GithubCredManager{log: log.With("module", "githubauth")}
+	if cfg.Token != "" {
+		m.tokenSource = oauth2.StaticTokenSource(&oauth2.Token{AccessToken: cfg.Token})
+		m.basicAuth = &githttp.BasicAuth{
+			Username: "x-access-token",
+			Password: cfg.Token,
+		}
+		return m, nil
+	}
+
 	appTokenSource, err := githubauth.NewApplicationTokenSource(cfg.AppID, []byte(cfg.PrivateKey))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create application token source: %w", err)
 	}
 
 	installationTokenSource := githubauth.NewInstallationTokenSource(cfg.InstallationID, appTokenSource)
-	m := &GithubCredManager{
-		tokenSource: installationTokenSource,
-		log:         log.With("module", "githubauth"),
-	}
+	m.tokenSource = installationTokenSource
 	initialDelay, err := m.refreshToken()
 	if err != nil {
 		return nil, err
