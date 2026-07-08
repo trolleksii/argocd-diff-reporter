@@ -283,7 +283,7 @@ func (w *GitWorker) fetchSource(ctx context.Context, headers nats.Headers, data 
 		ack()
 		return
 	}
-	headers["chart.location"] = snapshotDir
+	headers["chart.location"] = filepath.Join(snapshotDir, spec.Source.Path)
 	w.bus.Publish(ctx, successSubject, headers, data)
 	span.SetStatus(codes.Ok, "")
 	ack()
