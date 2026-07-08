@@ -309,12 +309,12 @@ func (c *Coordinator) handleRenderedManifest(ctx context.Context, headers nats.H
 			c.bus.Publish(ctx, subjects.CoordinatorAppReady, headers, nil)
 		}
 	} else {
+		c.store.SetValue(ctx, baseKey, manifestLocation)
 		if _, err := nats.GetValue[string](ctx, c.store, headKey); err == nil {
 			headers["app.from"] = manifestLocation
 			headers["app.to"] = headKey
 			c.bus.Publish(ctx, subjects.CoordinatorAppReady, headers, nil)
 		}
-		c.store.SetValue(ctx, baseKey, manifestLocation)
 	}
 	span.SetStatus(codes.Ok, "")
 	ack()
