@@ -116,21 +116,19 @@ func (b *Bus) Consume(ctx context.Context, cfg ConsumerConfig) error {
 		}
 		hdrs := msg.Headers()
 		var headers Headers = make(map[string]string)
-		if hdrs != nil {
-			for k, vs := range hdrs {
-				if len(vs) > 0 {
-					headers[k] = vs[0]
-				}
+		for k, vs := range hdrs {
+			if len(vs) > 0 {
+				headers[k] = vs[0]
 			}
 		}
 		if sem != nil {
 			sem <- struct{}{} // blocks until a slot is free
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				defer func() { <-sem }()
-				handler(ctx, headers, msg.Data(), msg.Ack, msg.Nak)
-			}()
+			wg.Go(
+				func() {
+					defer func() { <-sem }()
+					handler(ctx, headers, msg.Data(), msg.Ack, msg.Nak)
+				},
+			)
 		} else {
 			handler(ctx, headers, msg.Data(), msg.Ack, msg.Nak)
 		}
