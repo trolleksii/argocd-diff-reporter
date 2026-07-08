@@ -130,7 +130,7 @@ func (w *ArgoWorker) Run(ctx context.Context) error {
 func (w *ArgoWorker) reportError(ctx context.Context, headers nats.Headers, origin string, e error) {
 	headers["error.origin"] = origin
 	headers["error.msg"] = e.Error()
-	w.log.ErrorContext(ctx, "failed to load file", "error", e)
+	w.log.ErrorContext(ctx, "failed to load file", "error", e, "origin", origin)
 	w.bus.Publish(ctx, subjects.ArgoAppGenerationFailed, headers, nil)
 	delete(headers, "error.origin")
 	delete(headers, "error.msg")
