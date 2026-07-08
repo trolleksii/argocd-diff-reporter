@@ -64,6 +64,13 @@ func (w *GithubChecks) CreatePendingCheck(ctx context.Context, headers nats.Head
 		nak()
 		return
 	}
+	trigger := headers["skipChecks"]
+	if trigger == "true" {
+		w.log.InfoContext(ctx, "skipping check run",
+			"owner", pr.Owner, "repo", pr.Repo, "number", pr.Number)
+		ack()
+		return
+	}
 	cr, _, err := w.client.Checks.CreateCheckRun(ctx, pr.Owner, pr.Repo, github.CreateCheckRunOptions{
 		Name:    CheckName,
 		HeadSHA: pr.HeadSHA,
@@ -88,6 +95,13 @@ func (w *GithubChecks) UpdateCheckResult(ctx context.Context, headers nats.Heade
 	owner := headers["pr.owner"]
 	repo := headers["pr.repo"]
 	number := headers["pr.number"]
+	trigger := headers["skipChecks"]
+	if trigger == "true" {
+		w.log.InfoContext(ctx, "skipping check update",
+			"owner", owner, "repo", repo, "number", number)
+		ack()
+		return
+	}
 	headSHA := headers["pr.sha.head"]
 	key := fmt.Sprintf("checks.%s.%s.%s.%s", owner, repo, number, headSHA)
 	checkId, err := nats.GetValue[int64](ctx, w.store, key)
