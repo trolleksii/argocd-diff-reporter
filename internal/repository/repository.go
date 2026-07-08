@@ -103,7 +103,9 @@ func NewRepository(ctx context.Context, url, cloneRootDir, snapshotsRootDir stri
 		return nil, fmt.Errorf("failed to get HTTP auth: %w", err)
 	}
 
-	repo, err := git.PlainClone(cloneDir, false, &git.CloneOptions{Auth: httpAuth, URL: url})
+	// NoCheckout: the worktree is never read — diffs and snapshots are built
+	// from the object store, and checkout dominates clone time on large repos.
+	repo, err := git.PlainClone(cloneDir, false, &git.CloneOptions{Auth: httpAuth, URL: url, NoCheckout: true})
 	if err != nil {
 		return nil, fmt.Errorf("failed to clone repository: %w", err)
 	}
@@ -223,12 +225,16 @@ func (r *Repository) listChangedFiles(base, head string) ([]Change, error) {
 	if err != nil {
 		return changes, err
 	}
+	mergeBases, err := baseCommit.MergeBase(headCommit)
+	if err != nil || len(mergeBases) == 0 {
+		return nil, fmt.Errorf("failed to find merge base: %w", err)
+	}
 
 	headTree, err := headCommit.Tree()
 	if err != nil {
 		return changes, err
 	}
-	baseTree, err := baseCommit.Tree()
+	baseTree, err := mergeBases[0].Tree()
 	if err != nil {
 		return changes, err
 	}
