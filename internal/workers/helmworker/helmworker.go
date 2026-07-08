@@ -85,7 +85,7 @@ func (w *HelmWorker) handleChartFetch(fetchFn func(string, string, helm.CredsPro
 			attribute.String("app.name", spec.AppName),
 			attribute.String("app.origin", headers["app.origin"]),
 		)
-		w.log.Debug("new argo.helm.Context(ctx, oci|http}.parsed event",
+		w.log.Debug("new argo.helm.{oci|http}.parsed event",
 			"app", spec.AppName,
 			"repo", spec.Source.RepoURL,
 			"chart", spec.Source.ChartName,
