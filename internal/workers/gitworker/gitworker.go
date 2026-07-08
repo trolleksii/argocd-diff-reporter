@@ -56,9 +56,11 @@ func New(cfg config.GitWorkerConfig, log *slog.Logger, auth AuthProvider, b *nat
 func (w *GitWorker) Run(ctx context.Context) error {
 	w.log.InfoContext(ctx, "starting git worker...")
 	err := w.bus.Consume(ctx, nats.ConsumerConfig{
-		Name:        "gitrepomanager",
-		MaxDeliver:  3,
-		AckWait:     3 * time.Second,
+		Name:       "gitrepomanager",
+		MaxDeliver: 3,
+		// First-time clone of a large repo can take minutes; AckWait must
+		// outlast it or the message is redelivered and eventually dropped.
+		AckWait:     5 * time.Minute,
 		Concurrency: 2,
 		Routes: []nats.Route{
 			{Subjects: []string{subjects.WebhookPRChanged}, Handler: w.handlePRChanged},
@@ -134,6 +136,10 @@ func (w *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 	_, leafSpan = tracer.Start(ctx, "FilterAndPublishFiles")
 	from, to := filterAndSplitChanges(changes, w.cfg.FileGlobs)
 	defer leafSpan.End()
+	if len(from) == 0 && len(to) == 0 {
+		w.log.InfoContext(ctx, "no changed files match fileGlobs, nothing to report",
+			"prNum", pr.Number, "changedFiles", len(changes), "globs", w.cfg.FileGlobs)
+	}
 	if len(from) > 0 {
 		data, err := nats.Marshal(from)
 		if err != nil {
