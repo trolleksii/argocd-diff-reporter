@@ -58,7 +58,8 @@
             font-weight: 600;
             color: #24292e;
         }
-        input[type="number"] {
+        input[type="number"],
+        input[type="text"] {
             width: 100%;
             padding: 8px 12px;
             border: 1px solid #d0d7de;
@@ -67,10 +68,43 @@
             box-sizing: border-box;
             background-color: #ffffff;
         }
-        input[type="number"]:focus {
+        input[type="number"]:focus,
+        input[type="text"]:focus {
             outline: none;
             border-color: #0969da;
             box-shadow: 0 0 0 3px rgba(9, 105, 218, 0.1);
+        }
+        .pr-dropdown {
+            position: absolute;
+            left: 0;
+            right: 0;
+            background-color: #ffffff;
+            border: 1px solid #d0d7de;
+            border-radius: 6px;
+            max-height: 300px;
+            overflow-y: auto;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            z-index: 100;
+        }
+        .pr-dropdown-item {
+            padding: 8px 12px;
+            cursor: pointer;
+        }
+        .pr-dropdown-item:hover {
+            background-color: #f6f8fa;
+        }
+        .pr-dropdown-item .pr-number {
+            font-weight: 600;
+            color: #0969da;
+        }
+        .pr-dropdown-message {
+            color: #586069;
+            cursor: default;
+        }
+        .form-error {
+            color: #d1242f;
+            margin-top: 10px;
+            display: none;
         }
         .button {
             background-color: #2da44e;
@@ -178,12 +212,28 @@
             <div class="subtitle">ArgoCD Diff Reporter</div>
         </div>
         <div class="form-section">
-            <form action="/pulls/" method="get">
+            <form id="trigger-form">
                 <div class="form-group">
-                    <label for="pr-number">Pull Request Number</label>
-                    <input type="number" id="pr-number" name="pr" placeholder="e.g. 123" min="1" required autofocus>
+                    <label for="pr-repo">Repository (owner/repo)</label>
+                    <input type="text" id="pr-repo" name="repo" placeholder="e.g. my-org/k8s-apps"
+                           pattern="[A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+" required autofocus>
                 </div>
-                <button type="submit" class="button">View PR</button>
+                <div class="form-group">
+                    <label for="pr-author">Author (optional)</label>
+                    <input type="text" id="pr-author" name="author" placeholder="GitHub handle to filter suggestions"
+                           pattern="[A-Za-z0-9_.\-]+" autocomplete="off">
+                </div>
+                <div class="form-group" style="position: relative;">
+                    <label for="pr-number">Pull Request Number</label>
+                    <input type="number" id="pr-number" name="pr" placeholder="e.g. 123" min="1" required autocomplete="off">
+                    <div id="pr-dropdown" class="pr-dropdown" style="display: none;"
+                         hx-get="/api/prs"
+                         hx-include="#pr-repo, #pr-author"
+                         hx-trigger="focus from:#pr-number"
+                         hx-swap="innerHTML"></div>
+                </div>
+                <button type="submit" class="button">Generate Report</button>
+                <div id="trigger-error" class="form-error"></div>
             </form>
         </div>
         <div class="recent-prs">
@@ -215,14 +265,81 @@
             indicator.textContent = 'Disconnected';
             indicator.className = 'ws-indicator disconnected';
         });
-        document.querySelector('form').addEventListener('submit', function(event) {
-            const prNumber = document.getElementById('pr-number').value;
-            if (!prNumber) {
-                event.preventDefault();
-                alert('Please enter a PR number');
+        function splitRepo(value) {
+            const parts = value.trim().split('/');
+            if (parts.length !== 2 || !parts[0] || !parts[1]) {
+                return null;
+            }
+            return {owner: parts[0], repo: parts[1]};
+        }
+        document.getElementById('trigger-form').addEventListener('submit', async function(event) {
+            event.preventDefault();
+            const button = this.querySelector('button');
+            const errorBox = document.getElementById('trigger-error');
+            errorBox.style.display = 'none';
+            const repoParts = splitRepo(document.getElementById('pr-repo').value);
+            if (!repoParts) {
+                errorBox.textContent = 'Repository must be in owner/repo format';
+                errorBox.style.display = 'block';
                 return;
             }
-            this.action = `/pulls/${prNumber}`;
+            button.disabled = true;
+            try {
+                const resp = await fetch('/api/trigger', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        owner: repoParts.owner,
+                        repo: repoParts.repo,
+                        number: parseInt(document.getElementById('pr-number').value, 10)
+                    })
+                });
+                if (resp.status === 202) {
+                    return;
+                }
+                errorBox.textContent = await resp.text();
+                errorBox.style.display = 'block';
+            } catch (err) {
+                errorBox.textContent = 'Request failed: ' + err;
+                errorBox.style.display = 'block';
+            } finally {
+                button.disabled = false;
+            }
+        });
+
+        const numberInput = document.getElementById('pr-number');
+        const dropdown = document.getElementById('pr-dropdown');
+
+        // Items come pre-rendered from GET /api/prs (htmx swap on focus);
+        // this only applies the number-prefix filter and caps visible items.
+        function filterDropdown() {
+            const prefix = numberInput.value;
+            let shown = 0;
+            for (const item of dropdown.querySelectorAll('.pr-dropdown-item')) {
+                const number = item.dataset.number;
+                let visible;
+                if (number === undefined) {
+                    visible = true; // message rows (errors, empty list)
+                } else {
+                    visible = (!prefix || number.startsWith(prefix)) && shown < 10;
+                }
+                item.style.display = visible ? '' : 'none';
+                if (visible) shown++;
+            }
+            dropdown.style.display = (shown > 0 && document.activeElement === numberInput) ? 'block' : 'none';
+        }
+
+        dropdown.addEventListener('htmx:afterSwap', filterDropdown);
+        numberInput.addEventListener('input', filterDropdown);
+        numberInput.addEventListener('blur', function() {
+            setTimeout(() => dropdown.style.display = 'none', 150);
+        });
+        dropdown.addEventListener('mousedown', function(event) {
+            const item = event.target.closest('.pr-dropdown-item');
+            if (item && item.dataset.number !== undefined) {
+                numberInput.value = item.dataset.number;
+                dropdown.style.display = 'none';
+            }
         });
     </script>
 </body>

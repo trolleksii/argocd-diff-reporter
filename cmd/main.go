@@ -16,6 +16,7 @@ import (
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server/notifications"
+	"github.com/trolleksii/argocd-diff-reporter/internal/server/trigger"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server/ui"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server/webhook"
 	"github.com/trolleksii/argocd-diff-reporter/internal/tracing"
@@ -77,18 +78,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	notifier := notifications.NewNotificationServer(logger)
-	httpSrv := server.New(cfg.Server, logger,
-		webhook.NewRouteFunc(cfg.Webhook, bus),
-		ui.NewRouteFunc(store),
-		notifications.NewRouteFunc(notifier),
-	)
-
 	auth, err := githubauth.New(ctx, cfg.Github, logger)
 	if err != nil {
 		logger.Error("failed to create github auth", "error", err)
 		os.Exit(1)
 	}
+
+	notifier := notifications.NewNotificationServer(logger)
+	httpSrv := server.New(cfg.Server, logger,
+		webhook.NewRouteFunc(cfg.Webhook, bus),
+		trigger.NewRouteFunc(bus, auth.GetTokenSource()),
+		ui.NewRouteFunc(store),
+		notifications.NewRouteFunc(notifier),
+	)
 
 	gitWorker := gitworker.New(cfg.Workers.GitWorker, logger, auth, bus)
 	credsCache := helm.NewCredsCache()
