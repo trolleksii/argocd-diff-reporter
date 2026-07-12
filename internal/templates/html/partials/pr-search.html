@@ -1,0 +1,11 @@
+{{if .Error}}
+<div class="pr-dropdown-item pr-dropdown-message">{{.Error}}</div>
+{{else}}
+{{range .PRs}}
+<div class="pr-dropdown-item" data-number="{{.Number}}">
+    <span class="pr-number">#{{.Number}}</span> {{.Title}}
+</div>
+{{else}}
+<div class="pr-dropdown-item pr-dropdown-message">No open PRs found</div>
+{{end}}
+{{end}}

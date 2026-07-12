@@ -15,6 +15,7 @@ var templates map[string]string = map[string]string{
 	"report":      "html/report.html",
 	"table":       "html/partials/table.html",
 	"latestprs":   "html/partials/latest-prs.html",
+	"prsearch":    "html/partials/pr-search.html",
 	"diff-header": "html/partials/diff-header.html",
 	"diff-footer": "html/partials/diff-footer.html",
 	"diff-detail": "html/partials/diff-detail.html",
