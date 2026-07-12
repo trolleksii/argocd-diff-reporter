@@ -55,7 +55,8 @@ func TestCreatePendingCheck_ManualTrigger_SkipsGithub(t *testing.T) {
 	w := newSkipTestWorker(t)
 
 	acked := false
-	w.CreatePendingCheck(context.Background(), nil, manualPRPayload(t),
+	headers := internalnats.Headers{"skipChecks": "true"}
+	w.CreatePendingCheck(context.Background(), headers, manualPRPayload(t),
 		func() error { acked = true; return nil },
 		func() error { t.Error("expected ack, got nak"); return nil },
 	)
@@ -74,6 +75,7 @@ func TestUpdateCheckResult_ManualTrigger_SkipsGithub(t *testing.T) {
 		"pr.repo":     "my-repo",
 		"pr.number":   "42",
 		"pr.sha.head": "head-sha-def",
+		"skipChecks":  "true",
 	}
 	w.UpdateCheckResult(context.Background(), headers, manualPRPayload(t),
 		func() error { acked = true; return nil },
