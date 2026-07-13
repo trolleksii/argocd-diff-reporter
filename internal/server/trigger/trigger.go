@@ -60,7 +60,7 @@ type triggerRequest struct {
 func (h *TriggerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	trCtx, span := tracer.Start(
 		otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header)),
-		"trigger",
+		"manualTrigger",
 	)
 	defer span.End()
 

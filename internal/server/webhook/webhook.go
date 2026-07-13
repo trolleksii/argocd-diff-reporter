@@ -44,7 +44,7 @@ func newWebhookHandler(cfg config.WebhookConfig, log *slog.Logger, b *nats.Bus) 
 func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	trCtx, span := tracer.Start(
 		otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header)),
-		"webhook",
+		"githubWebhook",
 	)
 	defer span.End()
 
