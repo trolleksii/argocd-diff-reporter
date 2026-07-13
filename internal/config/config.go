@@ -92,6 +92,8 @@ type TracingConfig struct {
 	Endpoint string `yaml:"endpoint"`
 	Service  string `yaml:"service"`
 	Version  string `yaml:"version"`
+	// Detail enables fine-grained spans inside handlers; off gives one span per hop.
+	Detail bool `yaml:"detail"`
 }
 
 func Load(path string) (*Config, error) {

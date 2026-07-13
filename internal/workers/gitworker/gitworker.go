@@ -18,6 +18,7 @@ import (
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/repository"
 	"github.com/trolleksii/argocd-diff-reporter/internal/subjects"
+	"github.com/trolleksii/argocd-diff-reporter/internal/tracing"
 )
 
 // RepositoryProvider abstracts the repository operations used by GitWorker.
@@ -110,7 +111,7 @@ func (w *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 	headers["pr.sha.base"] = pr.BaseSHA
 	headers["pr.sha.head"] = pr.HeadSHA
 
-	_, leafSpan := tracer.Start(ctx, "getOrCreateRepo")
+	_, leafSpan := tracing.StartDetail(ctx, tracer, "getOrCreateRepo")
 	repoUrl := fmt.Sprintf("https://github.com/%s/%s", pr.Owner, pr.Repo)
 	r, err := w.getOrCreateRepo(ctx, repoUrl)
 	if err != nil {
@@ -122,7 +123,7 @@ func (w *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 	}
 	leafSpan.End()
 
-	_, leafSpan = tracer.Start(ctx, "ListChangedFiles")
+	_, leafSpan = tracing.StartDetail(ctx, tracer, "ListChangedFiles")
 	changes, err := r.ListChangedFiles(pr.BaseSHA, pr.HeadSHA)
 	if err != nil {
 		w.log.ErrorContext(ctx, "failed to list changed files")
@@ -133,7 +134,7 @@ func (w *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 	}
 	leafSpan.End()
 
-	_, leafSpan = tracer.Start(ctx, "FilterAndPublishFiles")
+	_, leafSpan = tracing.StartDetail(ctx, tracer, "FilterAndPublishFiles")
 	from, to := filterAndSplitChanges(changes, w.cfg.FileGlobs)
 	defer leafSpan.End()
 	if len(from) == 0 && len(to) == 0 {
