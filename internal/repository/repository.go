@@ -104,8 +104,6 @@ func NewRepository(ctx context.Context, url, cloneRootDir, snapshotsRootDir stri
 		return nil, fmt.Errorf("failed to get HTTP auth: %w", err)
 	}
 
-	// NoCheckout: the worktree is never read — diffs and snapshots are built
-	// from the object store, and checkout dominates clone time on large repos.
 	repo, err := git.PlainClone(cloneDir, false, &git.CloneOptions{Auth: httpAuth, URL: url})
 	if err != nil {
 		return nil, fmt.Errorf("failed to clone repository: %w", err)
@@ -145,7 +143,7 @@ func (r *Repository) startQueuePoller(ctx context.Context) {
 
 // ListChangedFiles returns the files that changed between base and head commits.
 // Requests are serialized through the internal queue to preserve order.
-func (r *Repository) ListChangedFiles(ctx context.Context, base, head string) ([]Change, error) {
+func (r *Repository) ListChangedFiles(base, head string) ([]Change, error) {
 	if base == "" || head == "" {
 		return nil, fmt.Errorf("both base and head sha must be set")
 	}
