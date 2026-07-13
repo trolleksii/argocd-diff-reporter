@@ -1,0 +1,68 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: appset-one
+  namespace: argocd
+spec:
+  generators:
+    - list:
+        elements:
+          - cluster: staging
+  template:
+    metadata:
+      name: '{{cluster}}-app-one'
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/example/repo
+        targetRevision: HEAD
+        path: charts/app-one
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: default
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: appset-two
+  namespace: argocd
+spec:
+  generators:
+    - list:
+        elements:
+          - cluster: staging
+  template:
+    metadata:
+      name: '{{cluster}}-app-two'
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/example/repo
+        targetRevision: HEAD
+        path: charts/app-two
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: default
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: appset-three
+  namespace: argocd
+spec:
+  generators:
+    - list:
+        elements:
+          - cluster: staging
+  template:
+    metadata:
+      name: '{{cluster}}-app-three'
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/example/repo
+        targetRevision: HEAD
+        path: charts/app-three
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: default

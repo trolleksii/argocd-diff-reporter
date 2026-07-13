@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -334,6 +335,51 @@ func TestHandleSnapshottedFiles_ArgoTotalUpdated_CorrectCount(t *testing.T) {
 	select {
 	case hdrs := <-totalCh:
 		assert.Equal(t, "2", hdrs["app.total"], "ArgoTotalUpdated header should carry the correct app count")
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for ArgoTotalUpdated message")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Multi-ApplicationSet file — appsets render in parallel
+// ---------------------------------------------------------------------------
+
+func TestHandleSnapshottedFiles_MultiAppSetFile_RendersInParallel(t *testing.T) {
+	// Each render blocks until all three ApplicationSets are in-flight at
+	// once. A sequential implementation times out inside the renderer,
+	// returns errors, and the total below comes out wrong.
+	var entered sync.WaitGroup
+	entered.Add(3)
+	allIn := make(chan struct{})
+	go func() {
+		entered.Wait()
+		close(allIn)
+	}()
+	rendererFunc := func(appSet appv1alpha1.ApplicationSet) ([]appv1alpha1.Application, error) {
+		entered.Done()
+		select {
+		case <-allIn:
+		case <-time.After(2 * time.Second):
+			return nil, fmt.Errorf("render of %s never became concurrent", appSet.Name)
+		}
+		return []appv1alpha1.Application{
+			helmApp(appSet.Name+"-app", "oci://registry.example.com/charts", "", "my-chart"),
+		}, nil
+	}
+	w, bus := newTestArgoWorker(t, rendererFunc)
+	totalCh := testutil.SubscribeOnce(t, bus, subjects.ArgoTotalUpdated)
+
+	snapshotDir := makeSnapshotDir(t, "multi_appsets.yaml")
+	specs := []models.FileProcessingSpec{
+		{FileName: "multi_appsets.yaml", ArtifactName: "apps/multi_appsets.yaml"},
+	}
+	headers := testHeaders("5", snapshotDir)
+
+	w.handleSnapshottedFiles(context.Background(), headers, makeSpecsPayload(t, specs), testutil.NoopAck, testutil.NoopNak)
+
+	select {
+	case hdrs := <-totalCh:
+		assert.Equal(t, "3", hdrs["app.total"], "all three ApplicationSets should render successfully in parallel")
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for ArgoTotalUpdated message")
 	}

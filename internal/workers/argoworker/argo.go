@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	logrus "github.com/sirupsen/logrus"
@@ -176,15 +177,23 @@ func (w *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.He
 			w.reportError(ctx, headers, f.ArtifactName, err)
 			continue
 		}
-		for _, appSet := range appSets {
-			renderedApps, err := w.rendererFunc(appSet)
-			if err != nil {
-				w.reportError(ctx, headers, f.ArtifactName, err)
+		// Render all ApplicationSets in parallel; error reporting and app
+		// routing stay sequential because they mutate the shared headers map.
+		renderedApps := make([][]appv1alpha1.Application, len(appSets))
+		renderErrs := make([]error, len(appSets))
+		var wg sync.WaitGroup
+		for i, appSet := range appSets {
+			wg.Go(func() {
+				renderedApps[i], renderErrs[i] = w.rendererFunc(appSet)
+			})
+		}
+		wg.Wait()
+		for i := range appSets {
+			if renderErrs[i] != nil {
+				w.reportError(ctx, headers, f.ArtifactName, renderErrs[i])
 				continue
 			}
-			for _, a := range renderedApps {
-				apps = append(apps, a)
-			}
+			apps = append(apps, renderedApps[i]...)
 		}
 		if f.ArtifactName != "" {
 			headers["app.origin"] = f.ArtifactName
