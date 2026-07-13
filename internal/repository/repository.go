@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -105,7 +106,7 @@ func NewRepository(ctx context.Context, url, cloneRootDir, snapshotsRootDir stri
 
 	// NoCheckout: the worktree is never read — diffs and snapshots are built
 	// from the object store, and checkout dominates clone time on large repos.
-	repo, err := git.PlainClone(cloneDir, false, &git.CloneOptions{Auth: httpAuth, URL: url, NoCheckout: true})
+	repo, err := git.PlainClone(cloneDir, false, &git.CloneOptions{Auth: httpAuth, URL: url})
 	if err != nil {
 		return nil, fmt.Errorf("failed to clone repository: %w", err)
 	}
@@ -144,7 +145,7 @@ func (r *Repository) startQueuePoller(ctx context.Context) {
 
 // ListChangedFiles returns the files that changed between base and head commits.
 // Requests are serialized through the internal queue to preserve order.
-func (r *Repository) ListChangedFiles(base, head string) ([]Change, error) {
+func (r *Repository) ListChangedFiles(ctx context.Context, base, head string) ([]Change, error) {
 	if base == "" || head == "" {
 		return nil, fmt.Errorf("both base and head sha must be set")
 	}
@@ -206,46 +207,41 @@ func (r *Repository) snapshotExists(dir string) bool {
 }
 
 func (r *Repository) fetchAndListChangedFiles(base, head string) ([]Change, error) {
-	if err := r.fetchRefSpecs([]config.RefSpec{
-		config.RefSpec(fmt.Sprintf("%s:%s", base, base)),
-		config.RefSpec(fmt.Sprintf("%s:%s", head, head)),
-	}); err != nil {
-		return nil, err
+	var refSpecs []config.RefSpec
+	if _, err := r.repo.CommitObject(plumbing.NewHash(head)); err != nil {
+		refSpecs = append(refSpecs, config.RefSpec(fmt.Sprintf("%s:%s", head, head)))
 	}
-	return r.listChangedFiles(base, head)
+	if _, err := r.repo.CommitObject(plumbing.NewHash(base)); err != nil {
+		refSpecs = append(refSpecs, config.RefSpec(fmt.Sprintf("%s:%s", base, base)))
+	}
+	if len(refSpecs) > 0 {
+		if err := r.fetchRefSpecs(refSpecs); err != nil {
+			return nil, err
+		}
+	}
+	c, e := r.listChangedFiles(base, head)
+	return c, e
 }
 
 func (r *Repository) listChangedFiles(base, head string) ([]Change, error) {
+	out, err := exec.Command("git", "-C", r.cloneDir,
+		"diff", "--name-status", "-z", "--no-renames", fmt.Sprintf("%s...%s", base, head)).Output()
+	if err != nil {
+		return nil, fmt.Errorf("git diff %s...%s: %w", base, head, err)
+	}
+
 	var changes []Change
-	headCommit, err := r.repo.CommitObject(plumbing.NewHash(head))
-	if err != nil {
-		return changes, err
-	}
-	baseCommit, err := r.repo.CommitObject(plumbing.NewHash(base))
-	if err != nil {
-		return changes, err
-	}
-	mergeBases, err := baseCommit.MergeBase(headCommit)
-	if err != nil || len(mergeBases) == 0 {
-		return nil, fmt.Errorf("failed to find merge base: %w", err)
-	}
-
-	headTree, err := headCommit.Tree()
-	if err != nil {
-		return changes, err
-	}
-	baseTree, err := mergeBases[0].Tree()
-	if err != nil {
-		return changes, err
-	}
-
-	diff, err := baseTree.Diff(headTree)
-	if err != nil {
-		return changes, err
-	}
-
-	for _, change := range diff {
-		changes = append(changes, Change{From: change.From.Name, To: change.To.Name})
+	fields := strings.Split(strings.TrimRight(string(out), "\x00"), "\x00")
+	for i := 0; i+1 < len(fields); i += 2 {
+		status, path := fields[i], fields[i+1]
+		switch status {
+		case "A":
+			changes = append(changes, Change{To: path})
+		case "D":
+			changes = append(changes, Change{From: path})
+		default: // M, T
+			changes = append(changes, Change{From: path, To: path})
+		}
 	}
 	return changes, nil
 }

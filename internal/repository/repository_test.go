@@ -12,7 +12,6 @@ import (
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/go-git/go-git/v5/storage/memory"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -27,9 +26,12 @@ import (
 func buildFixtureRepo(t *testing.T, snapshotsDir string) (*Repository, string, string) {
 	t.Helper()
 
-	store := memory.NewStorage()
-	r, err := git.Init(store, nil)
+	// On-disk bare repo: listChangedFiles shells out to the git CLI, which
+	// can't read go-git's in-memory storage.
+	cloneDir := t.TempDir()
+	r, err := git.PlainInit(cloneDir, true)
 	require.NoError(t, err)
+	store := r.Storer
 
 	sig := &object.Signature{
 		Name:  "Test Author",
@@ -105,6 +107,7 @@ func buildFixtureRepo(t *testing.T, snapshotsDir string) (*Repository, string, s
 
 	repo := &Repository{
 		repo:         r,
+		cloneDir:     cloneDir,
 		snapshotsDir: snapshotsDir,
 		log:          log,
 		queue:        make(chan request, 8),
