@@ -22,6 +22,7 @@ import (
 	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/subjects"
+	"github.com/trolleksii/argocd-diff-reporter/internal/tracing"
 )
 
 var tracer = otel.Tracer("argocd-diff-reporter/internal/workers/argoworker")
@@ -103,7 +104,10 @@ func (w *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.He
 
 	totalApps := 0
 	for _, f := range specs {
+		_, parseSpan := tracing.StartDetail(ctx, tracer, "parseFileResources")
+		parseSpan.SetAttributes(attribute.String("file", f.FileName))
 		appSets, apps, err := parseFileResources(filepath.Join(s, f.FileName))
+		parseSpan.End()
 		if err != nil {
 			w.reportError(ctx, headers, f.ArtifactName, err)
 			continue
@@ -118,7 +122,9 @@ func (w *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.He
 				renderedApps[i], renderErrs[i] = w.rendererFunc(appSet)
 			})
 		}
+		_, renderSpan := tracing.StartDetail(ctx, tracer, "waitAppsetRender")
 		wg.Wait()
+		renderSpan.End()
 		for i := range appSets {
 			if renderErrs[i] != nil {
 				w.reportError(ctx, headers, f.ArtifactName, renderErrs[i])
@@ -133,13 +139,20 @@ func (w *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.He
 		}
 
 		totalApps += len(apps)
+		_, routeSpan := tracing.StartDetail(ctx, tracer, "routeApps")
+		routeSpan.SetAttributes(
+			attribute.String("file", f.FileName),
+			attribute.Int("apps.count", len(apps)),
+		)
 		for _, app := range apps {
 			if err := w.routeApp(ctx, app, headers, f.HasNoCounterpart); err != nil {
 				span.SetStatus(codes.Error, err.Error())
 				nak()
+				routeSpan.End()
 				return
 			}
 		}
+		routeSpan.End()
 	}
 	headers["app.total"] = strconv.Itoa(totalApps)
 	w.bus.Publish(ctx, subjects.ArgoTotalUpdated, headers, nil)
