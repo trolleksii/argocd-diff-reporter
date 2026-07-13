@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -74,6 +75,23 @@ func testdataChart(t *testing.T) string {
 	wd, err := os.Getwd()
 	require.NoError(t, err)
 	return filepath.Join(wd, "testdata", "mychart")
+}
+
+// ---- isAuthError ------------------------------------------------------------
+
+func TestIsAuthError(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want bool
+	}{
+		{errors.New("failed to fetch chart: 401 Unauthorized"), true},
+		{errors.New("server returned 403 Forbidden"), true},
+		{errors.New("unexpected status: UNAUTHORIZED: authentication required"), true},
+		{errors.New("dial tcp: connection refused"), false},
+		{errors.New("chart not found: 404"), false},
+	} {
+		assert.Equal(t, tc.want, isAuthError(tc.err), "error: %v", tc.err)
+	}
 }
 
 // ---- GenerateCacheKey -------------------------------------------------------

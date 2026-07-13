@@ -25,10 +25,10 @@ type HelmWorker struct {
 	bus   *nats.Bus
 	store *nats.Store
 	cache *helm.HelmChartCache
-	creds helm.CredsProvider
+	creds func(project string) helm.CredsProvider
 }
 
-func New(cfg config.HelmWorkerConfig, log *slog.Logger, b *nats.Bus, s *nats.Store, creds helm.CredsProvider) *HelmWorker {
+func New(cfg config.HelmWorkerConfig, log *slog.Logger, b *nats.Bus, s *nats.Store, creds func(project string) helm.CredsProvider) *HelmWorker {
 	return &HelmWorker{
 		cfg:   cfg,
 		log:   log.With("worker", "helm"),
@@ -62,7 +62,7 @@ func (w *HelmWorker) Run(ctx context.Context) error {
 	return nil
 }
 
-func (w *HelmWorker) handleChartFetch(fetchFn func(string, string, helm.CredsProvider, *helm.HelmChartCache) (string, error)) nats.Handler {
+func (w *HelmWorker) handleChartFetch(fetchFn func(context.Context, string, string, string, helm.CredsProvider, *helm.HelmChartCache) (string, error)) nats.Handler {
 	return func(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
 		ctx, span := tracer.Start(
 			otel.GetTextMapPropagator().Extract(ctx, headers),
@@ -92,8 +92,7 @@ func (w *HelmWorker) handleChartFetch(fetchFn func(string, string, helm.CredsPro
 			"path", spec.Source.Path,
 			"revision", spec.Source.Revision)
 		appOrigin := headers["app.origin"]
-		chartRef := fmt.Sprintf("%s/%s", spec.Source.RepoURL, spec.Source.ChartName)
-		chartLocation, err := fetchFn(chartRef, spec.Source.Revision, w.creds, w.cache)
+		chartLocation, err := fetchFn(ctx, spec.Source.RepoURL, spec.Source.ChartName, spec.Source.Revision, w.creds(spec.Project), w.cache)
 		if err != nil {
 			headers["error.origin.file"] = appOrigin
 			headers["error.origin.app"] = spec.AppName

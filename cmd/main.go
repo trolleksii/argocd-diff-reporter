@@ -9,6 +9,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/trolleksii/argocd-diff-reporter/internal/argo"
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 	"github.com/trolleksii/argocd-diff-reporter/internal/githubauth"
 	"github.com/trolleksii/argocd-diff-reporter/internal/helm"
@@ -93,9 +94,14 @@ func main() {
 	)
 
 	gitWorker := gitworker.New(cfg.Workers.GitWorker, logger, auth, bus)
-	credsCache := helm.NewCredsCache()
-	argoWorker := argoworker.New(cfg.ArgoCD, logger, bus, nil, credsCache)
-	helmWorker := helmworker.New(cfg.Workers.HelmWorker, logger, bus, store, credsCache)
+	argoSvc, err := argo.New(ctx, cfg.ArgoCD)
+	if err != nil {
+		logger.Error("failed to init argocd integration", "error", err)
+		os.Exit(1)
+	}
+	argoWorker := argoworker.New(logger, bus, argoSvc.Renderer())
+	helmWorker := helmworker.New(cfg.Workers.HelmWorker, logger, bus, store,
+		func(project string) helm.CredsProvider { return argoSvc.CredsStore().Scoped(project) })
 	directoryWorker := directoryworker.New(logger, bus, store)
 	diffWorker := diffworker.New(logger, bus, store, notifier)
 	coordinator := coord.New(cfg.Workers.Coordinator, logger, bus, store, notifier)

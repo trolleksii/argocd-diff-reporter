@@ -17,8 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	"github.com/trolleksii/argocd-diff-reporter/internal/config"
-	"github.com/trolleksii/argocd-diff-reporter/internal/helm"
+	"github.com/trolleksii/argocd-diff-reporter/internal/argo"
 	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 	internalnats "github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/subjects"
@@ -104,7 +103,7 @@ const argoTestStream = "argo-worker-test"
 
 // newTestArgoWorker creates an ArgoWorker wired to a real embedded NATS server.
 // customRendererFunc is injected so no live K8s connection is needed.
-func newTestArgoWorker(t *testing.T, fn AppSetRendererFunc) (*ArgoWorker, *internalnats.Bus) {
+func newTestArgoWorker(t *testing.T, fn argo.AppSetRenderer) (*ArgoWorker, *internalnats.Bus) {
 	t.Helper()
 	bus, _, _ := testutil.StartNATS(t)
 
@@ -112,8 +111,7 @@ func newTestArgoWorker(t *testing.T, fn AppSetRendererFunc) (*ArgoWorker, *inter
 	err := bus.EnsureStream(ctx, argoTestStream, argoStreamSubjects)
 	require.NoError(t, err, "failed to create NATS test stream")
 
-	cc := helm.NewCredsCache()
-	w := New(config.ArgoCDConfig{}, testutil.NoopLogger(), bus, fn, cc)
+	w := New(testutil.NoopLogger(), bus, fn)
 	return w, bus
 }
 
@@ -1108,6 +1106,32 @@ func TestRouteApp_NilSourceType_RoutesToDirectoryForAutoDetect(t *testing.T) {
 			"SourceType should be SourceTypeUndefined (zero value) when ExplicitType() returns nil — auto-detection is deferred")
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for ArgoDirectoryGitParsed message for auto-detect app")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ArgoCD project propagation for helm apps
+// ---------------------------------------------------------------------------
+
+func TestRouteApp_HelmApp_PropagatesProject(t *testing.T) {
+	w, bus := newTestArgoWorker(t, nil)
+	hdrCh, bodyCh := testutil.SubscribeOnceWithBody(t, bus, subjects.ArgoHelmOCIParsed)
+
+	app := helmApp("proj-app", "oci://registry.example.com/charts", "", "my-chart")
+	app.Spec.Project = "team-a"
+
+	headers := testHeaders("77", t.TempDir())
+	err := w.routeApp(context.Background(), app, headers, false)
+	require.NoError(t, err, "routeApp should succeed for a helm OCI app")
+
+	select {
+	case <-hdrCh:
+		decoded, err := internalnats.Unmarshal[models.AppSpec](<-bodyCh)
+		require.NoError(t, err, "failed to unmarshal AppSpec from message body")
+		assert.Equal(t, "team-a", decoded.Project,
+			"AppSpec must carry the ArgoCD project so creds can be resolved per project at fetch time")
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for ArgoHelmOCIParsed message")
 	}
 }
 

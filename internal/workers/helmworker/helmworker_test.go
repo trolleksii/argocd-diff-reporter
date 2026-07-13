@@ -35,6 +35,12 @@ var helmStreamSubjects = []string{
 
 const helmTestStream = "helmworker-test"
 
+// anonCreds satisfies helm.CredsProvider with empty credentials for tests.
+type anonCreds struct{}
+
+func (anonCreds) Get(context.Context, string) (models.Creds, error)     { return models.Creds{}, nil }
+func (anonCreds) Refresh(context.Context, string) (models.Creds, error) { return models.Creds{}, nil }
+
 // newTestHelmWorker creates a HelmWorker wired to a real embedded NATS server.
 func newTestHelmWorker(t *testing.T) (*HelmWorker, *internalnats.Bus, *internalnats.Store) {
 	t.Helper()
@@ -45,8 +51,8 @@ func newTestHelmWorker(t *testing.T) (*HelmWorker, *internalnats.Bus, *internaln
 	require.NoError(t, err, "failed to create NATS test stream")
 
 	log := testutil.NoopLogger()
-	cc := helm.NewCredsCache()
-	w := New(config.HelmWorkerConfig{}, log, bus, store, cc)
+	creds := func(string) helm.CredsProvider { return anonCreds{} }
+	w := New(config.HelmWorkerConfig{}, log, bus, store, creds)
 	return w, bus, store
 }
 
@@ -91,7 +97,16 @@ func TestHandleChartFetch_PublishesChartFetched(t *testing.T) {
 	ctx := context.Background()
 
 	fixedPath := t.TempDir()
-	stubFetchFn := func(ref, revision string, creds helm.CredsProvider, cache *helm.HelmChartCache) (string, error) {
+	// The project is bound into the CredsProvider by the worker, so it is
+	// observed at scoping time rather than as a fetchFn argument.
+	var gotProject string
+	w.creds = func(project string) helm.CredsProvider {
+		gotProject = project
+		return anonCreds{}
+	}
+	var gotRepoURL, gotChartName string
+	stubFetchFn := func(ctx context.Context, repoURL, chartName, chartVersion string, creds helm.CredsProvider, cache *helm.HelmChartCache) (string, error) {
+		gotRepoURL, gotChartName = repoURL, chartName
 		return fixedPath, nil
 	}
 
@@ -105,6 +120,7 @@ func TestHandleChartFetch_PublishesChartFetched(t *testing.T) {
 
 	spec := models.AppSpec{
 		AppName: appName,
+		Project: "team-a",
 		Source: models.AppSource{
 			RepoURL:   "https://example.com/charts",
 			ChartName: "mychart",
@@ -133,6 +149,9 @@ func TestHandleChartFetch_PublishesChartFetched(t *testing.T) {
 
 	assert.True(t, ackCalled, "ack should be called on successful fetch")
 	assert.False(t, nakCalled, "nak should not be called on successful fetch")
+	assert.Equal(t, spec.Source.RepoURL, gotRepoURL, "fetchFn should receive the repo URL from the app spec verbatim")
+	assert.Equal(t, spec.Source.ChartName, gotChartName, "fetchFn should receive the chart name from the app spec verbatim")
+	assert.Equal(t, spec.Project, gotProject, "creds must be resolved with the ArgoCD project from the app spec")
 
 	select {
 	case hdrs := <-chartFetchedCh:
@@ -151,7 +170,7 @@ func TestHandleChartFetch_FetchError_PublishesFailure(t *testing.T) {
 	ctx := context.Background()
 
 	fetchErr := errors.New("fetch failed: network timeout")
-	failingFetchFn := func(ref, revision string, creds helm.CredsProvider, cache *helm.HelmChartCache) (string, error) {
+	failingFetchFn := func(ctx context.Context, repoURL, chartName, chartVersion string, creds helm.CredsProvider, cache *helm.HelmChartCache) (string, error) {
 		return "", fetchErr
 	}
 

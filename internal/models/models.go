@@ -20,6 +20,12 @@ const (
 	SourceTypeDirectory
 )
 
+// Creds are basic auth credentials.
+type Creds struct {
+	Username string
+	Password string
+}
+
 type KustomizePatchTarget struct {
 	Group              string `json:"group,omitempty"`
 	Version            string `json:"version,omitempty"`
@@ -59,6 +65,7 @@ type AppSpec struct {
 	AppName    string        `json:"appName"`
 	SourceType SourceType    `json:"sourceType,omitempty"`
 	Namespace  string        `json:"namespace"`
+	Project    string        `json:"project,omitempty"`
 	Source     AppSource     `json:"source"`
 	Helm       HelmSpec      `json:"helm"`
 	Directory  DirectorySpec `json:"directory"`

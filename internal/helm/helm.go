@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,6 +24,8 @@ import (
 	"helm.sh/helm/v3/pkg/getter"
 	"helm.sh/helm/v3/pkg/registry"
 	"helm.sh/helm/v3/pkg/strvals"
+
+	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 )
 
 const fallbackKubeVersion = "v1.34.2"
@@ -197,8 +198,22 @@ func updateDependenciesWithContext(ctx context.Context, manager *downloader.Mana
 	}
 }
 
+// CredsProvider resolves credentials for a repo URL. Scoping and caching are
+// the implementation's business; the fetchers only Get and, on auth failure,
+// Refresh.
 type CredsProvider interface {
-	GetCreds(string) struct{ Username, Password string }
+	Get(ctx context.Context, repoURL string) (models.Creds, error)
+	Refresh(ctx context.Context, repoURL string) (models.Creds, error)
+}
+
+// isAuthError reports whether a chart pull failure looks like an
+// authentication/authorization problem worth retrying with fresh creds.
+func isAuthError(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "401") ||
+		strings.Contains(msg, "403") ||
+		strings.Contains(msg, "unauthorized") ||
+		strings.Contains(msg, "forbidden")
 }
 
 func setupInstallClient(settings *cli.EnvSettings, chartVersion string) *action.Install {
@@ -211,35 +226,34 @@ func setupInstallClient(settings *cli.EnvSettings, chartVersion string) *action.
 	return installClient
 }
 
-func FetchChartHTTPS(chartRef, chartVersion string, credsProvider CredsProvider, cache *HelmChartCache) (string, error) {
+func FetchChartHTTPS(ctx context.Context, repoURL, chartName, chartVersion string, credsProvider CredsProvider, cache *HelmChartCache) (string, error) {
 	settings := cli.New()
 	installClient := setupInstallClient(settings, chartVersion)
+	chartRef := fmt.Sprintf("%s/%s", repoURL, chartName)
 	cacheKey := GenerateCacheKey(chartRef, chartVersion)
 
 	return cache.GetOrFetch(cacheKey, func() (string, error) {
 		slog.Debug("helm cache miss", "ref", chartRef)
-		u, err := url.Parse(chartRef)
-		if err != nil {
-			return "", fmt.Errorf("invalid chart URL %q: %w", chartRef, err)
-		}
-
-		pathParts := strings.Split(strings.Trim(u.Path, "/"), "/")
-		chartName := pathParts[len(pathParts)-1]
-		if chartName == "" {
-			return "", fmt.Errorf("chart reference %q is missing a chart name", chartRef)
-		}
-
-		repoURL := fmt.Sprintf("%s://%s", u.Scheme, u.Host)
-		if repoPath := strings.Join(pathParts[:len(pathParts)-1], "/"); repoPath != "" {
-			repoURL = fmt.Sprintf("%s/%s", repoURL, repoPath)
-		}
 		installClient.ChartPathOptions.RepoURL = repoURL
 
-		creds := credsProvider.GetCreds(repoURL)
+		creds, err := credsProvider.Get(ctx, repoURL)
+		if err != nil {
+			return "", fmt.Errorf("failed to get creds for repo %q: %w", repoURL, err)
+		}
 		installClient.ChartPathOptions.Username = creds.Username
 		installClient.ChartPathOptions.Password = creds.Password
 
 		chartPath, err := installClient.ChartPathOptions.LocateChart(chartName, settings)
+		if err != nil && isAuthError(err) {
+			slog.Debug("HTTP chart pull failed with auth error, refreshing creds", "repo", repoURL, "error", err)
+			creds, err = credsProvider.Refresh(ctx, repoURL)
+			if err != nil {
+				return "", fmt.Errorf("failed to refresh creds for repo %q: %w", repoURL, err)
+			}
+			installClient.ChartPathOptions.Username = creds.Username
+			installClient.ChartPathOptions.Password = creds.Password
+			chartPath, err = installClient.ChartPathOptions.LocateChart(chartName, settings)
+		}
 		if err != nil {
 			return "", fmt.Errorf("failed to download HTTP chart: %w", err)
 		}
@@ -253,36 +267,53 @@ func FetchChartHTTPS(chartRef, chartVersion string, credsProvider CredsProvider,
 	})
 }
 
-func FetchChartOCI(chartRef, chartVersion string, credsProvider CredsProvider, cache *HelmChartCache) (string, error) {
+func FetchChartOCI(ctx context.Context, repoURL, chartName, chartVersion string, credsProvider CredsProvider, cache *HelmChartCache) (string, error) {
 	settings := cli.New()
 	installClient := setupInstallClient(settings, chartVersion)
+	chartRef := fmt.Sprintf("oci://%s/%s", strings.TrimPrefix(repoURL, "oci://"), chartName)
 	cacheKey := GenerateCacheKey(chartRef, chartVersion)
+
+	// The registry client resolves OCI credentials in-memory via
+	// ClientOptBasicAuth — no Login call, no shared credentials file — so
+	// concurrent fetches with different creds cannot interfere.
+	setCreds := func(creds models.Creds) error {
+		if creds.Username == "" && creds.Password == "" {
+			return nil
+		}
+		registryClient, err := registry.NewClient(
+			registry.ClientOptEnableCache(true),
+			registry.ClientOptBasicAuth(creds.Username, creds.Password),
+		)
+		if err != nil {
+			return fmt.Errorf("failed to create registry client: %w", err)
+		}
+		installClient.SetRegistryClient(registryClient)
+		return nil
+	}
 
 	return cache.GetOrFetch(cacheKey, func() (string, error) {
 		slog.Debug("helm cache miss", "ref", chartRef)
-		if !strings.HasPrefix(chartRef, "oci://") {
-			chartRef = "oci://" + chartRef
-		}
-		u, err := url.Parse(chartRef)
+
+		creds, err := credsProvider.Get(ctx, repoURL)
 		if err != nil {
-			return "", fmt.Errorf("invalid chart URL %q: %w", chartRef, err)
+			return "", fmt.Errorf("failed to get creds for repo %q: %w", repoURL, err)
+		}
+		if err := setCreds(creds); err != nil {
+			return "", err
 		}
 
-		creds := credsProvider.GetCreds(u.Host)
-		installClient.ChartPathOptions.Username = creds.Username
-		installClient.ChartPathOptions.Password = creds.Password
-
-		registryClient := installClient.GetRegistryClient()
-		if registryClient != nil {
-			err := registryClient.Login(chartRef, registry.LoginOptBasicAuth(creds.Username, creds.Password))
-			if err != nil {
-				slog.Error("OCI registry login failed", "error", err)
-			}
-		}
-
-		// Use Helm's built-in OCI support to pull the chart
-		installClient.ChartPathOptions.Version = chartVersion
 		chartPath, err := installClient.ChartPathOptions.LocateChart(chartRef, settings)
+		if err != nil && isAuthError(err) {
+			slog.Debug("OCI chart pull failed with auth error, refreshing creds", "repo", repoURL, "error", err)
+			creds, err = credsProvider.Refresh(ctx, repoURL)
+			if err != nil {
+				return "", fmt.Errorf("failed to refresh creds for repo %q: %w", repoURL, err)
+			}
+			if err := setCreds(creds); err != nil {
+				return "", err
+			}
+			chartPath, err = installClient.ChartPathOptions.LocateChart(chartRef, settings)
+		}
 		if err != nil {
 			return "", fmt.Errorf("failed to pull OCI chart: %w", err)
 		}
