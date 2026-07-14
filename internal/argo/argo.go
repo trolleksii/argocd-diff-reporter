@@ -6,12 +6,17 @@ import (
 	"io"
 
 	logrus "github.com/sirupsen/logrus"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/discovery/cached/memory"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
+	"k8s.io/client-go/restmapper"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/argoproj/argo-cd/v3/applicationset/controllers/template"
@@ -61,7 +66,40 @@ func New(ctx context.Context, cfg config.ArgoCDConfig) (*Argo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create dynamic client: %w", err)
 	}
-	ctrlClient, err := ctrlclient.New(restCfg, ctrlclient.Options{Scheme: scheme})
+
+	// Cached REST mapper: API discovery runs once and is served from memory
+	// afterwards, instead of re-crawling /apis during renders.
+	dc, err := discovery.NewDiscoveryClientForConfig(restCfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create discovery client: %w", err)
+	}
+	mapper := restmapper.NewDeferredDiscoveryRESTMapper(memory.NewMemCacheClient(dc))
+
+	// Watch-fed cache for the argocd namespace so cluster-secret lookups in
+	// the ApplicationSet generators don't hit the API server on every render.
+	// It lives until ctx (the process signal context) is cancelled.
+	ca, err := cache.New(restCfg, cache.Options{
+		Scheme:            scheme,
+		Mapper:            mapper,
+		DefaultNamespaces: map[string]cache.Config{cfg.Namespace: {}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create informer cache: %w", err)
+	}
+	go ca.Start(ctx) //nolint:errcheck // surfaces below as a failed informer/sync
+	// Pre-warm the Secret informer so the first render is served from cache.
+	if _, err := ca.GetInformer(ctx, &corev1.Secret{}); err != nil {
+		return nil, fmt.Errorf("failed to start secret informer: %w", err)
+	}
+	if !ca.WaitForCacheSync(ctx) {
+		return nil, fmt.Errorf("informer cache failed to sync")
+	}
+
+	ctrlClient, err := ctrlclient.New(restCfg, ctrlclient.Options{
+		Scheme: scheme,
+		Mapper: mapper,
+		Cache:  &ctrlclient.CacheOptions{Reader: ca},
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create controller-runtime client: %w", err)
 	}
@@ -73,8 +111,9 @@ func New(ctx context.Context, cfg config.ArgoCDConfig) (*Argo, error) {
 	repoClientset := apiclient.NewRepoServerClientset(cfg.RepoServerAddr, cfg.RepoServerTimeoutSec, apiclient.TLSConfiguration{DisableTLS: true})
 	argoCDService := services.NewArgoCDService(argoDB, true, repoClientset, false)
 
+	genClientset := &cachedSecretsClientset{Interface: k8sClientSet, reader: ca, namespace: cfg.Namespace}
 	gen := generators.GetGenerators(
-		ctx, ctrlClient, k8sClientSet, cfg.Namespace,
+		ctx, ctrlClient, genClientset, cfg.Namespace,
 		argoCDService, dynamicClient, scmConfig,
 	)
 	logctx := logrus.NewEntry(logrus.StandardLogger())
