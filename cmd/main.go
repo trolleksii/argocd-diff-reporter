@@ -118,6 +118,9 @@ func main() {
 		coordinator,
 		checks,
 	}
+	if pprofSrv := server.NewPprof(cfg.Server.PprofAddr, logger); pprofSrv != nil {
+		workers = append(workers, pprofSrv)
+	}
 
 	g, gCtx := errgroup.WithContext(ctx)
 	for _, w := range workers {

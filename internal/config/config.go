@@ -33,6 +33,9 @@ type ArgoCDConfig struct {
 
 type ServerConfig struct {
 	Addr string `yaml:"addr"`
+	// PprofAddr enables the net/http/pprof debug server on the given address
+	// (e.g. "127.0.0.1:6060"). Empty disables it.
+	PprofAddr string `yaml:"pprofAddr"`
 }
 
 type WebhookConfig struct {
