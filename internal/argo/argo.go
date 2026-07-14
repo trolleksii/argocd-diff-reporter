@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 
+	"github.com/go-logr/logr"
 	logrus "github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -18,6 +20,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/argoproj/argo-cd/v3/applicationset/controllers/template"
 	"github.com/argoproj/argo-cd/v3/applicationset/generators"
@@ -46,6 +49,10 @@ type Argo struct {
 
 // New connects to the cluster and builds the shared ArgoCD dependencies.
 func New(ctx context.Context, cfg config.ArgoCDConfig) (*Argo, error) {
+	// Route controller-runtime's internal logs (watch/cache errors from the
+	// informer below) through slog instead of the unset-logger stack trace.
+	ctrllog.SetLogger(logr.FromSlogHandler(slog.Default().Handler()))
+
 	scheme := runtime.NewScheme()
 	clientgoscheme.AddToScheme(scheme)
 	appv1alpha1.AddToScheme(scheme)
