@@ -157,20 +157,23 @@ type DiffStats struct {
 
 // Report holds the data for rendering a diff report for a single Application.
 // It combines PR metadata, file context, diff statistics, and the pre-rendered
-// HTML diff output.
+// HTML and markdown diff output.
 type Report struct {
-	Owner     string
-	Repo      string
-	PRNumber  string
-	BaseSHA   string
-	HeadSHA   string
-	File      string
-	AppName   string
-	Body      template.HTML
-	DiffStats DiffStats
+	Owner        string
+	Repo         string
+	PRNumber     string
+	BaseSHA      string
+	HeadSHA      string
+	File         string
+	AppName      string
+	Body         template.HTML
+	BodyMarkdown string
+	DiffStats    DiffStats
 }
 
 // DiffDetail holds the data for rendering a single diff entry within a report.
+// When Lines is set the entry renders as a unified line diff instead of
+// full before/after content blocks.
 type DiffDetail struct {
 	ChangeType  string
 	Symbol      string
@@ -178,4 +181,12 @@ type DiffDetail struct {
 	Content     string
 	FromContent string
 	ToContent   string
+	Lines       []DiffLine
+}
+
+// DiffLine is a single line of a unified diff: Type is one of
+// "addition", "removal", "context" or "gap".
+type DiffLine struct {
+	Type string
+	Text string
 }
