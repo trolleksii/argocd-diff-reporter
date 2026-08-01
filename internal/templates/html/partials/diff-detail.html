@@ -1,6 +1,7 @@
         <div class="diff-detail">
             <div class="change-type {{.ChangeType}}">{{.Symbol}} {{.Text}}</div>
-            {{if eq .ChangeType "addition"}}<div class="yaml-content yaml-addition">{{.Content}}</div>
+            {{if .Lines}}<div class="yaml-content">{{range .Lines}}<div class="diff-line {{.Type}}">{{.Text}}</div>{{end}}</div>
+            {{else if eq .ChangeType "addition"}}<div class="yaml-content yaml-addition">{{.Content}}</div>
             {{else if eq .ChangeType "removal"}}<div class="yaml-content yaml-removal">{{.Content}}</div>
             {{else if eq .ChangeType "modification"}}<div class="diff-modification">
                     <div class="yaml-content yaml-removal">- {{.FromContent}}</div>

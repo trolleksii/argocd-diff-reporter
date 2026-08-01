@@ -2,6 +2,7 @@ package reports
 
 import (
 	_ "embed"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -121,6 +122,185 @@ func TestWriteDiffReport_IdenticalManifests_NoDiff(t *testing.T) {
 
 	assert.Equal(t, 0, report.DiffStats.DiffCount)
 	assert.Empty(t, string(report.Body))
+}
+
+func TestWriteDiffReport_MarkdownBody(t *testing.T) {
+	ct := templates.NewCatalog()
+
+	from, err := LoadManifest("base", baseYAML)
+	require.NoError(t, err)
+
+	to, err := LoadManifest("head", headYAML)
+	require.NoError(t, err)
+
+	htmlOnly := &models.Report{}
+	WriteDiffReport(ct, from, to, nil, htmlOnly)
+
+	report := &models.Report{}
+	WriteDiffReport(ct, from, to, nil, report)
+
+	assert.Contains(t, report.BodyMarkdown, "### ", "expected path heading")
+	assert.Contains(t, report.BodyMarkdown, "```diff\n", "expected diff fence")
+	assert.Contains(t, report.BodyMarkdown, "\n- ", "expected removed lines")
+	assert.Contains(t, report.BodyMarkdown, "\n+ ", "expected added lines")
+	assert.Equal(t, htmlOnly.DiffStats, report.DiffStats, "markdown rendering must not change diff stats")
+}
+
+func TestWriteDiffReport_IdenticalManifests_EmptyMarkdown(t *testing.T) {
+	ct := templates.NewCatalog()
+
+	from, err := LoadManifest("base", baseYAML)
+	require.NoError(t, err)
+
+	to, err := LoadManifest("base-copy", baseYAML)
+	require.NoError(t, err)
+
+	report := &models.Report{}
+	WriteDiffReport(ct, from, to, nil, report)
+
+	assert.Empty(t, report.BodyMarkdown)
+}
+
+// ---------------------------------------------------------------------------
+// writeMarkdownDiffSection
+// ---------------------------------------------------------------------------
+
+func TestWriteMarkdownDiffSection_FenceGuard(t *testing.T) {
+	var md strings.Builder
+	details := []dyff.Detail{
+		{Kind: dyff.ADDITION, To: dyffScalarNode(t, `"text with ` + "```" + ` inside"`)},
+	}
+	writeMarkdownDiffSection(&md, "/data/readme", details)
+
+	assert.Contains(t, md.String(), "````diff\n", "content containing ``` must use a longer fence")
+}
+
+func TestPrefixLines(t *testing.T) {
+	assert.Equal(t, "+ a\n+ b\n", prefixLines("+ ", "a\nb\n"))
+	assert.Equal(t, "- single\n", prefixLines("- ", "single"))
+	assert.Equal(t, "+ a\n+\n+ b\n", prefixLines("+ ", "a\n\nb"), "empty lines must not carry trailing spaces")
+}
+
+// ---------------------------------------------------------------------------
+// fillReportDiffSection — unified HTML rendering
+// ---------------------------------------------------------------------------
+
+func TestFillReportDiffSection_PairCollapsesToUnifiedHTML(t *testing.T) {
+	ct := templates.NewCatalog()
+	report := &models.Report{}
+
+	script := "|\n  line1\n  line2\n  line3\n  line4\n  line5\n  line6\n  line7\n"
+	changed := "|\n  line1\n  line2\n  line3\n  AUTH=token\n  line4\n  line5\n  line6\n  line7\n"
+	fillReportDiffSection(report, ct, "/spec/command", []dyff.Detail{
+		{Kind: dyff.REMOVAL, From: dyffScalarNode(t, script)},
+		{Kind: dyff.ADDITION, To: dyffScalarNode(t, changed)},
+	})
+
+	body := string(report.Body)
+	assert.Equal(t, 1, strings.Count(body, "change-type"), "pair must render as one detail")
+	assert.Contains(t, body, `<div class="diff-line addition">&#43; AUTH=token</div>`)
+	assert.Contains(t, body, `<div class="diff-line context">  line2</div>`)
+	assert.NotContains(t, body, "diff-line removal", "unchanged lines must not appear as removed")
+
+	// counts still reflect what dyff reported
+	assert.Equal(t, 1, report.DiffStats.Additions)
+	assert.Equal(t, 1, report.DiffStats.Removals)
+	assert.Equal(t, 2, report.DiffStats.DiffCount)
+}
+
+func TestFillReportDiffSection_MultilineModificationUnifiedHTML(t *testing.T) {
+	ct := templates.NewCatalog()
+	report := &models.Report{}
+
+	from := "|\n  line1\n  line2\n  line3\n  line4\n  line5\n  line6\n  line7\n  line8\n"
+	to := "|\n  line1\n  line2\n  line3\n  line4\n  line5\n  line6\n  line7\n  EXTRA\n  line8\n"
+	fillReportDiffSection(report, ct, "/data/script", []dyff.Detail{
+		{Kind: dyff.MODIFICATION, From: dyffScalarNode(t, from), To: dyffScalarNode(t, to)},
+	})
+
+	body := string(report.Body)
+	assert.Contains(t, body, `<div class="diff-line addition">&#43; EXTRA</div>`)
+	assert.Contains(t, body, `<div class="diff-line gap">@@</div>`)
+	assert.NotContains(t, body, "line1", "lines beyond context should be dropped")
+	assert.Equal(t, 1, report.DiffStats.Modifications)
+}
+
+func TestFillReportDiffSection_SingleLineModificationKeepsBlocks(t *testing.T) {
+	ct := templates.NewCatalog()
+	report := &models.Report{}
+
+	fillReportDiffSection(report, ct, "/spec/replicas", []dyff.Detail{
+		{Kind: dyff.MODIFICATION, From: dyffScalarNode(t, "2"), To: dyffScalarNode(t, "3")},
+	})
+
+	body := string(report.Body)
+	assert.Contains(t, body, "diff-modification", "single-line modification keeps the from/to block layout")
+	assert.NotContains(t, body, "diff-line")
+}
+
+// ---------------------------------------------------------------------------
+// diffLines / removal+addition collapse
+// ---------------------------------------------------------------------------
+
+func TestDiffLines_UnifiedWithContext(t *testing.T) {
+	from := "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\n"
+	to := "l1\nl2\nl3\nl4\nCHANGED\nl6\nl7\nl8\nl9\n"
+
+	got := diffLines(from, to, 3)
+
+	assert.Contains(t, got, "- l5\n")
+	assert.Contains(t, got, "+ CHANGED\n")
+	assert.Contains(t, got, "  l2\n", "context lines should be kept")
+	assert.NotContains(t, got, "l1", "lines beyond context should be dropped")
+	assert.Contains(t, got, "@@\n", "skipped run should be marked")
+}
+
+func TestDiffLines_NoGapMarkerWhenAllKept(t *testing.T) {
+	got := diffLines("a\nb\n", "a\nc\n", 3)
+	assert.Equal(t, "  a\n- b\n+ c\n", got)
+}
+
+func TestWriteMarkdownDiffSection_CollapsesRemovalAdditionPair(t *testing.T) {
+	script := "|\n  line1\n  line2\n  line3\n  line4\n  line5\n  line6\n  line7\n"
+	changed := "|\n  line1\n  line2\n  line3\n  AUTH=token\n  line4\n  line5\n  line6\n  line7\n"
+
+	var md strings.Builder
+	writeMarkdownDiffSection(&md, "/spec/command", []dyff.Detail{
+		{Kind: dyff.REMOVAL, From: dyffScalarNode(t, script)},
+		{Kind: dyff.ADDITION, To: dyffScalarNode(t, changed)},
+	})
+
+	got := md.String()
+	assert.Equal(t, 1, strings.Count(got, "```diff"), "pair must collapse into one fence")
+	assert.Contains(t, got, "**Modified**")
+	assert.Contains(t, got, "+ AUTH=token\n")
+	assert.NotContains(t, got, "- line2", "unchanged lines must not appear as removed")
+}
+
+func TestWriteMarkdownDiffSection_MultilineModificationUsesLineDiff(t *testing.T) {
+	from := "|\n  line1\n  line2\n  line3\n  line4\n  line5\n  line6\n  line7\n  line8\n"
+	to := "|\n  line1\n  line2\n  line3\n  line4\n  line5\n  line6\n  line7\n  EXTRA\n  line8\n"
+
+	var md strings.Builder
+	writeMarkdownDiffSection(&md, "/data/script", []dyff.Detail{
+		{Kind: dyff.MODIFICATION, From: dyffScalarNode(t, from), To: dyffScalarNode(t, to)},
+	})
+
+	got := md.String()
+	assert.Contains(t, got, "+ EXTRA\n")
+	assert.NotContains(t, got, "- line5", "unchanged lines must not appear as removed")
+	assert.NotContains(t, got, "line1", "lines beyond context should be dropped")
+}
+
+func TestWriteMarkdownDiffSection_SingleLineModificationStaysCompact(t *testing.T) {
+	var md strings.Builder
+	writeMarkdownDiffSection(&md, "/spec/replicas", []dyff.Detail{
+		{Kind: dyff.MODIFICATION, From: dyffScalarNode(t, "2"), To: dyffScalarNode(t, "3")},
+	})
+
+	got := md.String()
+	assert.Contains(t, got, "- 2\n+ 3\n")
+	assert.NotContains(t, got, "@@")
 }
 
 // ---------------------------------------------------------------------------
