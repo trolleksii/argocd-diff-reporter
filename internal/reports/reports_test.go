@@ -168,7 +168,7 @@ func TestWriteDiffReport_IdenticalManifests_EmptyMarkdown(t *testing.T) {
 func TestWriteMarkdownDiffSection_FenceGuard(t *testing.T) {
 	var md strings.Builder
 	details := []dyff.Detail{
-		{Kind: dyff.ADDITION, To: dyffScalarNode(t, `"text with ` + "```" + ` inside"`)},
+		{Kind: dyff.ADDITION, To: dyffScalarNode(t, `"text with `+"```"+` inside"`)},
 	}
 	writeMarkdownDiffSection(&md, "/data/readme", details)
 
