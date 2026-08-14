@@ -16,6 +16,7 @@ import (
 	"github.com/trolleksii/argocd-diff-reporter/internal/logging"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server"
+	"github.com/trolleksii/argocd-diff-reporter/internal/server/diffapi"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server/notifications"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server/trigger"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server/ui"
@@ -89,6 +90,7 @@ func main() {
 	httpSrv := server.New(cfg.Server, logger,
 		webhook.NewRouteFunc(cfg.Webhook, bus),
 		trigger.NewRouteFunc(bus, auth.GetTokenSource()),
+		diffapi.NewRouteFunc(store),
 		ui.NewRouteFunc(store),
 		notifications.NewRouteFunc(notifier),
 	)

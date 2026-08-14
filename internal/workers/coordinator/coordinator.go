@@ -55,6 +55,7 @@ func (c *Coordinator) Run(ctx context.Context) error {
 		AckWait:    10 * time.Second,
 		Routes: []nats.Route{
 			{Subjects: []string{subjects.WebhookPRChanged}, Handler: c.handlePREvent},
+			{Subjects: []string{subjects.GitFilesMatched}, Handler: c.updateIndex},
 			{Subjects: []string{subjects.ArgoFileParseFailed}, Handler: c.handleFileErrors},
 			{Subjects: []string{subjects.ArgoTotalUpdated}, Handler: c.handleTotalAppUpdate},
 			{
@@ -193,6 +194,39 @@ func (c *Coordinator) handleAppErrors(ctx context.Context, headers nats.Headers,
 	ack()
 }
 
+func (c *Coordinator) updateIndex(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
+	ctx, span := tracer.Start(
+		otel.GetTextMapPropagator().Extract(ctx, headers),
+		"updateIndex",
+	)
+	otel.GetTextMapPropagator().Inject(ctx, headers)
+	defer span.End()
+
+	pr, err := nats.Unmarshal[models.PullRequest](data)
+	if err != nil {
+		c.log.ErrorContext(ctx, "failed to unmarshal pr object", "error", err)
+		span.SetStatus(codes.Error, err.Error())
+		nak()
+		return
+	}
+	span.SetAttributes(
+		attribute.String("pr.owner", pr.Owner),
+		attribute.String("pr.repo", pr.Repo),
+		attribute.String("pr.number", pr.Number),
+	)
+	c.log.DebugContext(ctx, "updating matching pr index",
+		"prNum", pr.Number,
+		"owner", pr.Owner,
+		"repo", pr.Repo)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.index.Update(pr)
+	c.store.SetValue(ctx, "index", c.index.GetElements())
+	c.notifier.Notify("index", c.index.GetElements())
+	ack()
+}
+
 func (c *Coordinator) handlePREvent(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
 	ctx, span := tracer.Start(
 		otel.GetTextMapPropagator().Extract(ctx, headers),
@@ -225,9 +259,6 @@ func (c *Coordinator) handlePREvent(ctx context.Context, headers nats.Headers, d
 
 	key = fmt.Sprintf("%s.%s.%s", pr.Owner, pr.Repo, pr.Number)
 	c.store.SetValue(ctx, key, pr)
-	c.index.Update(pr)
-	c.store.SetValue(ctx, "index", c.index.GetElements())
-	c.notifier.Notify("index", c.index.GetElements())
 	ack()
 }
 

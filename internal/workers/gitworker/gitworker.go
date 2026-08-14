@@ -140,6 +140,8 @@ func (w *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 	if len(from) == 0 && len(to) == 0 {
 		w.log.InfoContext(ctx, "no changed files match fileGlobs, nothing to report",
 			"prNum", pr.Number, "changedFiles", len(changes), "globs", w.cfg.FileGlobs)
+	} else {
+		w.bus.Publish(ctx, subjects.GitFilesMatched, headers, data)
 	}
 	if len(from) > 0 {
 		data, err := nats.Marshal(from)

@@ -8,6 +8,7 @@ const (
 	// Git subjects
 	GitFilesResolved    = "git.files.resolved"
 	GitFilesSnapshotted = "git.files.snapshotted"
+	GitFilesMatched     = "git.files.matched"
 	GitChartFetched     = "git.chart.fetched"
 	GitChartFetchFailed = "git.chart.fetch.failed"
 

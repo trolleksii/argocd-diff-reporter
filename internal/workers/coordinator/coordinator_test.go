@@ -85,7 +85,7 @@ func TestHandlePREvent_StoresPRInKV(t *testing.T) {
 	assert.Equal(t, prModel.HeadSHA, stored.HeadSHA)
 }
 
-func TestHandlePREvent_UpdatesIndex(t *testing.T) {
+func TestHandlePREvent_DoesNotUpdateIndex(t *testing.T) {
 	c, _, _ := newTestCoordinator(t)
 	ctx := context.Background()
 
@@ -100,6 +100,25 @@ func TestHandlePREvent_UpdatesIndex(t *testing.T) {
 	require.NoError(t, err)
 
 	c.handlePREvent(ctx, internalnats.Headers{}, data, testutil.NoopAck, testutil.NoopNak)
+
+	assert.Empty(t, c.index.GetElements())
+}
+
+func TestUpdateIndex_UpdatesIndex(t *testing.T) {
+	c, _, _ := newTestCoordinator(t)
+	ctx := context.Background()
+
+	prModel := models.PullRequest{
+		Number: "7",
+		Owner:  "org",
+		Repo:   "repo",
+		Status: models.PipelineInProgress,
+		Files:  map[string]models.FileResult{},
+	}
+	data, err := internalnats.Marshal(prModel)
+	require.NoError(t, err)
+
+	c.updateIndex(ctx, internalnats.Headers{}, data, testutil.NoopAck, testutil.NoopNak)
 
 	elems := c.index.GetElements()
 	require.Len(t, elems, 1)
