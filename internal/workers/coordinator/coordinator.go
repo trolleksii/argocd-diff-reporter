@@ -398,7 +398,7 @@ func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.He
 
 	if progress.TotalApps == progress.ProcessedApps {
 		if data, err := nats.Marshal(pr); err == nil {
-			//delete(headers, "Nats-Msg-Id")
+			delete(headers, "Nats-Msg-Id")
 			c.bus.Publish(ctx, subjects.PRProcessingCompleted, headers, data)
 		} else {
 			c.log.ErrorContext(ctx, "faled to marshall progress data", "error", err)

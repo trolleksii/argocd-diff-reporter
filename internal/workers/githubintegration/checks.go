@@ -51,7 +51,7 @@ func (w *GithubChecks) Run(ctx context.Context) error {
 		MaxDeliver: 3,
 		AckWait:    10 * time.Second,
 		Routes: []nats.Route{
-			{Subjects: []string{subjects.WebhookPRChanged}, Handler: w.CreatePendingCheck},
+			{Subjects: []string{subjects.GitFilesMatched}, Handler: w.CreatePendingCheck},
 			{Subjects: []string{subjects.PRProcessingCompleted}, Handler: w.UpdateCheckResult},
 		},
 	})
