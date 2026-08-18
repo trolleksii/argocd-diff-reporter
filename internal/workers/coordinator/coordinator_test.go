@@ -23,7 +23,7 @@ const coordinatorStreamName = "coordinator-test"
 // allSubjects lists every NATS subject the coordinator publishes or consumes,
 // so the test stream covers them all.
 var allSubjects = []string{
-	subjects.WebhookPRChanged,
+	subjects.GitFilesMatched,
 	subjects.ArgoEmptyParsed,
 	subjects.HelmManifestRendered,
 	subjects.DiffReportGenerated,
@@ -85,8 +85,8 @@ func TestHandlePREvent_StoresPRInKV(t *testing.T) {
 	assert.Equal(t, prModel.HeadSHA, stored.HeadSHA)
 }
 
-func TestHandlePREvent_DoesNotUpdateIndex(t *testing.T) {
-	c, _, _ := newTestCoordinator(t)
+func TestHandlePREvent_UpdatesIndex(t *testing.T) {
+	c, _, store := newTestCoordinator(t)
 	ctx := context.Background()
 
 	prModel := models.PullRequest{
@@ -101,28 +101,14 @@ func TestHandlePREvent_DoesNotUpdateIndex(t *testing.T) {
 
 	c.handlePREvent(ctx, internalnats.Headers{}, data, testutil.NoopAck, testutil.NoopNak)
 
-	assert.Empty(t, c.index.GetElements())
-}
-
-func TestUpdateIndex_UpdatesIndex(t *testing.T) {
-	c, _, _ := newTestCoordinator(t)
-	ctx := context.Background()
-
-	prModel := models.PullRequest{
-		Number: "7",
-		Owner:  "org",
-		Repo:   "repo",
-		Status: models.PipelineInProgress,
-		Files:  map[string]models.FileResult{},
-	}
-	data, err := internalnats.Marshal(prModel)
-	require.NoError(t, err)
-
-	c.updateIndex(ctx, internalnats.Headers{}, data, testutil.NoopAck, testutil.NoopNak)
-
 	elems := c.index.GetElements()
 	require.Len(t, elems, 1)
 	assert.Equal(t, "7", elems[0].Number)
+
+	storedIndex, err := internalnats.GetValue[[]models.PullRequest](ctx, store, "index")
+	require.NoError(t, err, "index should be stored in KV")
+	require.Len(t, storedIndex, 1)
+	assert.Equal(t, "7", storedIndex[0].Number)
 }
 
 // ---------------------------------------------------------------------------
@@ -145,6 +131,7 @@ func TestHandleRenderedManifest_HeadFirst_PublishesAppReady(t *testing.T) {
 		appName = "myapp"
 		baseLoc = "manifests/base/myapp"
 		headLoc = "manifests/head/myapp"
+		runId   = "run-1"
 	)
 
 	// 1. Head manifest arrives first — no publish yet
@@ -158,6 +145,7 @@ func TestHandleRenderedManifest_HeadFirst_PublishesAppReady(t *testing.T) {
 		"app.name":          appName,
 		"app.origin":        origin,
 		"manifest.location": headLoc,
+		"RunId":             runId,
 	}
 	c.handleRenderedManifest(ctx, headHeaders, nil, testutil.NoopAck, testutil.NoopNak)
 
@@ -179,6 +167,7 @@ func TestHandleRenderedManifest_HeadFirst_PublishesAppReady(t *testing.T) {
 		"app.name":          appName,
 		"app.origin":        origin,
 		"manifest.location": baseLoc,
+		"RunId":             runId,
 	}
 	c.handleRenderedManifest(ctx, baseHeaders, nil, testutil.NoopAck, testutil.NoopNak)
 
@@ -186,10 +175,12 @@ func TestHandleRenderedManifest_HeadFirst_PublishesAppReady(t *testing.T) {
 	//   app.from = the incoming base manifestLocation
 	//   app.to   = headKey (the KV key under which head was previously stored)
 	expectedHeadKey := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, headSha, origin, appName)
+	expectedMsgId := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, origin, appName, runId)
 	select {
 	case hdrs := <-appReadyCh:
 		assert.Equal(t, baseLoc, hdrs["app.from"], "app.from should be the incoming base manifest location")
 		assert.Equal(t, expectedHeadKey, hdrs["app.to"], "app.to should be the KV key of the stored head manifest")
+		assert.Equal(t, expectedMsgId, hdrs["Nats-Msg-Id"], "Nats-Msg-Id should dedupe on owner.repo.number.origin.app.runId")
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for coordinator.app.ready message")
 	}
@@ -215,6 +206,7 @@ func TestHandleRenderedManifest_BaseFirst_PublishesAppReady(t *testing.T) {
 		appName = "chart-app"
 		baseLoc = "manifests/base/chart-app"
 		headLoc = "manifests/head/chart-app"
+		runId   = "run-2"
 	)
 
 	// 1. Base manifest arrives first — no publish yet
@@ -228,6 +220,7 @@ func TestHandleRenderedManifest_BaseFirst_PublishesAppReady(t *testing.T) {
 		"app.name":          appName,
 		"app.origin":        origin,
 		"manifest.location": baseLoc,
+		"RunId":             runId,
 	}
 	c.handleRenderedManifest(ctx, baseHeaders, nil, testutil.NoopAck, testutil.NoopNak)
 
@@ -249,6 +242,7 @@ func TestHandleRenderedManifest_BaseFirst_PublishesAppReady(t *testing.T) {
 		"app.name":          appName,
 		"app.origin":        origin,
 		"manifest.location": headLoc,
+		"RunId":             runId,
 	}
 	c.handleRenderedManifest(ctx, headHeaders, nil, testutil.NoopAck, testutil.NoopNak)
 
@@ -256,10 +250,12 @@ func TestHandleRenderedManifest_BaseFirst_PublishesAppReady(t *testing.T) {
 	//   app.from = baseKey (the KV key under which base was previously stored)
 	//   app.to   = the incoming head manifestLocation
 	expectedBaseKey2 := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, baseSha, origin, appName)
+	expectedMsgId := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, origin, appName, runId)
 	select {
 	case hdrs := <-appReadyCh:
 		assert.Equal(t, expectedBaseKey2, hdrs["app.from"], "app.from should be the KV key of the stored base manifest")
 		assert.Equal(t, headLoc, hdrs["app.to"], "app.to should be the incoming head manifest location")
+		assert.Equal(t, expectedMsgId, hdrs["Nats-Msg-Id"], "Nats-Msg-Id should dedupe on owner.repo.number.origin.app.runId")
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for coordinator.app.ready message")
 	}

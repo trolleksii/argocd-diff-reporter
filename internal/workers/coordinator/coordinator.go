@@ -54,8 +54,7 @@ func (c *Coordinator) Run(ctx context.Context) error {
 		MaxDeliver: 3,
 		AckWait:    10 * time.Second,
 		Routes: []nats.Route{
-			{Subjects: []string{subjects.WebhookPRChanged}, Handler: c.handlePREvent},
-			{Subjects: []string{subjects.GitFilesMatched}, Handler: c.updateIndex},
+			{Subjects: []string{subjects.GitFilesMatched}, Handler: c.handlePREvent},
 			{Subjects: []string{subjects.ArgoFileParseFailed}, Handler: c.handleFileErrors},
 			{Subjects: []string{subjects.ArgoTotalUpdated}, Handler: c.handleTotalAppUpdate},
 			{
@@ -194,39 +193,6 @@ func (c *Coordinator) handleAppErrors(ctx context.Context, headers nats.Headers,
 	ack()
 }
 
-func (c *Coordinator) updateIndex(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
-	ctx, span := tracer.Start(
-		otel.GetTextMapPropagator().Extract(ctx, headers),
-		"updateIndex",
-	)
-	otel.GetTextMapPropagator().Inject(ctx, headers)
-	defer span.End()
-
-	pr, err := nats.Unmarshal[models.PullRequest](data)
-	if err != nil {
-		c.log.ErrorContext(ctx, "failed to unmarshal pr object", "error", err)
-		span.SetStatus(codes.Error, err.Error())
-		nak()
-		return
-	}
-	span.SetAttributes(
-		attribute.String("pr.owner", pr.Owner),
-		attribute.String("pr.repo", pr.Repo),
-		attribute.String("pr.number", pr.Number),
-	)
-	c.log.DebugContext(ctx, "updating matching pr index",
-		"prNum", pr.Number,
-		"owner", pr.Owner,
-		"repo", pr.Repo)
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.index.Update(pr)
-	c.store.SetValue(ctx, "index", c.index.GetElements())
-	c.notifier.Notify("index", c.index.GetElements())
-	ack()
-}
-
 func (c *Coordinator) handlePREvent(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
 	ctx, span := tracer.Start(
 		otel.GetTextMapPropagator().Extract(ctx, headers),
@@ -256,6 +222,10 @@ func (c *Coordinator) handlePREvent(ctx context.Context, headers nats.Headers, d
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.store.SetValue(ctx, key, models.Progress{})
+	c.index.Update(pr)
+	elements := c.index.GetElements()
+	c.store.SetValue(ctx, "index", elements)
+	c.notifier.Notify("index", elements)
 
 	key = fmt.Sprintf("%s.%s.%s", pr.Owner, pr.Repo, pr.Number)
 	c.store.SetValue(ctx, key, pr)
@@ -316,6 +286,7 @@ func (c *Coordinator) handleRenderedManifest(ctx context.Context, headers nats.H
 	appName := headers["app.name"]
 	origin := headers["app.origin"]
 	manifestLocation := headers.Get("manifest.location")
+	runId := headers["RunId"]
 	span.SetAttributes(
 		attribute.String("pr.owner", owner),
 		attribute.String("pr.repo", repo),
@@ -331,12 +302,12 @@ func (c *Coordinator) handleRenderedManifest(ctx context.Context, headers nats.H
 	)
 	baseKey := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, baseSha, origin, appName)
 	headKey := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, headSha, origin, appName)
-	//delete(headers, "Nats-Msg-Id")
 	if sha == headSha {
 		c.store.SetValue(ctx, headKey, manifestLocation)
 		if _, err := nats.GetValue[string](ctx, c.store, baseKey); err == nil {
 			headers["app.from"] = baseKey
 			headers["app.to"] = manifestLocation
+			headers["Nats-Msg-Id"] = fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, origin, appName, runId)
 			c.bus.Publish(ctx, subjects.CoordinatorAppReady, headers, nil)
 		}
 	} else {
@@ -344,6 +315,7 @@ func (c *Coordinator) handleRenderedManifest(ctx context.Context, headers nats.H
 		if _, err := nats.GetValue[string](ctx, c.store, headKey); err == nil {
 			headers["app.from"] = manifestLocation
 			headers["app.to"] = headKey
+			headers["Nats-Msg-Id"] = fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, origin, appName, runId)
 			c.bus.Publish(ctx, subjects.CoordinatorAppReady, headers, nil)
 		}
 	}
@@ -413,7 +385,15 @@ func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.He
 		return
 	}
 	progress.ProcessedApps += 1
-	c.log.InfoContext(ctx, "progress updated", "owner", owner, "repo", repo, "number", number, "progress", progress)
+	c.log.InfoContext(ctx, "progress updated",
+		"owner", owner,
+		"repo", repo,
+		"number", number,
+		"app", appName,
+		"origin", origin,
+		"sha", headers["sha.active"],
+		"progress", progress,
+	)
 	c.store.SetValue(ctx, progressId, progress)
 
 	if progress.TotalApps == progress.ProcessedApps {
