@@ -18,10 +18,9 @@ import (
 	"github.com/trolleksii/argocd-diff-reporter/internal/subjects"
 )
 
-const CheckName = "ArgoCD Diff Report"
-
 type GithubChecks struct {
 	cfg    config.GithubChecksConfig
+	title  string
 	tsrc   oauth2.TokenSource
 	log    *slog.Logger
 	client *github.Client
@@ -30,8 +29,13 @@ type GithubChecks struct {
 }
 
 func New(cfg config.GithubChecksConfig, log *slog.Logger, b *nats.Bus, s *nats.Store, tokenSource oauth2.TokenSource) *GithubChecks {
+	title := "ArgoCD Diff Report"
+	if cfg.EnvironmentId != "" {
+		title = fmt.Sprintf("%s (%s)", title, cfg.EnvironmentId)
+	}
 	return &GithubChecks{
 		cfg:   cfg,
+		title: title,
 		log:   log.With("worker", "githubintegration"),
 		tsrc:  tokenSource,
 		bus:   b,
@@ -72,7 +76,7 @@ func (w *GithubChecks) CreatePendingCheck(ctx context.Context, headers nats.Head
 		return
 	}
 	cr, _, err := w.client.Checks.CreateCheckRun(ctx, pr.Owner, pr.Repo, github.CreateCheckRunOptions{
-		Name:    CheckName,
+		Name:    w.title,
 		HeadSHA: pr.HeadSHA,
 		Status:  github.Ptr("in_progress"),
 		Output: &github.CheckRunOutput{
@@ -117,13 +121,14 @@ func (w *GithubChecks) UpdateCheckResult(ctx context.Context, headers nats.Heade
 	}
 
 	d := ChecksDetails{
-		Status:       pr.Status,
-		Files:        pr.Files,
-		BaseURL:      fmt.Sprintf("%s/reports/%s/%s/%s/%s:%s", w.cfg.UIBaseURL, owner, repo, number, pr.BaseSHA, pr.HeadSHA),
-		SuccessCount: 0,
-		ErrorCount:   0,
-		TotalApps:    0,
-		TotalChanges: 0,
+		EnvironmentId: w.cfg.EnvironmentId,
+		Status:        pr.Status,
+		Files:         pr.Files,
+		BaseURL:       fmt.Sprintf("%s/reports/%s/%s/%s/%s:%s", w.cfg.UIBaseURL, owner, repo, number, pr.BaseSHA, pr.HeadSHA),
+		SuccessCount:  0,
+		ErrorCount:    0,
+		TotalApps:     0,
+		TotalChanges:  0,
 	}
 
 	for _, file := range pr.Files {
@@ -149,7 +154,7 @@ func (w *GithubChecks) UpdateCheckResult(ctx context.Context, headers nats.Heade
 	}
 
 	_, _, err = w.client.Checks.UpdateCheckRun(ctx, owner, repo, checkId, github.UpdateCheckRunOptions{
-		Name:       CheckName,
+		Name:       w.title,
 		Status:     github.Ptr("completed"),
 		Conclusion: github.Ptr(conclusion),
 		Output: &github.CheckRunOutput{
@@ -167,13 +172,14 @@ func (w *GithubChecks) UpdateCheckResult(ctx context.Context, headers nats.Heade
 }
 
 type ChecksDetails struct {
-	Status       models.PipelineStatus
-	Files        map[string]models.FileResult
-	BaseURL      string
-	ErrorCount   int
-	SuccessCount int
-	TotalChanges int
-	TotalApps    int
+	EnvironmentId string
+	Status        models.PipelineStatus
+	Files         map[string]models.FileResult
+	BaseURL       string
+	ErrorCount    int
+	SuccessCount  int
+	TotalChanges  int
+	TotalApps     int
 }
 
 //go:embed templates/check_report.md.tmpl

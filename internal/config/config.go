@@ -70,7 +70,8 @@ type CoordinatorConfig struct {
 }
 
 type GithubChecksConfig struct {
-	UIBaseURL string `yaml:"uiBaseUrl"`
+	EnvironmentId string `yaml:"environmentId"`
+	UIBaseURL     string `yaml:"uiBaseUrl"`
 }
 
 type NatsConfig struct {

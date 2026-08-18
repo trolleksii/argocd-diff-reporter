@@ -78,6 +78,24 @@ github:
 	assert.Equal(t, "custom-service", cfg.Tracing.Service)
 }
 
+func TestLoad_GithubChecksEnvironmentId(t *testing.T) {
+	yaml := `
+github:
+  token: "ghp_test"
+workers:
+  githubChecks:
+    environmentId: "production"
+`
+	cfg, err := Load(writeConfig(t, yaml))
+	require.NoError(t, err)
+	assert.Equal(t, "production", cfg.Workers.GithubChecks.EnvironmentId)
+
+	// Default: no environment id
+	cfg, err = Load(writeConfig(t, "github:\n  token: \"ghp_test\"\n"))
+	require.NoError(t, err)
+	assert.Empty(t, cfg.Workers.GithubChecks.EnvironmentId)
+}
+
 func TestLoad_InvalidYAML(t *testing.T) {
 	_, err := Load(writeConfig(t, "not: valid: yaml: ["))
 	require.Error(t, err)
