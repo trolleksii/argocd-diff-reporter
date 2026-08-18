@@ -70,6 +70,7 @@ func (w *DiffWorker) handleDiffReport(ctx context.Context, headers nats.Headers,
 	headSha := headers["pr.sha.head"]
 	appName := headers["app.name"]
 	origin := headers["app.origin"]
+	runId := headers["RunId"]
 	span.SetAttributes(
 		attribute.String("pr.owner", owner),
 		attribute.String("pr.repo", repo),
@@ -80,7 +81,7 @@ func (w *DiffWorker) handleDiffReport(ctx context.Context, headers nats.Headers,
 		attribute.String("app.origin", origin),
 	)
 	w.log.DebugContext(ctx, "new coordinator.app.ready event", "appName", appName)
-	//headers.Set("Nats-Msg-Id", baseSha+headSha+origin+appName)
+	headers.Set("Nats-Msg-Id", baseSha+headSha+origin+appName+runId)
 
 	data, err := nats.GetObject[string](ctx, w.store, headers["app.from"])
 	if err != nil {

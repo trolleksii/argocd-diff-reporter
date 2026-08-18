@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
@@ -107,4 +108,8 @@ func (n *Nats) NewBus() *Bus {
 
 func (n *Nats) NewStore() *Store {
 	return &Store{kvStore: n.kv, objStore: n.obj}
+}
+
+func NewRunID() string {
+	return strconv.FormatInt(time.Now().UnixNano(), 10)
 }

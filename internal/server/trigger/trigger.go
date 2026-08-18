@@ -123,6 +123,9 @@ func (h *TriggerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal error", http.StatusInternalServerError)
 		return
 	}
+
+	runId := nats.NewRunID()
+	headers.Set("RunId", runId)
 	if err := h.bus.Publish(trCtx, subjects.WebhookPRChanged, headers, data); err != nil {
 		h.log.ErrorContext(trCtx, "failed to publish pr changed event", "error", err)
 		span.SetStatus(codes.Error, err.Error())

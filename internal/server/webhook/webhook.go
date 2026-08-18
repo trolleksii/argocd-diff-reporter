@@ -67,6 +67,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	span.SetAttributes(
 		attribute.String("event.type", github.WebHookType(r)),
 	)
+	runId := nats.NewRunID()
 	switch event := event.(type) {
 	case *github.CheckSuiteEvent:
 		if action := event.GetAction(); action != "rerequested" {
@@ -103,6 +104,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			span.SetStatus(codes.Error, err.Error())
 			return
 		}
+		headers.Set("RunId", runId)
 		h.bus.Publish(trCtx, subjects.WebhookPRChanged, headers, data)
 	case *github.PullRequestEvent:
 		action := event.GetAction()
@@ -148,6 +150,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				span.SetStatus(codes.Error, err.Error())
 				return
 			}
+			headers.Set("RunId", runId)
 			h.bus.Publish(trCtx, subjects.WebhookPRClosed, headers, data)
 		case "opened", "synchronize", "reopened":
 			pr := event.GetPullRequest()
@@ -178,6 +181,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				span.SetStatus(codes.Error, err.Error())
 				return
 			}
+			headers.Set("RunId", runId)
 			h.bus.Publish(trCtx, subjects.WebhookPRChanged, headers, data)
 		}
 	default:
