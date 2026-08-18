@@ -93,6 +93,8 @@ type LogConfig struct {
 
 type TracingConfig struct {
 	Endpoint string `yaml:"endpoint"`
+	// Protocol selects the OTLP transport: "http" (default) or "grpc".
+	Protocol string `yaml:"protocol"`
 	Service  string `yaml:"service"`
 	Version  string `yaml:"version"`
 	// Detail enables fine-grained spans inside handlers; off gives one span per hop.
@@ -115,7 +117,8 @@ func Load(path string) (*Config, error) {
 			},
 		},
 		Tracing: TracingConfig{
-			Service: "argocd-diff-reporter",
+			Service:  "argocd-diff-reporter",
+			Protocol: "http",
 		},
 	}
 	if err := yaml.Unmarshal(data, cfg); err != nil {

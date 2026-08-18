@@ -2,10 +2,12 @@ package tracing
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync/atomic"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -41,10 +43,22 @@ func InitTracer(ctx context.Context, cfg config.TracingConfig, log *slog.Logger)
 		return defaultCleanup, nil
 	}
 
-	exporter, err := otlptracehttp.New(ctx,
-		otlptracehttp.WithEndpoint(otlpEndpoint),
-		otlptracehttp.WithInsecure(),
-	)
+	var exporter sdktrace.SpanExporter
+	var err error
+	switch cfg.Protocol {
+	case "", "http":
+		exporter, err = otlptracehttp.New(ctx,
+			otlptracehttp.WithEndpoint(otlpEndpoint),
+			otlptracehttp.WithInsecure(),
+		)
+	case "grpc":
+		exporter, err = otlptracegrpc.New(ctx,
+			otlptracegrpc.WithEndpoint(otlpEndpoint),
+			otlptracegrpc.WithInsecure(),
+		)
+	default:
+		return defaultCleanup, fmt.Errorf("unsupported tracing protocol %q (want http or grpc)", cfg.Protocol)
+	}
 	if err != nil {
 		return defaultCleanup, err
 	}
