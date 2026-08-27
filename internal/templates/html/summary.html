@@ -252,7 +252,13 @@
                             {{range $name, $app := $v.Apps}}
                             <td>{{$app.DiffStats.DiffCount}}</td>
                             <td>
+                                {{if ne (len $app.Errors) 0}}
+                                {{range $app.Errors}}
+                                <span class="app-error">{{.}}</span>
+                                {{end}}
+                                {{else}}
                                 <a href="/reports/{{$pr.Number}}/{{$pr.BaseSHA}}:{{$pr.HeadSHA}}:{{$k}}:{{$name}}" class="app-link">{{$name}}</a>
+                                {{end}}
                             </td>
                         </tr>
                         {{end}}
