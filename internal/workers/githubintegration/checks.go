@@ -139,6 +139,7 @@ func (w *GithubChecks) UpdateCheckResult(ctx context.Context, headers nats.Heade
 			d.TotalChanges += app.DiffStats.DiffCount
 		}
 	}
+	d.SuccessCount = d.TotalApps - d.ErrorCount
 
 	conclusion := "neutral"
 	title := fmt.Sprintf("Found %d Changes", d.TotalChanges)
