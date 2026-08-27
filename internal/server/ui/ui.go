@@ -2,11 +2,11 @@ package ui
 
 import (
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
 
+	"github.com/trolleksii/argocd-diff-reporter/internal/keys"
 	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/templates"
@@ -45,7 +45,7 @@ func (h *UIHandler) ServeIndex(w http.ResponseWriter, r *http.Request) {
 	if partial {
 		templateName = "latestprs"
 	}
-	index, err := nats.GetValue[[]models.PullRequest](r.Context(), h.store, "index")
+	index, err := nats.GetValue[[]models.PullRequest](r.Context(), h.store, keys.Index)
 	if err != nil {
 		h.log.Error("failed to fetch index", "error", err)
 	}
@@ -59,7 +59,7 @@ func (h *UIHandler) ServeSummary(w http.ResponseWriter, r *http.Request) {
 	owner := r.PathValue("owner")
 	repo := r.PathValue("repo")
 	number := r.PathValue("pr")
-	key := fmt.Sprintf("%s.%s.%s", owner, repo, number)
+	key := keys.PR(owner, repo, number)
 	summary, err := nats.GetValue[models.PullRequest](r.Context(), h.store, key)
 	if err != nil {
 		h.log.Error("failed to find summary for a pr", "error", err)
@@ -90,7 +90,7 @@ func ParseReportId(r *http.Request) (string, error) {
 		return "", errors.New("invalid report ID format")
 	}
 
-	return fmt.Sprintf("%s.%s.%s.%s.%s.%s.%s", owner, repo, number, chunks[0], chunks[1], chunks[2], chunks[3]), nil
+	return keys.Report(owner, repo, number, chunks[0], chunks[1], chunks[2], chunks[3]), nil
 }
 
 func (h *UIHandler) ServeReport(w http.ResponseWriter, r *http.Request) {

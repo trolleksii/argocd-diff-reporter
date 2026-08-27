@@ -10,6 +10,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 
+	"github.com/trolleksii/argocd-diff-reporter/internal/keys"
 	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/reports"
@@ -63,14 +64,14 @@ func (w *DiffWorker) handleDiffReport(ctx context.Context, headers nats.Headers,
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
 
-	owner := headers["pr.owner"]
-	repo := headers["pr.repo"]
-	number := headers["pr.number"]
-	baseSha := headers["pr.sha.base"]
-	headSha := headers["pr.sha.head"]
-	appName := headers["app.name"]
-	origin := headers["app.origin"]
-	runId := headers["RunId"]
+	owner := headers.Get("pr.owner")
+	repo := headers.Get("pr.repo")
+	number := headers.Get("pr.number")
+	baseSha := headers.Get("pr.sha.base")
+	headSha := headers.Get("pr.sha.head")
+	appName := headers.Get("app.name")
+	origin := headers.Get("app.origin")
+	runId := headers.Get("RunId")
 	span.SetAttributes(
 		attribute.String("pr.owner", owner),
 		attribute.String("pr.repo", repo),
@@ -81,30 +82,42 @@ func (w *DiffWorker) handleDiffReport(ctx context.Context, headers nats.Headers,
 		attribute.String("app.origin", origin),
 	)
 	w.log.DebugContext(ctx, "new coordinator.app.ready event", "appName", appName)
-	headers.Set("Nats-Msg-Id", baseSha+headSha+origin+appName+runId)
+	headers.Set(keys.MsgIDHeader, keys.MsgIDReport(owner, repo, number, runId, origin, appName))
 
-	data, err := nats.GetObject[string](ctx, w.store, headers["app.from"])
-	if err != nil {
-		w.log.ErrorContext(ctx, "failed to find from manifest", "error", err, "id", headers["app.from"])
-		nak()
-		return
+	baseLoc := headers.Get("manifest.base.location")
+	headLoc := headers.Get("manifest.head.location")
+	var data string
+	var err error
+	if baseLoc == "" {
+		data = "---"
+	} else {
+		data, err = nats.GetObject[string](ctx, w.store, baseLoc)
+		if err != nil {
+			w.log.ErrorContext(ctx, "failed to find base manifest", "error", err, "id", baseLoc)
+			nak()
+			return
+		}
 	}
 	fromDoc, err := reports.LoadManifest(appName, []byte(data))
 	if err != nil {
-		w.log.ErrorContext(ctx, "failed to load from manifest", "error", err, "id", headers["app.from"])
+		w.log.ErrorContext(ctx, "failed to load base manifest", "error", err, "id", baseLoc)
 		nak()
 		return
 	}
 
-	data, err = nats.GetObject[string](ctx, w.store, headers["app.to"])
-	if err != nil {
-		w.log.ErrorContext(ctx, "failed to find to manifest", "error", err, "id", headers["app.to"])
-		nak()
-		return
+	if headLoc == "" {
+		data = "---"
+	} else {
+		data, err = nats.GetObject[string](ctx, w.store, headLoc)
+		if err != nil {
+			w.log.ErrorContext(ctx, "failed to find head manifest", "error", err, "id", headLoc)
+			nak()
+			return
+		}
 	}
 	toDoc, err := reports.LoadManifest(appName, []byte(data))
 	if err != nil {
-		w.log.ErrorContext(ctx, "failed to load to manifest", "error", err, "id", headers["app.to"])
+		w.log.ErrorContext(ctx, "failed to load head manifest", "error", err, "id", headLoc)
 		nak()
 		return
 	}
@@ -119,12 +132,12 @@ func (w *DiffWorker) handleDiffReport(ctx context.Context, headers nats.Headers,
 	}
 
 	excludedPaths := []string{"/metadata/labels/helm.sh/chart", "/spec/template/metadata/labels/helm.sh/chart"}
-	key := fmt.Sprintf("%s.%s.%s.%s.%s.%s.%s", owner, repo, number, baseSha, headSha, origin, appName)
+	key := keys.Report(owner, repo, number, baseSha, headSha, origin, appName)
 	reports.WriteDiffReport(w.tplCat, fromDoc, toDoc, excludedPaths, &report)
 	if err := w.store.StoreObject(ctx, key, report); err != nil {
 		w.log.ErrorContext(ctx, "failed to store report", "error", err)
 	}
-	headers["report.id"] = key
+	headers.Set("report.id", key)
 	d, err := nats.Marshal(report.DiffStats)
 	if err != nil {
 		w.log.ErrorContext(ctx, "failed to marshal diffstats message", "error", err)

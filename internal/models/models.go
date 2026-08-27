@@ -61,12 +61,12 @@ type KustomizeSpec struct {
 	Components             []string           `json:"components,omitempty"`
 }
 
-type AppSpec struct {
+type ArgoAppSpec struct {
 	AppName    string        `json:"appName"`
 	SourceType SourceType    `json:"sourceType,omitempty"`
 	Namespace  string        `json:"namespace"`
 	Project    string        `json:"project,omitempty"`
-	Source     AppSource     `json:"source"`
+	Source     ArgoAppSource `json:"source"`
 	Helm       HelmSpec      `json:"helm"`
 	Directory  DirectorySpec `json:"directory"`
 	Kustomize  KustomizeSpec `json:"kustomize"`
@@ -78,7 +78,7 @@ type DirectorySpec struct {
 	Recurse bool `json:"recurse,omitempty"`
 }
 
-type AppSource struct {
+type ArgoAppSource struct {
 	RepoURL   string `json:"repoUrl"`
 	Revision  string `json:"revision"`
 	Path      string `json:"path,omitempty"`
@@ -98,33 +98,45 @@ type HelmSpec struct {
 	Parameters  []HelmParameter `json:"parameters,omitempty"`
 }
 
-type Progress struct {
-	TotalApps     int
-	ProcessedApps int
+type AppParsingResult struct {
+	Name  string
+	Error string
 }
 
-// FileProcessingSpec contains details of how to treat a particular file.
-// FileName - is the name of the file in the snapshot
-// ArtifactName - is the name to use for artifact(manifest) storage
-// HasNoCounterpart - an empty manifest must be created with the same ArtifactName but provided SHA
-type FileProcessingSpec struct {
-	FileName         string
-	ArtifactName     string
-	HasNoCounterpart bool
+type FileParsingResult struct {
+	File  string
+	Error string
+	Apps  []AppParsingResult
+}
+
+type AppOrder struct {
+	HasBase bool
+	BaseLoc string
+	HasHead bool
+	HeadLoc string
+}
+
+type WorkOrder struct {
+	Bom  map[string]AppOrder
+	ToDo map[string]struct{}
 }
 
 // PullRequest holds GitHub pull request metadata and the aggregated results
 // of rendering all changed files through the diff pipeline.
 type PullRequest struct {
-	Number  string
-	Author  string
+	PullRequestMeta
+	Files  map[string]FileResult
+	Status PipelineStatus
+}
+
+type PullRequestMeta struct {
 	Owner   string
 	Repo    string
+	Number  string
 	Title   string
+	Author  string
 	BaseSHA string
 	HeadSHA string
-	Files   map[string]FileResult
-	Status  PipelineStatus
 }
 
 // FileResult holds the rendering outcome for a single changed file in a pull request.
@@ -133,14 +145,13 @@ type PullRequest struct {
 // including those expanded from ApplicationSets.
 // Errors contains any file-level or ApplicationSet processing errors.
 type FileResult struct {
-	Status string
 	Errors []string
-	Apps   map[string]App
+	Apps   map[string]AppResult
 }
 
 // App holds the diff rendering result for a single ArgoCD Application.
 // Errors contains any processing errors encountered during rendering.
-type App struct {
+type AppResult struct {
 	Errors    []string
 	DiffStats DiffStats
 }

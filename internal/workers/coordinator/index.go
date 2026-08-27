@@ -42,6 +42,16 @@ func (idx *Index) Update(pr models.PullRequest) {
 	idx.items = append([]models.PullRequest{pr}, idx.items...)
 }
 
+// Delete removes a Pull Request item from the index
+func (idx *Index) Delete(pr models.PullRequest) {
+	for i, item := range idx.items {
+		if item.Owner == pr.Owner && item.Repo == pr.Repo && item.Number == pr.Number {
+			idx.items = append(idx.items[:i], idx.items[i+1:]...)
+			break
+		}
+	}
+}
+
 // UpdateStatus sets the status of a tracked PR. No-op if the PR is not found.
 func (idx *Index) UpdateStatus(pr models.PullRequest) {
 	for i, item := range idx.items {

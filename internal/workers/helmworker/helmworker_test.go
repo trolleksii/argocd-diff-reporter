@@ -3,7 +3,6 @@ package helmworker
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 	"github.com/trolleksii/argocd-diff-reporter/internal/helm"
+	"github.com/trolleksii/argocd-diff-reporter/internal/keys"
 	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 	internalnats "github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/subjects"
@@ -25,12 +25,9 @@ import (
 var helmStreamSubjects = []string{
 	subjects.ArgoHelmOCIParsed,
 	subjects.ArgoHelmHTTPParsed,
-	subjects.ArgoEmptyParsed,
 	subjects.HelmChartFetched,
 	subjects.GitChartFetched,
-	subjects.HelmChartFetchFailed,
-	subjects.HelmManifestRendered,
-	subjects.HelmManifestRenderFailed,
+	subjects.ManifestRenderFinished,
 }
 
 const helmTestStream = "helmworker-test"
@@ -118,10 +115,10 @@ func TestHandleChartFetch_PublishesChartFetched(t *testing.T) {
 		appName = "svc"
 	)
 
-	spec := models.AppSpec{
+	spec := models.ArgoAppSpec{
 		AppName: appName,
 		Project: "team-a",
-		Source: models.AppSource{
+		Source: models.ArgoAppSource{
 			RepoURL:   "https://example.com/charts",
 			ChartName: "mychart",
 			Revision:  "1.0.0",
@@ -136,6 +133,7 @@ func TestHandleChartFetch_PublishesChartFetched(t *testing.T) {
 		"pr.number":  number,
 		"sha.active": "sha-fetch",
 		"app.origin": origin,
+		"RunId":      "run-fetch-ok",
 	}
 
 	chartFetchedCh := testutil.SubscribeOnce(t, bus, subjects.HelmChartFetched)
@@ -156,16 +154,17 @@ func TestHandleChartFetch_PublishesChartFetched(t *testing.T) {
 	select {
 	case hdrs := <-chartFetchedCh:
 		assert.Equal(t, fixedPath, hdrs["chart.location"], "chart.location should be the path returned by fetchFn")
+		assert.Empty(t, hdrs["error.msg"], "error.msg must not be set on success")
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for HelmChartFetched message")
 	}
 }
 
 // ---------------------------------------------------------------------------
-// handleChartFetch — fetch error publishes HelmChartFetchFailed and acks
+// handleChartFetch — fetch error publishes ManifestRenderFinished + error.msg and acks
 // ---------------------------------------------------------------------------
 
-func TestHandleChartFetch_FetchError_PublishesFailure(t *testing.T) {
+func TestHandleChartFetch_FetchError_PublishesRenderFinishedWithError(t *testing.T) {
 	w, bus, _ := newTestHelmWorker(t)
 	ctx := context.Background()
 
@@ -175,9 +174,9 @@ func TestHandleChartFetch_FetchError_PublishesFailure(t *testing.T) {
 	}
 
 	const appName = "broken-app"
-	spec := models.AppSpec{
+	spec := models.ArgoAppSpec{
 		AppName: appName,
-		Source: models.AppSource{
+		Source: models.ArgoAppSource{
 			RepoURL:   "https://example.com/charts",
 			ChartName: "broken-chart",
 			Revision:  "0.1.0",
@@ -192,9 +191,10 @@ func TestHandleChartFetch_FetchError_PublishesFailure(t *testing.T) {
 		"pr.number":  "99",
 		"sha.active": "sha-fail",
 		"app.origin": "apps/broken.yaml",
+		"RunId":      "run-fetch-fail",
 	}
 
-	chartFetchFailedCh := testutil.SubscribeOnce(t, bus, subjects.HelmChartFetchFailed)
+	renderFinishedCh := testutil.SubscribeOnce(t, bus, subjects.ManifestRenderFinished)
 
 	ackCalled := false
 	nakCalled := false
@@ -204,17 +204,17 @@ func TestHandleChartFetch_FetchError_PublishesFailure(t *testing.T) {
 	w.handleChartFetch(failingFetchFn)(ctx, headers, data, ack, nak)
 
 	// The implementation calls ack() (not nak()) on fetch error — this is
-	// intentional: the message has been processed and the error is published
-	// as a separate failure event.
+	// intentional: the message has been processed and the error is reported
+	// to the coordinator via ManifestRenderFinished.
 	assert.True(t, ackCalled, "ack should be called even when fetch fails (error is reported via event)")
 	assert.False(t, nakCalled, "nak should not be called on fetch error")
 
 	select {
-	case hdrs := <-chartFetchFailedCh:
+	case hdrs := <-renderFinishedCh:
 		assert.Equal(t, fetchErr.Error(), hdrs["error.msg"], "error.msg header should contain the fetch error")
-		assert.Equal(t, appName, hdrs["error.origin.app"], "error.origin.app header should carry the app name")
+		assert.Empty(t, hdrs["manifest.location"], "manifest.location must not be set on failure")
 	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for HelmChartFetchFailed message")
+		t.Fatal("timed out waiting for ManifestRenderFinished message")
 	}
 }
 
@@ -224,7 +224,7 @@ func TestHandleChartFetch_FetchError_PublishesFailure(t *testing.T) {
 
 // TestHandleChartRender_RendersAndStores exercises the full render path using
 // the fixture chart at internal/helm/testdata/mychart, verifying that the
-// rendered manifest is stored and a HelmManifestRendered event is published.
+// rendered manifest is stored and ManifestRenderFinished carries its location.
 func TestHandleChartRender_RendersAndStores(t *testing.T) {
 	chartDir := testdataChartPath(t)
 
@@ -245,10 +245,10 @@ func TestHandleChartRender_RendersAndStores(t *testing.T) {
 		appName = "render-app"
 	)
 
-	spec := models.AppSpec{
+	spec := models.ArgoAppSpec{
 		AppName:   appName,
 		Namespace: "default",
-		Source: models.AppSource{
+		Source: models.ArgoAppSource{
 			RepoURL:   "https://example.com/charts",
 			ChartName: "mychart",
 			Revision:  "0.1.0",
@@ -267,9 +267,10 @@ func TestHandleChartRender_RendersAndStores(t *testing.T) {
 		"sha.active":     sha,
 		"app.origin":     origin,
 		"chart.location": chartDir,
+		"RunId":          "run-render-ok",
 	}
 
-	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.HelmManifestRendered)
+	renderFinishedCh := testutil.SubscribeOnce(t, bus, subjects.ManifestRenderFinished)
 
 	ackCalled := false
 	nakCalled := false
@@ -281,30 +282,30 @@ func TestHandleChartRender_RendersAndStores(t *testing.T) {
 	assert.True(t, ackCalled, "ack should be called on successful render")
 	assert.False(t, nakCalled, "nak should not be called on successful render")
 
-	expectedKey := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, appName)
+	expectedKey := keys.Manifest(owner, repo, number, sha, origin, appName)
 	stored, err := internalnats.GetObject[string](ctx, store, expectedKey)
 	require.NoError(t, err, "manifest should be stored at key %q", expectedKey)
 	assert.NotEmpty(t, stored, "stored manifest should not be empty")
 
 	select {
-	case hdrs := <-manifestRenderedCh:
+	case hdrs := <-renderFinishedCh:
 		assert.Equal(t, expectedKey, hdrs["manifest.location"], "manifest.location header should carry the store key")
-		assert.Equal(t, appName, hdrs["app.name"], "app.name header should be set")
+		assert.Empty(t, hdrs["error.msg"], "error.msg must not be set on success")
 	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for HelmManifestRendered message")
+		t.Fatal("timed out waiting for ManifestRenderFinished message")
 	}
 }
 
 // ---------------------------------------------------------------------------
-// handleChartRender — render failure publishes HelmManifestRenderFailed and acks
+// handleChartRender — render failure publishes ManifestRenderFinished + error.msg and acks
 // ---------------------------------------------------------------------------
 
-// TestHandleChartRender_RenderFailurePublishesEvent drives handleChartRender
-// into its render-failure branch by pointing chart.location at the malformed
-// badchart fixture. It asserts that the handler acks (not naks), publishes a
-// HelmManifestRenderFailed event with the expected error headers, and does
-// not write any object to the store.
-func TestHandleChartRender_RenderFailurePublishesEvent(t *testing.T) {
+// TestHandleChartRender_RenderError_PublishesRenderFinishedWithError drives
+// handleChartRender into its render-failure branch by pointing chart.location
+// at the malformed badchart fixture. It asserts that the handler acks (not
+// naks), publishes ManifestRenderFinished with error.msg and no
+// manifest.location, and does not write any object to the store.
+func TestHandleChartRender_RenderError_PublishesRenderFinishedWithError(t *testing.T) {
 	chartDir := testdataBadChartPath(t)
 
 	// Sanity-check the fixture is present before using it.
@@ -324,10 +325,10 @@ func TestHandleChartRender_RenderFailurePublishesEvent(t *testing.T) {
 		appName = "fail-app"
 	)
 
-	spec := models.AppSpec{
+	spec := models.ArgoAppSpec{
 		AppName:   appName,
 		Namespace: "default",
-		Source: models.AppSource{
+		Source: models.ArgoAppSource{
 			RepoURL:   "https://example.com/charts",
 			ChartName: "badchart",
 			Revision:  "0.1.0",
@@ -346,9 +347,10 @@ func TestHandleChartRender_RenderFailurePublishesEvent(t *testing.T) {
 		"sha.active":     sha,
 		"app.origin":     origin,
 		"chart.location": chartDir,
+		"RunId":          "run-render-fail",
 	}
 
-	renderFailedCh := testutil.SubscribeOnce(t, bus, subjects.HelmManifestRenderFailed)
+	renderFinishedCh := testutil.SubscribeOnce(t, bus, subjects.ManifestRenderFinished)
 
 	ackCalled := false
 	nakCalled := false
@@ -361,15 +363,14 @@ func TestHandleChartRender_RenderFailurePublishesEvent(t *testing.T) {
 	assert.False(t, nakCalled, "nak should not be called on render failure")
 
 	select {
-	case hdrs := <-renderFailedCh:
+	case hdrs := <-renderFinishedCh:
 		assert.NotEmpty(t, hdrs["error.msg"], "error.msg header must carry the render error")
-		assert.Equal(t, appName, hdrs["error.origin.app"], "error.origin.app header must carry the app name")
-		assert.Equal(t, origin, hdrs["error.origin.file"], "error.origin.file header must carry the app origin")
+		assert.Empty(t, hdrs["manifest.location"], "manifest.location must not be set on failure")
 	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for HelmManifestRenderFailed message")
+		t.Fatal("timed out waiting for ManifestRenderFinished message")
 	}
 
-	expectedKey := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, appName)
+	expectedKey := keys.Manifest(owner, repo, number, sha, origin, appName)
 	_, getErr := internalnats.GetObject[string](ctx, store, expectedKey)
 	assert.Error(t, getErr, "no manifest should be stored when render fails")
 }
@@ -393,10 +394,10 @@ func TestHandleChartRender_WithValues_OverridesReflected(t *testing.T) {
 		appName = "values-app"
 	)
 
-	spec := models.AppSpec{
+	spec := models.ArgoAppSpec{
 		AppName:   appName,
 		Namespace: "default",
-		Source: models.AppSource{
+		Source: models.ArgoAppSource{
 			RepoURL:   "https://example.com/charts",
 			ChartName: "mychart",
 			Revision:  "0.1.0",
@@ -416,9 +417,10 @@ func TestHandleChartRender_WithValues_OverridesReflected(t *testing.T) {
 		"sha.active":     sha,
 		"app.origin":     origin,
 		"chart.location": chartDir,
+		"RunId":          "run-render-values",
 	}
 
-	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.HelmManifestRendered)
+	renderFinishedCh := testutil.SubscribeOnce(t, bus, subjects.ManifestRenderFinished)
 
 	ackCalled := false
 	nakCalled := false
@@ -430,16 +432,16 @@ func TestHandleChartRender_WithValues_OverridesReflected(t *testing.T) {
 	assert.True(t, ackCalled, "ack should be called on successful render")
 	assert.False(t, nakCalled, "nak should not be called on successful render")
 
-	expectedKey := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, appName)
+	expectedKey := keys.Manifest(owner, repo, number, sha, origin, appName)
 	stored, err := internalnats.GetObject[string](ctx, store, expectedKey)
 	require.NoError(t, err, "manifest should be stored at key %q", expectedKey)
 	assert.Contains(t, stored, "key: overridden", "rendered manifest should reflect the values override")
 
 	select {
-	case hdrs := <-manifestRenderedCh:
+	case hdrs := <-renderFinishedCh:
 		assert.Equal(t, expectedKey, hdrs["manifest.location"], "manifest.location header should carry the store key")
-		assert.Equal(t, appName, hdrs["app.name"], "app.name header should be set")
+		assert.Empty(t, hdrs["error.msg"], "error.msg must not be set on success")
 	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for HelmManifestRendered message")
+		t.Fatal("timed out waiting for ManifestRenderFinished message")
 	}
 }

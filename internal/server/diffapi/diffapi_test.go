@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/trolleksii/argocd-diff-reporter/internal/keys"
 	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/testutil"
@@ -31,20 +32,18 @@ func get(t *testing.T, mux *http.ServeMux, url string) *httptest.ResponseRecorde
 
 func seedPR(t *testing.T, store *nats.Store, pr models.PullRequest) {
 	t.Helper()
-	key := pr.Owner + "." + pr.Repo + "." + pr.Number
-	require.NoError(t, store.SetValue(context.Background(), key, pr))
+	require.NoError(t, store.SetValue(context.Background(), keys.PR(pr.Owner, pr.Repo, pr.Number), pr))
 }
 
 func TestServeDiff_HappyPath(t *testing.T) {
 	_, store, _ := testutil.StartNATS(t)
 
 	seedPR(t, store, models.PullRequest{
-		Number: "42", Owner: "org", Repo: "repo",
-		BaseSHA: "base", HeadSHA: "head",
-		Status: models.PipelineSucceeded,
+		PullRequestMeta: models.PullRequestMeta{Owner: "org", Repo: "repo", Number: "42", BaseSHA: "base", HeadSHA: "head"},
+		Status:          models.PipelineSucceeded,
 		Files: map[string]models.FileResult{
-			"apps/b.yaml": {Apps: map[string]models.App{"app-b": {}}},
-			"apps/a.yaml": {Apps: map[string]models.App{"app-a": {}}},
+			"apps/b.yaml": {Apps: map[string]models.AppResult{"app-b": {}}},
+			"apps/a.yaml": {Apps: map[string]models.AppResult{"app-a": {}}},
 		},
 	})
 	for _, app := range []string{"app-a", "app-b"} {
@@ -55,7 +54,7 @@ func TestServeDiff_HappyPath(t *testing.T) {
 			BodyMarkdown: "### /spec/replicas\n\n**Modified**\n```diff\n- 2\n+ 3\n```\n\n",
 			DiffStats:    models.DiffStats{DiffCount: 1, Modifications: 1},
 		}
-		key := "org.repo.42.base.head." + file + "." + app
+		key := keys.Report("org", "repo", "42", "base", "head", file, app)
 		require.NoError(t, store.StoreObject(context.Background(), key, report))
 	}
 
@@ -94,8 +93,8 @@ func TestServeDiff_InProgress_Returns202(t *testing.T) {
 	_, store, _ := testutil.StartNATS(t)
 
 	seedPR(t, store, models.PullRequest{
-		Number: "7", Owner: "org", Repo: "repo",
-		Status: models.PipelineInProgress,
+		PullRequestMeta: models.PullRequestMeta{Owner: "org", Repo: "repo", Number: "7"},
+		Status:          models.PipelineInProgress,
 	})
 
 	rr := get(t, newMux(store), "/api/diff/org/repo/7")
@@ -106,13 +105,12 @@ func TestServeDiff_MissingReportAndErrors(t *testing.T) {
 	_, store, _ := testutil.StartNATS(t)
 
 	seedPR(t, store, models.PullRequest{
-		Number: "3", Owner: "org", Repo: "repo",
-		BaseSHA: "base", HeadSHA: "head",
-		Status: models.PipelineFailed,
+		PullRequestMeta: models.PullRequestMeta{Owner: "org", Repo: "repo", Number: "3", BaseSHA: "base", HeadSHA: "head"},
+		Status:          models.PipelineFailed,
 		Files: map[string]models.FileResult{
 			"apps/x.yaml": {
 				Errors: []string{"appset expansion failed"},
-				Apps:   map[string]models.App{"app-x": {Errors: []string{"helm render failed"}}},
+				Apps:   map[string]models.AppResult{"app-x": {Errors: []string{"helm render failed"}}},
 			},
 		},
 	})
@@ -130,15 +128,14 @@ func TestServeDiff_ZeroDiff_NoChangesNote(t *testing.T) {
 	_, store, _ := testutil.StartNATS(t)
 
 	seedPR(t, store, models.PullRequest{
-		Number: "5", Owner: "org", Repo: "repo",
-		BaseSHA: "base", HeadSHA: "head",
-		Status: models.PipelineSucceeded,
+		PullRequestMeta: models.PullRequestMeta{Owner: "org", Repo: "repo", Number: "5", BaseSHA: "base", HeadSHA: "head"},
+		Status:          models.PipelineSucceeded,
 		Files: map[string]models.FileResult{
-			"apps/z.yaml": {Apps: map[string]models.App{"app-z": {}}},
+			"apps/z.yaml": {Apps: map[string]models.AppResult{"app-z": {}}},
 		},
 	})
 	report := models.Report{AppName: "app-z"}
-	require.NoError(t, store.StoreObject(context.Background(), "org.repo.5.base.head.apps/z.yaml.app-z", report))
+	require.NoError(t, store.StoreObject(context.Background(), keys.Report("org", "repo", "5", "base", "head", "apps/z.yaml", "app-z"), report))
 
 	rr := get(t, newMux(store), "/api/diff/org/repo/5")
 	assert.Equal(t, http.StatusOK, rr.Code)
@@ -156,18 +153,17 @@ func TestServeDiff_MaxBytes_Truncates(t *testing.T) {
 	md.WriteString("```\n\n")
 
 	seedPR(t, store, models.PullRequest{
-		Number: "9", Owner: "org", Repo: "repo",
-		BaseSHA: "base", HeadSHA: "head",
-		Status: models.PipelineSucceeded,
+		PullRequestMeta: models.PullRequestMeta{Owner: "org", Repo: "repo", Number: "9", BaseSHA: "base", HeadSHA: "head"},
+		Status:          models.PipelineSucceeded,
 		Files: map[string]models.FileResult{
-			"apps/big.yaml": {Apps: map[string]models.App{"big-app": {}}},
+			"apps/big.yaml": {Apps: map[string]models.AppResult{"big-app": {}}},
 		},
 	})
 	report := models.Report{
 		AppName: "big-app", BodyMarkdown: md.String(),
 		DiffStats: models.DiffStats{DiffCount: 1, Modifications: 1},
 	}
-	require.NoError(t, store.StoreObject(context.Background(), "org.repo.9.base.head.apps/big.yaml.big-app", report))
+	require.NoError(t, store.StoreObject(context.Background(), keys.Report("org", "repo", "9", "base", "head", "apps/big.yaml", "big-app"), report))
 
 	rr := get(t, newMux(store), "/api/diff/org/repo/9?maxBytes=500")
 	assert.Equal(t, http.StatusOK, rr.Code)

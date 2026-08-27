@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/trolleksii/argocd-diff-reporter/internal/keys"
 	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 )
@@ -55,7 +56,7 @@ func (h *DiffAPIHandler) ServeDiff(w http.ResponseWriter, r *http.Request) {
 	// maxBytes caps each app's diff body; 0 or invalid means unlimited.
 	maxBytes, _ := strconv.Atoi(r.URL.Query().Get("maxBytes"))
 
-	pr, err := nats.GetValue[models.PullRequest](r.Context(), h.store, fmt.Sprintf("%s.%s.%s", owner, repo, number))
+	pr, err := nats.GetValue[models.PullRequest](r.Context(), h.store, keys.PR(owner, repo, number))
 	if err != nil {
 		h.log.Info("pr summary not found", "owner", owner, "repo", repo, "pr", number, "error", err)
 		http.Error(w, "PR not found", http.StatusNotFound)
@@ -82,7 +83,7 @@ func (h *DiffAPIHandler) ServeDiff(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(&doc, "## %s (%s)\n\n", appName, origin)
 			writeErrors(&doc, file.Apps[appName].Errors)
 
-			key := fmt.Sprintf("%s.%s.%s.%s.%s.%s.%s", owner, repo, number, pr.BaseSHA, pr.HeadSHA, origin, appName)
+			key := keys.Report(owner, repo, number, pr.BaseSHA, pr.HeadSHA, origin, appName)
 			report, err := nats.GetObject[models.Report](r.Context(), h.store, key)
 			if err != nil {
 				doc.WriteString("_Report not available._\n\n")

@@ -30,8 +30,8 @@ func TestMarshalUnmarshal_DiffStats(t *testing.T) {
 	assert.Equal(t, original, got)
 }
 
-func TestMarshalUnmarshal_App(t *testing.T) {
-	original := models.App{
+func TestMarshalUnmarshal_AppResult(t *testing.T) {
+	original := models.AppResult{
 		Errors: []string{"error one", "error two"},
 		DiffStats: models.DiffStats{
 			DiffCount:     7,
@@ -44,29 +44,28 @@ func TestMarshalUnmarshal_App(t *testing.T) {
 	data, err := Marshal(original)
 	require.NoError(t, err)
 
-	got, err := Unmarshal[models.App](data)
+	got, err := Unmarshal[models.AppResult](data)
 	require.NoError(t, err)
 	assert.Equal(t, original, got)
 }
 
-func TestMarshalUnmarshal_App_EmptyErrors(t *testing.T) {
-	original := models.App{
+func TestMarshalUnmarshal_AppResult_EmptyErrors(t *testing.T) {
+	original := models.AppResult{
 		Errors:    nil,
 		DiffStats: models.DiffStats{},
 	}
 	data, err := Marshal(original)
 	require.NoError(t, err)
 
-	got, err := Unmarshal[models.App](data)
+	got, err := Unmarshal[models.AppResult](data)
 	require.NoError(t, err)
 	assert.Equal(t, original.DiffStats, got.DiffStats)
 }
 
 func TestMarshalUnmarshal_FileResult(t *testing.T) {
 	original := models.FileResult{
-		Status: "modified",
 		Errors: []string{"file-level error"},
-		Apps: map[string]models.App{
+		Apps: map[string]models.AppResult{
 			"app-a": {
 				Errors: []string{"app error"},
 				DiffStats: models.DiffStats{
@@ -86,7 +85,6 @@ func TestMarshalUnmarshal_FileResult(t *testing.T) {
 
 	got, err := Unmarshal[models.FileResult](data)
 	require.NoError(t, err)
-	assert.Equal(t, original.Status, got.Status)
 	assert.Equal(t, original.Errors, got.Errors)
 	require.Len(t, got.Apps, len(original.Apps))
 	for k, v := range original.Apps {
@@ -96,19 +94,20 @@ func TestMarshalUnmarshal_FileResult(t *testing.T) {
 
 func TestMarshalUnmarshal_PullRequest(t *testing.T) {
 	original := models.PullRequest{
-		Number:  "42",
-		Author:  "alice",
-		Owner:   "org",
-		Repo:    "repo",
-		Title:   "Fix the thing",
-		BaseSHA: "aaaa",
-		HeadSHA: "bbbb",
-		Status:  models.PipelineSucceeded,
+		PullRequestMeta: models.PullRequestMeta{
+			Number:  "42",
+			Author:  "alice",
+			Owner:   "org",
+			Repo:    "repo",
+			Title:   "Fix the thing",
+			BaseSHA: "aaaa",
+			HeadSHA: "bbbb",
+		},
+		Status: models.PipelineSucceeded,
 		Files: map[string]models.FileResult{
 			"apps/app1.yaml": {
-				Status: "modified",
 				Errors: nil,
-				Apps: map[string]models.App{
+				Apps: map[string]models.AppResult{
 					"my-app": {
 						Errors:    []string{},
 						DiffStats: models.DiffStats{DiffCount: 1, Additions: 1},
@@ -131,7 +130,7 @@ func TestMarshalUnmarshal_PullRequest(t *testing.T) {
 	assert.Equal(t, original.HeadSHA, got.HeadSHA)
 	assert.Equal(t, original.Status, got.Status)
 	require.Contains(t, got.Files, "apps/app1.yaml")
-	assert.Equal(t, original.Files["apps/app1.yaml"].Status, got.Files["apps/app1.yaml"].Status)
+	assert.Equal(t, original.Files["apps/app1.yaml"].Errors, got.Files["apps/app1.yaml"].Errors)
 }
 
 func TestMarshalUnmarshal_PullRequest_AllStatuses(t *testing.T) {
@@ -140,7 +139,7 @@ func TestMarshalUnmarshal_PullRequest_AllStatuses(t *testing.T) {
 		models.PipelineInProgress,
 		models.PipelineSucceeded,
 	} {
-		pr := models.PullRequest{Number: "1", Status: status}
+		pr := models.PullRequest{PullRequestMeta: models.PullRequestMeta{Number: "1"}, Status: status}
 		data, err := Marshal(pr)
 		require.NoError(t, err)
 
@@ -151,10 +150,10 @@ func TestMarshalUnmarshal_PullRequest_AllStatuses(t *testing.T) {
 }
 
 func TestMarshalUnmarshal_AppSpec(t *testing.T) {
-	original := models.AppSpec{
+	original := models.ArgoAppSpec{
 		AppName:   "my-application",
 		Namespace: "default",
-		Source: models.AppSource{
+		Source: models.ArgoAppSource{
 			RepoURL:   "https://github.com/org/repo",
 			Revision:  "HEAD",
 			Path:      "charts/my-app",
@@ -171,7 +170,7 @@ func TestMarshalUnmarshal_AppSpec(t *testing.T) {
 	data, err := Marshal(original)
 	require.NoError(t, err)
 
-	got, err := Unmarshal[models.AppSpec](data)
+	got, err := Unmarshal[models.ArgoAppSpec](data)
 	require.NoError(t, err)
 	assert.Equal(t, original.AppName, got.AppName)
 	assert.Equal(t, original.Namespace, got.Namespace)
@@ -216,17 +215,37 @@ func TestMarshalUnmarshal_Report(t *testing.T) {
 	assert.Equal(t, original.DiffStats, got.DiffStats)
 }
 
-func TestMarshalUnmarshal_Progress(t *testing.T) {
-	original := models.Progress{
-		TotalApps:     20,
-		ProcessedApps: 15,
+func TestMarshalUnmarshal_WorkOrder(t *testing.T) {
+	original := models.WorkOrder{
+		Bom: map[string]models.AppOrder{
+			"app-a": {HasBase: true, BaseLoc: "base/app-a", HasHead: true, HeadLoc: "head/app-a"},
+			"app-b": {HasBase: false, HasHead: true, HeadLoc: "head/app-b"},
+		},
+		ToDo: map[string]struct{}{"app-a": {}, "app-b": {}},
 	}
 	data, err := Marshal(original)
 	require.NoError(t, err)
 
-	got, err := Unmarshal[models.Progress](data)
+	got, err := Unmarshal[models.WorkOrder](data)
 	require.NoError(t, err)
 	assert.Equal(t, original, got)
+}
+
+func TestMarshalUnmarshal_WorkOrder_EmptyToDoStaysNonNil(t *testing.T) {
+	// The coordinator treats len(ToDo)==0 as "run complete" and writes into
+	// Bom/ToDo after reload, so an empty map must not come back as nil.
+	original := models.WorkOrder{
+		Bom:  map[string]models.AppOrder{},
+		ToDo: map[string]struct{}{},
+	}
+	data, err := Marshal(original)
+	require.NoError(t, err)
+
+	got, err := Unmarshal[models.WorkOrder](data)
+	require.NoError(t, err)
+	assert.NotNil(t, got.Bom)
+	assert.NotNil(t, got.ToDo)
+	assert.Empty(t, got.ToDo)
 }
 
 // ---------------------------------------------------------------------------

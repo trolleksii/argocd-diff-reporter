@@ -149,6 +149,9 @@ func (b *Bus) EnsureStream(ctx context.Context, name string, subjects []string) 
 	stream, err := b.js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
 		Name:     name,
 		Subjects: subjects,
+		// Must outlast the longest redelivery sequence (gitworker: 5m AckWait x 3
+		// deliveries) or a late redelivery slips past Nats-Msg-Id dedup.
+		Duplicates: 15 * time.Minute,
 	})
 	if err != nil {
 		return fmt.Errorf("bus: create stream %s: %w", name, err)

@@ -12,6 +12,7 @@ import (
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 	"github.com/trolleksii/argocd-diff-reporter/internal/helm"
+	"github.com/trolleksii/argocd-diff-reporter/internal/keys"
 	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/subjects"
@@ -46,9 +47,10 @@ func (w *HelmWorker) Run(ctx context.Context) error {
 	}
 	w.cache = c
 	err = w.bus.Consume(ctx, nats.ConsumerConfig{
-		Name:        "helmworker",
-		MaxDeliver:  3,
-		AckWait:     3 * time.Second,
+		Name:       "helmworker",
+		MaxDeliver: 3,
+		// Chart pulls plus `helm template` with dependencies can take well over a minute.
+		AckWait:     2 * time.Minute,
 		Concurrency: 8,
 		Routes: []nats.Route{
 			{Subjects: []string{subjects.ArgoHelmOCIParsed}, Handler: w.handleChartFetch(helm.FetchChartOCI)},
@@ -71,7 +73,7 @@ func (w *HelmWorker) handleChartFetch(fetchFn func(context.Context, string, stri
 		otel.GetTextMapPropagator().Inject(ctx, headers)
 		defer span.End()
 
-		spec, err := nats.Unmarshal[models.AppSpec](data)
+		spec, err := nats.Unmarshal[models.ArgoAppSpec](data)
 		if err != nil {
 			w.log.ErrorContext(ctx, "failed to unmarshal pr object", "error", err)
 			span.SetStatus(codes.Error, err.Error())
@@ -79,11 +81,11 @@ func (w *HelmWorker) handleChartFetch(fetchFn func(context.Context, string, stri
 			return
 		}
 		span.SetAttributes(
-			attribute.String("pr.owner", headers["pr.owner"]),
-			attribute.String("pr.repo", headers["pr.repo"]),
-			attribute.String("pr.number", headers["pr.number"]),
+			attribute.String("pr.owner", headers.Get("pr.owner")),
+			attribute.String("pr.repo", headers.Get("pr.repo")),
+			attribute.String("pr.number", headers.Get("pr.number")),
 			attribute.String("app.name", spec.AppName),
-			attribute.String("app.origin", headers["app.origin"]),
+			attribute.String("app.origin", headers.Get("app.origin")),
 		)
 		w.log.Debug("new argo.helm.{oci|http}.parsed event",
 			"app", spec.AppName,
@@ -91,18 +93,19 @@ func (w *HelmWorker) handleChartFetch(fetchFn func(context.Context, string, stri
 			"chart", spec.Source.ChartName,
 			"path", spec.Source.Path,
 			"revision", spec.Source.Revision)
-		appOrigin := headers["app.origin"]
+		owner, repo, number := headers.Get("pr.owner"), headers.Get("pr.repo"), headers.Get("pr.number")
+		runId, sha, origin := headers.Get("RunId"), headers.Get("sha.active"), headers.Get("app.origin")
 		chartLocation, err := fetchFn(ctx, spec.Source.RepoURL, spec.Source.ChartName, spec.Source.Revision, w.creds(spec.Project), w.cache)
 		if err != nil {
-			headers["error.origin.file"] = appOrigin
-			headers["error.origin.app"] = spec.AppName
-			headers["error.msg"] = err.Error()
+			headers.Set("error.msg", err.Error())
 			w.log.ErrorContext(ctx, "failed to feth the chart", "error", err)
-			w.bus.Publish(ctx, subjects.HelmChartFetchFailed, headers, nil)
+			headers.Set(keys.MsgIDHeader, keys.MsgIDRender(owner, repo, number, runId, sha, origin, spec.AppName))
+			w.bus.Publish(ctx, subjects.ManifestRenderFinished, headers, nil)
 			ack()
 			return
 		}
-		headers["chart.location"] = chartLocation
+		headers.Set("chart.location", chartLocation)
+		headers.Set(keys.MsgIDHeader, keys.MsgIDFetched(owner, repo, number, runId, sha, origin, spec.AppName))
 		w.bus.Publish(ctx, subjects.HelmChartFetched, headers, data)
 		span.SetStatus(codes.Ok, "")
 		ack()
@@ -117,18 +120,20 @@ func (w *HelmWorker) handleChartRender(ctx context.Context, headers nats.Headers
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
 
-	owner := headers["pr.owner"]
-	repo := headers["pr.repo"]
-	number := headers["pr.number"]
-	sha := headers["sha.active"]
-	origin := headers["app.origin"]
-	spec, err := nats.Unmarshal[models.AppSpec](data)
+	spec, err := nats.Unmarshal[models.ArgoAppSpec](data)
 	if err != nil {
 		w.log.ErrorContext(ctx, "failed to unmarshal pr object", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
 	}
+
+	owner := headers.Get("pr.owner")
+	repo := headers.Get("pr.repo")
+	number := headers.Get("pr.number")
+	sha := headers.Get("sha.active")
+	origin := headers.Get("app.origin")
+	runId := headers.Get("RunId")
 	span.SetAttributes(
 		attribute.String("pr.owner", owner),
 		attribute.String("pr.repo", repo),
@@ -142,7 +147,7 @@ func (w *HelmWorker) handleChartRender(ctx context.Context, headers nats.Headers
 		"repo", spec.Source.RepoURL,
 		"revision", spec.Source.Revision)
 
-	chartDir := headers["chart.location"]
+	chartDir := headers.Get("chart.location")
 	rv := helm.RenderValues{
 		Values:     spec.Helm.Values,
 		ValueFiles: spec.Helm.ValueFiles,
@@ -156,24 +161,20 @@ func (w *HelmWorker) handleChartRender(ctx context.Context, headers nats.Headers
 	}
 	manifest, err := helm.RenderChart(ctx, spec.Namespace, spec.Helm.ReleaseName, chartDir, spec.Source.Revision, rv)
 	if err != nil {
-		headers["error.msg"] = err.Error()
-		headers["error.origin.file"] = origin
-		headers["error.origin.app"] = spec.AppName
+		headers.Set("error.msg", err.Error())
 		w.log.ErrorContext(ctx, "failed to render the manifest", "error", err)
 		span.SetStatus(codes.Error, err.Error())
-		w.bus.Publish(ctx, subjects.HelmManifestRenderFailed, headers, nil)
-		ack()
-		return
+	} else {
+		key := keys.Manifest(owner, repo, number, sha, origin, spec.AppName)
+		if err := w.store.StoreObject(ctx, key, manifest); err != nil {
+			w.log.ErrorContext(ctx, "failed to store the manifest", "error", err)
+			span.SetStatus(codes.Error, err.Error())
+			nak()
+			return
+		}
+		headers.Set("manifest.location", key)
 	}
-	key := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, spec.AppName)
-	if err := w.store.StoreObject(ctx, key, manifest); err != nil {
-		w.log.ErrorContext(ctx, "failed to store the manifest", "error", err)
-		span.SetStatus(codes.Error, err.Error())
-		nak()
-		return
-	}
-	headers["manifest.location"] = key
-	headers["app.name"] = spec.AppName
-	w.bus.Publish(ctx, subjects.HelmManifestRendered, headers, nil)
+	headers.Set(keys.MsgIDHeader, keys.MsgIDRender(owner, repo, number, runId, sha, origin, spec.AppName))
+	w.bus.Publish(ctx, subjects.ManifestRenderFinished, headers, nil)
 	ack()
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
+	"github.com/trolleksii/argocd-diff-reporter/internal/keys"
 	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/repository"
@@ -105,11 +107,11 @@ func (w *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 
 	// maybe not the best way but at least I don't need to unmarshal/marshal on every hop
 	// these will be attached to every message in the chain
-	headers["pr.number"] = pr.Number
-	headers["pr.owner"] = pr.Owner
-	headers["pr.repo"] = pr.Repo
-	headers["pr.sha.base"] = pr.BaseSHA
-	headers["pr.sha.head"] = pr.HeadSHA
+	headers.Set("pr.number", pr.Number)
+	headers.Set("pr.owner", pr.Owner)
+	headers.Set("pr.repo", pr.Repo)
+	headers.Set("pr.sha.base", pr.BaseSHA)
+	headers.Set("pr.sha.head", pr.HeadSHA)
 
 	_, leafSpan := tracing.StartDetail(ctx, tracer, "getOrCreateRepo")
 	repoUrl := fmt.Sprintf("https://github.com/%s/%s", pr.Owner, pr.Repo)
@@ -140,9 +142,18 @@ func (w *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 	if len(from) == 0 && len(to) == 0 {
 		w.log.InfoContext(ctx, "no changed files match fileGlobs, nothing to report",
 			"prNum", pr.Number, "changedFiles", len(changes), "globs", w.cfg.FileGlobs)
-	} else {
-		w.bus.Publish(ctx, subjects.GitFilesMatched, headers, data)
+		ack()
+		return
 	}
+
+	headers.Set(keys.MsgIDHeader, keys.MsgIDSides(headers["RunId"]))
+	w.bus.Publish(ctx, subjects.GitFilesMatched, headers, data)
+	// Drop the id before the next hops reuse these headers, or JetStream dedups them away.
+	delete(headers, keys.MsgIDHeader)
+
+	headers.Set("file.withBase", strconv.FormatBool(len(from) > 0))
+	headers.Set("file.withHead", strconv.FormatBool(len(to) > 0))
+
 	if len(from) > 0 {
 		data, err := nats.Marshal(from)
 		if err != nil {
@@ -151,8 +162,8 @@ func (w *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 			nak()
 			return
 		}
-		headers["sha.active"] = pr.BaseSHA
-		headers["sha.complementary"] = pr.HeadSHA
+		headers.Set("sha.active", pr.BaseSHA)
+		headers.Set(keys.MsgIDHeader, keys.MsgIDFiles(pr.Owner, pr.Repo, pr.Number, headers["RunId"], pr.BaseSHA))
 		span.SetStatus(codes.Ok, "files resolved")
 		w.bus.Publish(ctx, subjects.GitFilesResolved, headers, data)
 	}
@@ -164,8 +175,8 @@ func (w *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 			nak()
 			return
 		}
-		headers["sha.active"] = pr.HeadSHA
-		headers["sha.complementary"] = pr.BaseSHA
+		headers.Set("sha.active", pr.HeadSHA)
+		headers.Set(keys.MsgIDHeader, keys.MsgIDFiles(pr.Owner, pr.Repo, pr.Number, headers["RunId"], pr.HeadSHA))
 		span.SetStatus(codes.Ok, "files resolved")
 		w.bus.Publish(ctx, subjects.GitFilesResolved, headers, data)
 	}
@@ -180,10 +191,10 @@ func (w *GitWorker) handleFilesResolved(ctx context.Context, headers nats.Header
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
 
-	num := headers["pr.number"]
-	owner := headers["pr.owner"]
-	repo := headers["pr.repo"]
-	sha := headers["sha.active"]
+	num := headers.Get("pr.number")
+	owner := headers.Get("pr.owner")
+	repo := headers.Get("pr.repo")
+	sha := headers.Get("sha.active")
 	span.SetAttributes(
 		attribute.String("pr.owner", owner),
 		attribute.String("pr.repo", repo),
@@ -196,7 +207,7 @@ func (w *GitWorker) handleFilesResolved(ctx context.Context, headers nats.Header
 		"repo", repo,
 		"sha", sha)
 
-	specs, err := nats.Unmarshal[[]models.FileProcessingSpec](data)
+	files, err := nats.Unmarshal[[]string](data)
 	if err != nil {
 		w.log.ErrorContext(ctx, "failed to unmarshal pr object", "error", err)
 		span.SetStatus(codes.Error, err.Error())
@@ -211,10 +222,6 @@ func (w *GitWorker) handleFilesResolved(ctx context.Context, headers nats.Header
 		nak()
 		return
 	}
-	var files = make([]string, len(specs))
-	for i, fc := range specs {
-		files[i] = fc.FileName
-	}
 	snapshotPath, err := r.GetOrCreateSnapshot(sha, "", files)
 	if err != nil {
 		w.log.ErrorContext(ctx, "failed to create snapshot", "error", err)
@@ -222,18 +229,19 @@ func (w *GitWorker) handleFilesResolved(ctx context.Context, headers nats.Header
 		nak()
 		return
 	}
-	headers["pr.files.snapshot"] = snapshotPath
+	headers.Set("pr.files.snapshot", snapshotPath)
+	headers.Set(keys.MsgIDHeader, keys.MsgIDSnapshot(owner, repo, num, headers.Get("RunId"), sha))
 	span.SetStatus(codes.Ok, "files snapshotted")
 	w.bus.Publish(ctx, subjects.GitFilesSnapshotted, headers, data)
 	ack()
 }
 
 func (w *GitWorker) handleHelmGitParsed(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
-	w.fetchSource(ctx, headers, data, ack, nak, subjects.GitChartFetched, subjects.GitChartFetchFailed)
+	w.fetchSource(ctx, headers, data, ack, nak, subjects.GitChartFetched, subjects.ManifestRenderFinished)
 }
 
 func (w *GitWorker) handleDirectoryGitParsed(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
-	w.fetchSource(ctx, headers, data, ack, nak, subjects.GitDirectoryFetched, subjects.GitDirectoryFetchFailed)
+	w.fetchSource(ctx, headers, data, ack, nak, subjects.GitDirectoryFetched, subjects.ManifestRenderFinished)
 }
 
 func (w *GitWorker) fetchSource(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error, successSubject, failSubject string) {
@@ -244,7 +252,7 @@ func (w *GitWorker) fetchSource(ctx context.Context, headers nats.Headers, data 
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
 
-	spec, err := nats.Unmarshal[models.AppSpec](data)
+	spec, err := nats.Unmarshal[models.ArgoAppSpec](data)
 	if err != nil {
 		w.log.ErrorContext(ctx, "failed to unmarshal pr object", "error", err)
 		span.SetStatus(codes.Error, err.Error())
@@ -262,31 +270,31 @@ func (w *GitWorker) fetchSource(ctx context.Context, headers nats.Headers, data 
 		"app", spec.AppName,
 		"repo", spec.Source.RepoURL,
 		"revision", spec.Source.Revision)
+	owner, repo, number := headers["pr.owner"], headers["pr.repo"], headers["pr.number"]
+	runId, sha, origin := headers["RunId"], headers["sha.active"], headers["app.origin"]
 
-	appOrigin := headers["app.origin"]
 	r, err := w.getOrCreateRepo(ctx, spec.Source.RepoURL)
 	if err != nil {
-		headers["error.origin.file"] = appOrigin
-		headers["error.origin.app"] = spec.AppName
-		headers["error.msg"] = err.Error()
+		headers.Set("error.msg", err.Error())
 		w.log.ErrorContext(ctx, "failed to find git repo", "error", err)
 		span.SetStatus(codes.Error, err.Error())
+		headers.Set(keys.MsgIDHeader, keys.MsgIDRender(owner, repo, number, runId, sha, origin, spec.AppName))
 		w.bus.Publish(ctx, failSubject, headers, nil)
 		ack()
 		return
 	}
 	snapshotDir, err := r.GetOrCreateSnapshot(spec.Source.Revision, spec.Source.Path, nil)
 	if err != nil {
-		headers["error.origin.file"] = appOrigin
-		headers["error.origin.app"] = spec.AppName
-		headers["error.msg"] = err.Error()
+		headers.Set("error.msg", err.Error())
 		w.log.ErrorContext(ctx, "failed to create snapshot", "error", err)
 		span.SetStatus(codes.Error, err.Error())
+		headers.Set(keys.MsgIDHeader, keys.MsgIDRender(owner, repo, number, runId, sha, origin, spec.AppName))
 		w.bus.Publish(ctx, failSubject, headers, nil)
 		ack()
 		return
 	}
-	headers["chart.location"] = filepath.Join(snapshotDir, spec.Source.Path)
+	headers.Set("chart.location", filepath.Join(snapshotDir, spec.Source.Path))
+	headers.Set(keys.MsgIDHeader, keys.MsgIDFetched(owner, repo, number, runId, sha, origin, spec.AppName))
 	w.bus.Publish(ctx, successSubject, headers, data)
 	span.SetStatus(codes.Ok, "")
 	ack()
@@ -324,55 +332,16 @@ func (w *GitWorker) getOrCreateRepo(ctx context.Context, repoURL string) (Reposi
 	return repo, nil
 }
 
-func filterAndSplitChanges(changes []repository.Change, globs []string) (from, to []models.FileProcessingSpec) {
-	// keep changes where at lest one side matches the glob
+func filterAndSplitChanges(changes []repository.Change, globs []string) (from, to []string) {
 	for _, c := range changes {
-		if !globMatches(c.From, globs) {
-			c.From = ""
+		if globMatches(c.From, globs) {
+			from = append(from, c.From)
 		}
-		if !globMatches(c.To, globs) {
-			c.To = ""
-		}
-		if c.From != "" {
-			fc := models.FileProcessingSpec{
-				FileName:     c.From,
-				ArtifactName: c.From,
-			}
-			if c.To == "" {
-				fc.HasNoCounterpart = true
-			} else if c.From != c.To {
-				fc.ArtifactName = c.To
-			}
-			from = append(from, fc)
-		}
-		if c.To != "" {
-			fc := models.FileProcessingSpec{
-				FileName: c.To,
-			}
-			if c.From == "" {
-				fc.HasNoCounterpart = true
-			}
-			to = append(to, fc)
+		if globMatches(c.To, globs) {
+			to = append(to, c.To)
 		}
 	}
 	return
-}
-
-func filterChanges(changes []repository.Change, globs []string) []repository.Change {
-	// keep changes where at lest one side matches the glob
-	var result []repository.Change
-	for _, c := range changes {
-		if !globMatches(c.From, globs) {
-			c.From = ""
-		}
-		if !globMatches(c.To, globs) {
-			c.To = ""
-		}
-		if c.To != "" || c.From != "" {
-			result = append(result, c)
-		}
-	}
-	return result
 }
 
 func globMatches(file string, globs []string) bool {

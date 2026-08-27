@@ -14,10 +14,8 @@ import (
 
 func pr(number, owner, repo string, status models.PipelineStatus) models.PullRequest {
 	return models.PullRequest{
-		Number: number,
-		Owner:  owner,
-		Repo:   repo,
-		Status: status,
+		PullRequestMeta: models.PullRequestMeta{Number: number, Owner: owner, Repo: repo},
+		Status:          status,
 	}
 }
 
@@ -147,12 +145,7 @@ func TestUpdateStatus_ExistingPR(t *testing.T) {
 	idx.Update(pr("1", "org", "repo", models.PipelineInProgress))
 	idx.Update(pr("2", "org", "repo", models.PipelineInProgress))
 
-	idx.UpdateStatus(models.PullRequest{
-		Number: "1",
-		Owner:  "org",
-		Repo:   "repo",
-		Status: models.PipelineSucceeded,
-	})
+	idx.UpdateStatus(pr("1", "org", "repo", models.PipelineSucceeded))
 
 	elems := idx.GetElements()
 	var pr1 *models.PullRequest
@@ -171,12 +164,7 @@ func TestUpdateStatus_NonexistentPR_NoOp(t *testing.T) {
 	idx.Update(pr("1", "org", "repo", models.PipelineInProgress))
 
 	// Should not panic and should not change anything
-	idx.UpdateStatus(models.PullRequest{
-		Number: "999",
-		Owner:  "org",
-		Repo:   "repo",
-		Status: models.PipelineFailed,
-	})
+	idx.UpdateStatus(pr("999", "org", "repo", models.PipelineFailed))
 
 	elems := idx.GetElements()
 	require.Len(t, elems, 1)
@@ -191,12 +179,7 @@ func TestUpdateStatus_MatchesOwnerRepoAndNumber(t *testing.T) {
 	idx.Update(pr("11", "org-b", "repo", models.PipelineInProgress))
 
 	// UpdateStatus with Owner=org-a, Number=10 should only touch the first entry
-	idx.UpdateStatus(models.PullRequest{
-		Number: "10",
-		Owner:  "org-a",
-		Repo:   "repo",
-		Status: models.PipelineSucceeded,
-	})
+	idx.UpdateStatus(pr("10", "org-a", "repo", models.PipelineSucceeded))
 
 	elems := idx.GetElements()
 	require.Len(t, elems, 2)
@@ -215,12 +198,7 @@ func TestUpdateStatus_DoesNotChangeOrder(t *testing.T) {
 	idx.Update(pr("2", "org", "repo", models.PipelineInProgress))
 	idx.Update(pr("3", "org", "repo", models.PipelineInProgress))
 
-	idx.UpdateStatus(models.PullRequest{
-		Number: "1",
-		Owner:  "org",
-		Repo:   "repo",
-		Status: models.PipelineFailed,
-	})
+	idx.UpdateStatus(pr("1", "org", "repo", models.PipelineFailed))
 
 	assert.Equal(t, []string{"3", "2", "1"}, numbers(idx.GetElements()))
 }

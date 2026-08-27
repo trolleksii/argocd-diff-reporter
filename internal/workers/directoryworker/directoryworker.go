@@ -20,6 +20,7 @@ import (
 	"sigs.k8s.io/kustomize/kyaml/resid"
 	"sigs.k8s.io/yaml"
 
+	"github.com/trolleksii/argocd-diff-reporter/internal/keys"
 	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/subjects"
@@ -44,9 +45,10 @@ func New(log *slog.Logger, b *nats.Bus, s *nats.Store) *DirectoryWorker {
 func (w *DirectoryWorker) Run(ctx context.Context) error {
 	w.log.InfoContext(ctx, "starting directory worker...")
 	err := w.bus.Consume(ctx, nats.ConsumerConfig{
-		Name:        "directoryworker",
-		MaxDeliver:  3,
-		AckWait:     3 * time.Second,
+		Name:       "directoryworker",
+		MaxDeliver: 3,
+		// kustomize builds with remote bases can be slow.
+		AckWait:     time.Minute,
 		Concurrency: 8,
 		Routes: []nats.Route{
 			{Subjects: []string{subjects.GitDirectoryFetched}, Handler: w.handleDirectoryRender},
@@ -66,14 +68,15 @@ func (w *DirectoryWorker) handleDirectoryRender(ctx context.Context, headers nat
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
 
-	owner := headers["pr.owner"]
-	repo := headers["pr.repo"]
-	number := headers["pr.number"]
-	sha := headers["sha.active"]
-	origin := headers["app.origin"]
-	snapshotDir := headers["chart.location"]
+	owner := headers.Get("pr.owner")
+	repo := headers.Get("pr.repo")
+	number := headers.Get("pr.number")
+	sha := headers.Get("sha.active")
+	origin := headers.Get("app.origin")
+	runId := headers.Get("RunId")
+	snapshotDir := headers.Get("chart.location")
 
-	spec, err := nats.Unmarshal[models.AppSpec](data)
+	spec, err := nats.Unmarshal[models.ArgoAppSpec](data)
 	if err != nil {
 		w.log.ErrorContext(ctx, "failed to unmarshal pr object", "error", err)
 		span.SetStatus(codes.Error, err.Error())
@@ -99,12 +102,11 @@ func (w *DirectoryWorker) handleDirectoryRender(ctx context.Context, headers nat
 		chartYAML := filepath.Join(sourcePath, "Chart.yaml")
 		if _, statErr := os.Stat(chartYAML); statErr == nil {
 			msg := "unexpected Helm source routed to directory worker: Chart.yaml found at path"
-			headers["error.msg"] = msg
-			headers["error.origin.file"] = origin
-			headers["error.origin.app"] = spec.AppName
+			headers.Set("error.msg", msg)
 			w.log.ErrorContext(ctx, msg, "app", spec.AppName, "path", sourcePath)
 			span.SetStatus(codes.Error, msg)
-			w.bus.Publish(ctx, subjects.DirectoryManifestRenderFailed, headers, nil)
+			headers.Set(keys.MsgIDHeader, keys.MsgIDRender(owner, repo, number, runId, sha, origin, spec.AppName))
+			w.bus.Publish(ctx, subjects.ManifestRenderFinished, headers, nil)
 			ack()
 			return
 		}
@@ -118,7 +120,7 @@ func (w *DirectoryWorker) handleDirectoryRender(ctx context.Context, headers nat
 		}
 	}
 
-	manifestLocation := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, spec.AppName)
+	manifestLocation := keys.Manifest(owner, repo, number, sha, origin, spec.AppName)
 	switch spec.SourceType {
 	case models.SourceTypeKustomize:
 		err = w.renderKustomize(ctx, spec, sourcePath, manifestLocation)
@@ -126,17 +128,14 @@ func (w *DirectoryWorker) handleDirectoryRender(ctx context.Context, headers nat
 		err = w.renderDirectory(ctx, spec, sourcePath, manifestLocation)
 	}
 	if err != nil {
-		headers["error.msg"] = err.Error()
-		headers["error.origin.file"] = origin
-		headers["error.origin.app"] = spec.AppName
+		headers.Set("error.msg", err.Error())
 		w.log.ErrorContext(ctx, "failed to render manifest", "error", err)
-		w.bus.Publish(ctx, subjects.DirectoryManifestRenderFailed, headers, nil)
-		ack()
-		return
+		span.SetStatus(codes.Error, err.Error())
+	} else {
+		headers.Set("manifest.location", manifestLocation)
 	}
-	headers["manifest.location"] = manifestLocation
-	headers["app.name"] = spec.AppName
-	w.bus.Publish(ctx, subjects.DirectoryManifestRendered, headers, nil)
+	headers.Set(keys.MsgIDHeader, keys.MsgIDRender(owner, repo, number, runId, sha, origin, spec.AppName))
+	w.bus.Publish(ctx, subjects.ManifestRenderFinished, headers, nil)
 	ack()
 }
 
@@ -149,7 +148,7 @@ func isKustomizeSpecUnset(k models.KustomizeSpec) bool {
 		len(k.Patches) == 0 && len(k.Components) == 0
 }
 
-func (w *DirectoryWorker) renderKustomize(ctx context.Context, spec models.AppSpec, kustomizationDir, key string) error {
+func (w *DirectoryWorker) renderKustomize(ctx context.Context, spec models.ArgoAppSpec, kustomizationDir, key string) error {
 	runDir := kustomizationDir
 	var tempDir string
 	var err error
@@ -177,7 +176,7 @@ func (w *DirectoryWorker) renderKustomize(ctx context.Context, spec models.AppSp
 	return nil
 }
 
-func (w *DirectoryWorker) renderDirectory(ctx context.Context, spec models.AppSpec, sourcePath, key string) error {
+func (w *DirectoryWorker) renderDirectory(ctx context.Context, spec models.ArgoAppSpec, sourcePath, key string) error {
 	var yamlFiles []string
 	if spec.Directory.Recurse {
 		err := filepath.WalkDir(sourcePath, func(path string, d os.DirEntry, err error) error {

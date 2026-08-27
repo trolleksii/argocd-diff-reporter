@@ -2,11 +2,11 @@ package argoworker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +19,7 @@ import (
 	appv1alpha1 "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/argo"
+	"github.com/trolleksii/argocd-diff-reporter/internal/keys"
 	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/subjects"
@@ -46,27 +47,18 @@ func New(log *slog.Logger, b *nats.Bus, rendererFunc argo.AppSetRenderer) *ArgoW
 func (w *ArgoWorker) Run(ctx context.Context) error {
 	w.log.InfoContext(ctx, "starting argo worker...")
 	err := w.bus.Consume(ctx, nats.ConsumerConfig{
-		Name:        "argotemplateengine",
-		MaxDeliver:  3,
-		AckWait:     3 * time.Second,
+		Name:       "argotemplateengine",
+		MaxDeliver: 3,
+		// AppSet generators may hit git/SCM APIs; must outlast a slow render or the
+		// message is redelivered while the first attempt is still running.
+		AckWait:     time.Minute,
 		Concurrency: 4,
-		Routes: []nats.Route{
-			{Subjects: []string{subjects.GitFilesSnapshotted}, Handler: w.handleSnapshottedFiles},
-		},
+		Routes:      []nats.Route{{Subjects: []string{subjects.GitFilesSnapshotted}, Handler: w.handleSnapshottedFiles}},
 	})
 	if err != nil {
 		return fmt.Errorf("argotemplateengine: consume: %w", err)
 	}
 	return nil
-}
-
-func (w *ArgoWorker) reportError(ctx context.Context, headers nats.Headers, origin string, e error) {
-	headers["error.origin"] = origin
-	headers["error.msg"] = e.Error()
-	w.log.ErrorContext(ctx, "failed to load file", "error", e, "origin", origin)
-	w.bus.Publish(ctx, subjects.ArgoAppGenerationFailed, headers, nil)
-	delete(headers, "error.origin")
-	delete(headers, "error.msg")
 }
 
 func (w *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
@@ -77,11 +69,12 @@ func (w *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.He
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
 
-	num := headers["pr.number"]
-	owner := headers["pr.owner"]
-	repo := headers["pr.repo"]
-	sha := headers["sha.active"]
-	s := headers["pr.files.snapshot"]
+	num := headers.Get("pr.number")
+	owner := headers.Get("pr.owner")
+	repo := headers.Get("pr.repo")
+	sha := headers.Get("sha.active")
+	runId := headers.Get("RunId")
+	s := headers.Get("pr.files.snapshot")
 	span.SetAttributes(
 		attribute.String("pr.owner", owner),
 		attribute.String("pr.repo", repo),
@@ -94,7 +87,7 @@ func (w *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.He
 		"repo", repo,
 		"sha", sha)
 
-	specs, err := nats.Unmarshal[[]models.FileProcessingSpec](data)
+	files, err := nats.Unmarshal[[]string](data)
 	if err != nil {
 		w.log.ErrorContext(ctx, "failed to unmarshal files", "error", err)
 		span.SetStatus(codes.Error, err.Error())
@@ -102,75 +95,101 @@ func (w *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.He
 		return
 	}
 
-	totalApps := 0
-	for _, f := range specs {
+	side := make([]models.FileParsingResult, 0, len(files))
+
+	// renderDispatch is a an AppSpec with routing information
+	type renderDispatch struct {
+		file, subject string
+		spec          models.ArgoAppSpec
+	}
+	var pending []renderDispatch
+	for _, f := range files {
 		_, parseSpan := tracing.StartDetail(ctx, tracer, "parseFileResources")
-		parseSpan.SetAttributes(attribute.String("file", f.FileName))
-		appSets, apps, err := parseFileResources(filepath.Join(s, f.FileName))
+		parseSpan.SetAttributes(attribute.String("file", f))
+		appSets, apps, err := parseFileResources(filepath.Join(s, f))
 		parseSpan.End()
 		if err != nil {
-			w.reportError(ctx, headers, f.ArtifactName, err)
+			w.log.ErrorContext(ctx, "failed to load file", "error", err, "file", f)
+			side = append(side, models.FileParsingResult{File: f, Error: err.Error()})
 			continue
 		}
 		// Render all ApplicationSets in parallel; error reporting and app
 		// routing stay sequential because they mutate the shared headers map.
-		renderedApps := make([][]appv1alpha1.Application, len(appSets))
-		renderErrs := make([]error, len(appSets))
+		appsFromAppsets := make([][]appv1alpha1.Application, len(appSets))
+		appsetErrs := make([]error, len(appSets))
 		var wg sync.WaitGroup
 		for i, appSet := range appSets {
 			wg.Go(func() {
-				renderedApps[i], renderErrs[i] = w.rendererFunc(appSet)
+				appsFromAppsets[i], appsetErrs[i] = w.rendererFunc(appSet)
 			})
 		}
 		_, renderSpan := tracing.StartDetail(ctx, tracer, "waitAppsetRender")
 		wg.Wait()
 		renderSpan.End()
-		for i := range appSets {
-			if renderErrs[i] != nil {
-				w.reportError(ctx, headers, f.ArtifactName, renderErrs[i])
-				continue
-			}
-			apps = append(apps, renderedApps[i]...)
+		if err := errors.Join(appsetErrs...); err != nil {
+			w.log.ErrorContext(ctx, "failed to render appsets", "error", err, "file", f)
+			side = append(side, models.FileParsingResult{File: f, Error: err.Error()})
+			continue
 		}
-		if f.ArtifactName != "" {
-			headers["app.origin"] = f.ArtifactName
-		} else {
-			headers["app.origin"] = f.FileName
+		for i := range appSets {
+			apps = append(apps, appsFromAppsets[i]...)
 		}
 
-		totalApps += len(apps)
 		_, routeSpan := tracing.StartDetail(ctx, tracer, "routeApps")
 		routeSpan.SetAttributes(
-			attribute.String("file", f.FileName),
+			attribute.String("file", f),
 			attribute.Int("apps.count", len(apps)),
 		)
+
+		var fa []models.AppParsingResult
 		for _, app := range apps {
-			if err := w.routeApp(ctx, app, headers, f.HasNoCounterpart); err != nil {
-				span.SetStatus(codes.Error, err.Error())
-				nak()
-				routeSpan.End()
-				return
+			sub, spec, err := w.buildAppSpec(ctx, app, headers)
+			if err != nil {
+				fa = append(fa, models.AppParsingResult{Name: app.Name, Error: err.Error()})
+				continue
 			}
+			pending = append(pending, renderDispatch{file: f, subject: sub, spec: spec})
+			fa = append(fa, models.AppParsingResult{Name: app.Name})
 		}
 		routeSpan.End()
+		side = append(side, models.FileParsingResult{File: f, Apps: fa})
 	}
-	headers["app.total"] = strconv.Itoa(totalApps)
-	w.bus.Publish(ctx, subjects.ArgoTotalUpdated, headers, nil)
+	data, err = nats.Marshal(side)
+	if err != nil {
+		w.log.ErrorContext(ctx, "failed to marshal side result", "error", err)
+		span.SetStatus(codes.Error, err.Error())
+		nak()
+		return
+	}
+	headers.Set(keys.MsgIDHeader, keys.MsgIDSide(owner, repo, num, runId, sha))
+	w.bus.Publish(ctx, subjects.ArgoSideParsed, headers, data)
+	for _, d := range pending {
+		headers.Set("app.origin", d.file)
+		headers.Set("app.name", d.spec.AppName)
+		data, err := nats.Marshal(d.spec)
+		if err != nil {
+			w.log.ErrorContext(ctx, "failed to marshal application", "error", err)
+			nak()
+			return
+		}
+		headers.Set(keys.MsgIDHeader, keys.MsgIDApp(owner, repo, num, runId, sha, d.file, d.spec.AppName))
+		w.bus.Publish(ctx, d.subject, headers, data)
+	}
 	ack()
 }
 
-func (w *ArgoWorker) routeApp(ctx context.Context, app appv1alpha1.Application, headers nats.Headers, noCounterpart bool) error {
+func (w *ArgoWorker) buildAppSpec(ctx context.Context, app appv1alpha1.Application, headers nats.Headers) (string, models.ArgoAppSpec, error) {
 	sourceType, err := app.Spec.Source.ExplicitType()
 	if err != nil {
-		w.reportError(ctx, headers, app.Name, fmt.Errorf("multiple explicit source types set: %w", err))
-		return nil
+		w.log.ErrorContext(ctx, "multiple explicit source types set", "error", err)
+		return "", models.ArgoAppSpec{}, fmt.Errorf("multiple explicit source types set: %w", err)
 	}
 
-	appSpec := models.AppSpec{
+	appSpec := models.ArgoAppSpec{
 		AppName:   app.Name,
 		Namespace: app.Spec.Destination.Namespace,
 		Project:   app.Spec.Project,
-		Source: models.AppSource{
+		Source: models.ArgoAppSource{
 			RepoURL:   app.Spec.Source.RepoURL,
 			Revision:  app.Spec.Source.TargetRevision,
 			Path:      app.Spec.Source.Path,
@@ -241,11 +260,8 @@ func (w *ArgoWorker) routeApp(ctx context.Context, app appv1alpha1.Application, 
 			ValueFiles:  h.ValueFiles,
 		}
 		if !h.ValuesIsEmpty() {
-			var values map[string]any
-			if err := yaml.Unmarshal(h.ValuesYAML(), &values); err != nil {
-				w.log.ErrorContext(ctx, "failed to unmarshal helm values", "error", err)
-			} else {
-				appSpec.Helm.Values = values
+			if err := yaml.Unmarshal(h.ValuesYAML(), &appSpec.Helm.Values); err != nil {
+				return "", models.ArgoAppSpec{}, fmt.Errorf("unmarshal helm values: %w", err)
 			}
 		}
 		for _, p := range h.Parameters {
@@ -266,22 +282,10 @@ func (w *ArgoWorker) routeApp(ctx context.Context, app appv1alpha1.Application, 
 		}
 
 	default:
-		w.reportError(ctx, headers, app.Name, fmt.Errorf("unsupported source type: %s", *sourceType))
-		return nil
+		return "", models.ArgoAppSpec{}, fmt.Errorf("unsupported source type: %s", *sourceType)
 	}
 
-	data, err := nats.Marshal(appSpec)
-	if err != nil {
-		w.log.ErrorContext(ctx, "failed to marshal application", "error", err)
-		return err
-	}
-	w.bus.Publish(ctx, subject, headers, data)
-	if noCounterpart {
-		headers["sha.active"], headers["sha.complementary"] = headers["sha.complementary"], headers["sha.active"]
-		headers["app.name"] = app.Name
-		w.bus.Publish(ctx, subjects.ArgoEmptyParsed, headers, nil)
-	}
-	return nil
+	return subject, appSpec, nil
 }
 
 func parseFileResources(filePath string) ([]appv1alpha1.ApplicationSet, []appv1alpha1.Application, error) {

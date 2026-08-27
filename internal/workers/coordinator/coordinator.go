@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strconv"
 	"sync"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
+	"github.com/trolleksii/argocd-diff-reporter/internal/keys"
 	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server/notifications"
@@ -43,40 +43,22 @@ func New(cfg config.CoordinatorConfig, log *slog.Logger, b *nats.Bus, s *nats.St
 
 func (c *Coordinator) Run(ctx context.Context) error {
 	c.log.InfoContext(ctx, "starting coordinator...")
-	storedState, err := nats.GetValue[[]models.PullRequest](ctx, c.store, "index")
+	storedState, err := nats.GetValue[[]models.PullRequest](ctx, c.store, keys.Index)
 	if err == nil {
 		c.index.Load(storedState)
 	} else {
-		c.store.SetValue(ctx, "index", c.index.GetElements())
+		c.store.SetValue(ctx, keys.Index, c.index.GetElements())
 	}
 	err = c.bus.Consume(ctx, nats.ConsumerConfig{
 		Name:       "coordinator",
 		MaxDeliver: 3,
 		AckWait:    10 * time.Second,
 		Routes: []nats.Route{
-			{Subjects: []string{subjects.GitFilesMatched}, Handler: c.handlePREvent},
-			{Subjects: []string{subjects.ArgoFileParseFailed}, Handler: c.handleFileErrors},
-			{Subjects: []string{subjects.ArgoTotalUpdated}, Handler: c.handleTotalAppUpdate},
-			{
-				Subjects: []string{
-					subjects.GitChartFetchFailed,
-					subjects.HelmChartFetchFailed,
-					subjects.GitDirectoryFetchFailed,
-					subjects.DirectoryManifestRenderFailed,
-					subjects.HelmManifestRenderFailed,
-				},
-				Handler: c.handleAppErrors,
-			},
-			{Subjects: []string{subjects.ArgoEmptyParsed}, Handler: c.handleEmptyManifest},
-			{
-				Subjects: []string{
-					subjects.DirectoryManifestRendered,
-					subjects.HelmManifestRendered,
-					subjects.EmptyManifestRendered,
-				},
-				Handler: c.handleRenderedManifest,
-			},
+			{Subjects: []string{subjects.GitFilesMatched}, Handler: c.indexInterestingPR},
+			{Subjects: []string{subjects.ArgoSideParsed}, Handler: c.handleSideParsed},
+			{Subjects: []string{subjects.ManifestRenderFinished}, Handler: c.handleRenderedManifest},
 			{Subjects: []string{subjects.DiffReportGenerated}, Handler: c.handleGeneratedReport},
+			{Subjects: []string{subjects.WebhookPRClosed}, Handler: c.handlePRClosed},
 		},
 	})
 	if err != nil {
@@ -85,118 +67,11 @@ func (c *Coordinator) Run(ctx context.Context) error {
 	return nil
 }
 
-func (c *Coordinator) handleFileErrors(ctx context.Context, headers nats.Headers, _ []byte, ack, nak func() error) {
+// indexInterestingPR waits for non-empty PR events
+func (c *Coordinator) indexInterestingPR(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
 	ctx, span := tracer.Start(
 		otel.GetTextMapPropagator().Extract(ctx, headers),
-		"handleErrors",
-	)
-	otel.GetTextMapPropagator().Inject(ctx, headers)
-	defer span.End()
-
-	number := headers["pr.number"]
-	owner := headers["pr.owner"]
-	repo := headers["pr.repo"]
-	errorMsg := headers["error.msg"]
-	errorOrigin := headers["error.origin"]
-	span.SetAttributes(
-		attribute.String("pr.owner", owner),
-		attribute.String("pr.repo", repo),
-		attribute.String("pr.number", number),
-		attribute.String("error.origin", errorOrigin),
-	)
-	key := fmt.Sprintf("%s.%s.%s", owner, repo, number)
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	pr, err := nats.GetValue[models.PullRequest](ctx, c.store, key)
-	if err != nil {
-		c.log.ErrorContext(ctx, "failed to unmarshal files", "error", err)
-		span.SetStatus(codes.Error, err.Error())
-		nak()
-		return
-	}
-	if f, ok := pr.Files[errorOrigin]; ok {
-		f.Errors = append(f.Errors, errorMsg)
-		pr.Files[errorOrigin] = f
-	} else {
-		pr.Files[errorOrigin] = models.FileResult{Errors: []string{errorMsg}}
-	}
-	if pr.Status == models.PipelineInProgress {
-		pr.Status = models.PipelineFailed
-		c.index.UpdateStatus(pr)
-		c.store.SetValue(ctx, "index", c.index.GetElements())
-		c.notifier.Notify("index", c.index.GetElements())
-	}
-	c.store.SetValue(ctx, key, pr)
-	span.SetStatus(codes.Ok, "")
-	ack()
-}
-
-func (c *Coordinator) handleAppErrors(ctx context.Context, headers nats.Headers, _ []byte, ack, nak func() error) {
-	ctx, span := tracer.Start(
-		otel.GetTextMapPropagator().Extract(ctx, headers),
-		"handleErrors",
-	)
-	otel.GetTextMapPropagator().Inject(ctx, headers)
-	defer span.End()
-
-	number := headers["pr.number"]
-	owner := headers["pr.owner"]
-	repo := headers["pr.repo"]
-	errorMsg := headers["error.msg"]
-	errorOriginFile := headers["error.origin.file"]
-	errorOriginApp := headers["error.origin.app"]
-	span.SetAttributes(
-		attribute.String("pr.owner", owner),
-		attribute.String("pr.repo", repo),
-		attribute.String("pr.number", number),
-		attribute.String("error.origin.file", errorOriginFile),
-		attribute.String("error.origin.app", errorOriginApp),
-	)
-	key := fmt.Sprintf("%s.%s.%s", owner, repo, number)
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	pr, err := nats.GetValue[models.PullRequest](ctx, c.store, key)
-	if err != nil {
-		c.log.ErrorContext(ctx, "failed to unmarshal files", "error", err)
-		span.SetStatus(codes.Error, err.Error())
-		nak()
-		return
-	}
-	if f, ok := pr.Files[errorOriginFile]; ok {
-		if f.Apps == nil {
-			f.Apps = make(map[string]models.App)
-			f.Apps[errorOriginApp] = models.App{Errors: []string{errorMsg}}
-		} else {
-			if a, ok := f.Apps[errorOriginApp]; ok {
-				a.Errors = append(a.Errors, errorMsg)
-				f.Apps[errorOriginApp] = a
-			} else {
-				f.Apps[errorOriginApp] = models.App{Errors: []string{errorMsg}}
-			}
-		}
-		pr.Files[errorOriginFile] = f
-	} else {
-		pr.Files[errorOriginFile] = models.FileResult{
-			Apps: map[string]models.App{
-				errorOriginApp: {Errors: []string{errorMsg}},
-			},
-		}
-	}
-	if pr.Status == models.PipelineInProgress {
-		pr.Status = models.PipelineFailed
-		c.index.UpdateStatus(pr)
-		c.store.SetValue(ctx, "index", c.index.GetElements())
-		c.notifier.Notify("index", c.index.GetElements())
-	}
-	c.store.SetValue(ctx, key, pr)
-	span.SetStatus(codes.Ok, "")
-	ack()
-}
-
-func (c *Coordinator) handlePREvent(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
-	ctx, span := tracer.Start(
-		otel.GetTextMapPropagator().Extract(ctx, headers),
-		"handlePREvent",
+		"indexInterestingPR",
 	)
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
@@ -218,54 +93,125 @@ func (c *Coordinator) handlePREvent(ctx context.Context, headers nats.Headers, d
 		"owner", pr.Owner,
 		"repo", pr.Repo)
 
-	key := fmt.Sprintf("%s.%s.%s.%s.%s", pr.Owner, pr.Repo, pr.Number, pr.BaseSHA, pr.HeadSHA)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.store.SetValue(ctx, key, models.Progress{})
 	c.index.Update(pr)
 	elements := c.index.GetElements()
-	c.store.SetValue(ctx, "index", elements)
+	c.store.SetValue(ctx, keys.Index, elements)
+	c.store.SetValue(ctx, keys.PR(pr.Owner, pr.Repo, pr.Number), pr)
 	c.notifier.Notify("index", elements)
-
-	key = fmt.Sprintf("%s.%s.%s", pr.Owner, pr.Repo, pr.Number)
-	c.store.SetValue(ctx, key, pr)
 	ack()
 }
 
-func (c *Coordinator) handleTotalAppUpdate(ctx context.Context, headers nats.Headers, _ []byte, ack, nak func() error) {
+func (c *Coordinator) handleSideParsed(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
 	ctx, span := tracer.Start(
 		otel.GetTextMapPropagator().Extract(ctx, headers),
-		"handleTotalAppUpdate",
+		"handleSideParsed",
 	)
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
 
-	number := headers["pr.number"]
-	owner := headers["pr.owner"]
-	repo := headers["pr.repo"]
-	baseSha := headers["pr.sha.base"]
-	headSha := headers["pr.sha.head"]
+	owner := headers.Get("pr.owner")
+	repo := headers.Get("pr.repo")
+	number := headers.Get("pr.number")
+	headSha := headers.Get("pr.sha.head")
+	sha := headers.Get("sha.active")
+	isHead := headSha == sha
 	span.SetAttributes(
 		attribute.String("pr.owner", owner),
 		attribute.String("pr.repo", repo),
 		attribute.String("pr.number", number),
-		attribute.String("app.total", headers["app.total"]),
+		attribute.Bool("side.base", !isHead),
+		attribute.Bool("side.head", isHead),
 	)
-	total, err := strconv.Atoi(headers["app.total"])
+
+	side, err := nats.Unmarshal[[]models.FileParsingResult](data)
 	if err != nil {
-		c.log.ErrorContext(ctx, "failed to parse app totals", "error", err)
+		c.log.ErrorContext(ctx, "failed to unmarshal files", "error", err)
+		span.SetStatus(codes.Error, err.Error())
+		nak()
+		return
 	}
-	key := fmt.Sprintf("%s.%s.%s.%s.%s", owner, repo, number, baseSha, headSha)
+
+	var statusChanged bool
+	prKey := keys.PR(owner, repo, number)
+	woKey := keys.WorkOrder(owner, repo, number, headers.Get("RunId"))
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	progress, _ := nats.GetValue[models.Progress](ctx, c.store, key)
-
-	// events might come from either base or head commit
-	// whichever recorded more apps is the winner
-	if total > progress.TotalApps {
-		progress.TotalApps = total
-		c.store.SetValue(ctx, key, progress)
+	pr, err := nats.GetValue[models.PullRequest](ctx, c.store, prKey)
+	if err != nil {
+		c.log.ErrorContext(ctx, "failed to fetch pull request data", "error", err)
+		nak()
+		return
 	}
+
+	wo, err := nats.GetValue[models.WorkOrder](ctx, c.store, woKey)
+	if err != nil {
+		wo = models.WorkOrder{
+			Bom:  make(map[string]models.AppOrder),
+			ToDo: make(map[string]struct{}),
+		}
+	}
+	for _, af := range side {
+		fRes, ok := pr.Files[af.File]
+		if !ok {
+			fRes = models.FileResult{
+				Errors: make([]string, 0),
+				Apps:   make(map[string]models.AppResult),
+			}
+		}
+		if af.Error != "" {
+			// store the error in the results
+			fRes.Errors = append(fRes.Errors, af.Error)
+			pr.Files[af.File] = fRes
+			pr.Status = models.PipelineFailed
+			statusChanged = true
+			continue
+		}
+		for _, a := range af.Apps {
+			app, ok := fRes.Apps[a.Name]
+			if !ok {
+				app = models.AppResult{
+					Errors: make([]string, 0),
+				}
+			}
+			if a.Error != "" {
+				app.Errors = append(app.Errors, a.Error)
+			}
+			fRes.Apps[a.Name] = app
+			if len(app.Errors) != 0 {
+				pr.Status = models.PipelineFailed
+				statusChanged = true
+				continue
+			}
+			if _, ok := wo.Bom[a.Name]; !ok {
+				ao := models.AppOrder{
+					HasBase: headers.Get("file.withBase") == "true",
+					HasHead: headers.Get("file.withHead") == "true",
+				}
+				wo.Bom[a.Name] = ao
+				wo.ToDo[a.Name] = struct{}{}
+			}
+		}
+		pr.Files[af.File] = fRes
+	}
+	if statusChanged {
+		data, err := nats.Marshal(pr)
+		if err != nil {
+			c.log.ErrorContext(ctx, "failed to marshal pr object", "error", err)
+			span.SetStatus(codes.Error, err.Error())
+			nak()
+			return
+		}
+		headers.Set(keys.MsgIDHeader, keys.MsgIDDone(owner, repo, number, headers.Get("RunId")))
+		c.bus.Publish(ctx, subjects.PRProcessingCompleted, headers, data)
+		c.index.UpdateStatus(pr)
+		elements := c.index.GetElements()
+		c.store.SetValue(ctx, keys.Index, elements)
+		c.notifier.Notify("index", elements)
+	}
+	c.store.SetValue(ctx, prKey, pr)
+	c.store.SetValue(ctx, woKey, wo)
 	ack()
 }
 
@@ -277,16 +223,17 @@ func (c *Coordinator) handleRenderedManifest(ctx context.Context, headers nats.H
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
 
-	owner := headers["pr.owner"]
-	repo := headers["pr.repo"]
-	number := headers["pr.number"]
-	baseSha := headers["pr.sha.base"]
-	headSha := headers["pr.sha.head"]
-	sha := headers["sha.active"]
-	appName := headers["app.name"]
-	origin := headers["app.origin"]
+	owner := headers.Get("pr.owner")
+	repo := headers.Get("pr.repo")
+	number := headers.Get("pr.number")
+	headSha := headers.Get("pr.sha.head")
+	sha := headers.Get("sha.active")
+	appName := headers.Get("app.name")
+	origin := headers.Get("app.origin")
+	appErr := headers.Get("error.msg")
 	manifestLocation := headers.Get("manifest.location")
-	runId := headers["RunId"]
+	runId := headers.Get("RunId")
+
 	span.SetAttributes(
 		attribute.String("pr.owner", owner),
 		attribute.String("pr.repo", repo),
@@ -300,27 +247,72 @@ func (c *Coordinator) handleRenderedManifest(ctx context.Context, headers nats.H
 		"appName", appName,
 		"sha", sha,
 	)
-	baseKey := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, baseSha, origin, appName)
-	headKey := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, headSha, origin, appName)
-	if sha == headSha {
-		c.store.SetValue(ctx, headKey, manifestLocation)
-		if _, err := nats.GetValue[string](ctx, c.store, baseKey); err == nil {
-			headers["app.from"] = baseKey
-			headers["app.to"] = manifestLocation
-			headers["Nats-Msg-Id"] = fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, origin, appName, runId)
-			c.bus.Publish(ctx, subjects.CoordinatorAppReady, headers, nil)
-		}
+
+	var statusChanged bool
+	prKey := keys.PR(owner, repo, number)
+	woKey := keys.WorkOrder(owner, repo, number, runId)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	wo, err := nats.GetValue[models.WorkOrder](ctx, c.store, woKey)
+	if err != nil {
+		c.log.ErrorContext(ctx, "failed to find work order in storage", "key", woKey)
+		nak()
+		return
+	}
+	pr, err := nats.GetValue[models.PullRequest](ctx, c.store, prKey)
+	if err != nil {
+		c.log.ErrorContext(ctx, "failed to find work order in storage", "key", prKey)
+		nak()
+		return
+	}
+	if appErr != "" {
+		f := pr.Files[origin]
+		a := f.Apps[appName]
+		a.Errors = append(a.Errors, appErr)
+		f.Apps[appName] = a
+		pr.Files[origin] = f
+		pr.Status = models.PipelineFailed
+		statusChanged = true
+		delete(wo.ToDo, appName)
 	} else {
-		c.store.SetValue(ctx, baseKey, manifestLocation)
-		if _, err := nats.GetValue[string](ctx, c.store, headKey); err == nil {
-			headers["app.from"] = manifestLocation
-			headers["app.to"] = headKey
-			headers["Nats-Msg-Id"] = fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, origin, appName, runId)
+		ao := wo.Bom[appName]
+		if sha == headSha {
+			ao.HeadLoc = manifestLocation
+		} else {
+			ao.BaseLoc = manifestLocation
+		}
+		wo.Bom[appName] = ao
+		if appIsReady(ao) {
+			headers.Set("manifest.base.location", ao.BaseLoc)
+			headers.Set("manifest.head.location", ao.HeadLoc)
+			headers.Set(keys.MsgIDHeader, keys.MsgIDAppReady(owner, repo, number, runId, appName))
 			c.bus.Publish(ctx, subjects.CoordinatorAppReady, headers, nil)
 		}
 	}
+
+	if statusChanged {
+		data, err := nats.Marshal(pr)
+		if err != nil {
+			c.log.ErrorContext(ctx, "failed to marshal pr object", "error", err)
+			span.SetStatus(codes.Error, err.Error())
+			nak()
+			return
+		}
+		headers.Set(keys.MsgIDHeader, keys.MsgIDDone(owner, repo, number, runId))
+		c.bus.Publish(ctx, subjects.PRProcessingCompleted, headers, data)
+		c.index.UpdateStatus(pr)
+		elements := c.index.GetElements()
+		c.store.SetValue(ctx, keys.Index, elements)
+		c.notifier.Notify("index", elements)
+	}
+	c.store.SetValue(ctx, woKey, wo)
+	c.store.SetValue(ctx, prKey, pr)
 	span.SetStatus(codes.Ok, "")
 	ack()
+}
+
+func appIsReady(ao models.AppOrder) bool {
+	return (!ao.HasBase || ao.BaseLoc != "") && (!ao.HasHead || ao.HeadLoc != "")
 }
 
 func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
@@ -331,11 +323,11 @@ func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.He
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
 
-	owner := headers["pr.owner"]
-	repo := headers["pr.repo"]
-	number := headers["pr.number"]
-	appName := headers["app.name"]
-	origin := headers["app.origin"]
+	owner := headers.Get("pr.owner")
+	repo := headers.Get("pr.repo")
+	number := headers.Get("pr.number")
+	appName := headers.Get("app.name")
+	origin := headers.Get("app.origin")
 	span.SetAttributes(
 		attribute.String("pr.owner", owner),
 		attribute.String("pr.repo", repo),
@@ -349,8 +341,11 @@ func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.He
 		"pr", number,
 		"appName", appName,
 	)
-	key := fmt.Sprintf("%s.%s.%s", owner, repo, number)
-	pr, err := nats.GetValue[models.PullRequest](ctx, c.store, key)
+	prKey := keys.PR(owner, repo, number)
+	woKey := keys.WorkOrder(owner, repo, number, headers.Get("RunId"))
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	pr, err := nats.GetValue[models.PullRequest](ctx, c.store, prKey)
 	if err != nil {
 		c.log.ErrorContext(ctx, "failed to fetch pull request data", "error", err)
 		nak()
@@ -362,91 +357,89 @@ func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.He
 		nak()
 		return
 	}
+	wo, err := nats.GetValue[models.WorkOrder](ctx, c.store, woKey)
+	if err != nil {
+		c.log.ErrorContext(ctx, "failed to unmarshal diffstats", "error", err)
+		nak()
+		return
+	}
 	if f, ok := pr.Files[origin]; ok {
 		if a, ok := f.Apps[appName]; ok {
 			a.DiffStats = ds
 			f.Apps[appName] = a
 		} else {
-			f.Apps[appName] = models.App{DiffStats: ds}
+			f.Apps[appName] = models.AppResult{DiffStats: ds}
 		}
 	} else {
 		pr.Files[origin] = models.FileResult{
-			Apps: map[string]models.App{
+			Apps: map[string]models.AppResult{
 				appName: {DiffStats: ds},
 			},
 		}
 	}
-	c.mu.Lock()
-	progressId := fmt.Sprintf("%s.%s.%s.%s.%s", owner, repo, number, pr.BaseSHA, pr.HeadSHA)
-	progress, err := nats.GetValue[models.Progress](ctx, c.store, progressId)
-	if err != nil {
-		c.log.ErrorContext(ctx, "failed to unmarshal progress object", "error", err)
-		nak()
-		return
-	}
-	progress.ProcessedApps += 1
-	c.log.InfoContext(ctx, "progress updated",
-		"owner", owner,
-		"repo", repo,
-		"number", number,
-		"app", appName,
-		"origin", origin,
-		"sha", headers["sha.active"],
-		"progress", progress,
-	)
-	c.store.SetValue(ctx, progressId, progress)
 
-	if progress.TotalApps == progress.ProcessedApps {
-		if data, err := nats.Marshal(pr); err == nil {
-			delete(headers, "Nats-Msg-Id")
-			c.bus.Publish(ctx, subjects.PRProcessingCompleted, headers, data)
-		} else {
-			c.log.ErrorContext(ctx, "faled to marshall progress data", "error", err)
+	delete(wo.ToDo, appName)
+	if len(wo.ToDo) == 0 && pr.Status != models.PipelineFailed {
+		pr.Status = models.PipelineSucceeded
+		data, err := nats.Marshal(pr)
+		if err != nil {
+			c.log.ErrorContext(ctx, "failed to marshal pr object", "error", err)
+			span.SetStatus(codes.Error, err.Error())
+			nak()
+			return
 		}
-		if pr.Status == models.PipelineInProgress {
-			pr.Status = models.PipelineSucceeded
-			c.index.UpdateStatus(pr)
-			c.store.SetValue(ctx, "index", c.index.GetElements())
-			c.notifier.Notify("index", c.index.GetElements())
-		}
+		headers.Set(keys.MsgIDHeader, keys.MsgIDDone(owner, repo, number, headers.Get("RunId")))
+		c.bus.Publish(ctx, subjects.PRProcessingCompleted, headers, data)
 	}
-	c.mu.Unlock()
-	c.notifier.Notify("summary:"+key, pr)
-	c.store.SetValue(ctx, key, pr)
+	c.index.UpdateStatus(pr)
+	elements := c.index.GetElements()
+	c.store.SetValue(ctx, keys.Index, elements)
+	c.store.SetValue(ctx, prKey, pr)
+	c.store.SetValue(ctx, woKey, wo)
+	c.notifier.Notify("summary:"+prKey, pr)
+	c.notifier.Notify("index", elements)
 	span.SetStatus(codes.Ok, "")
 	ack()
 }
 
-func (c *Coordinator) handleEmptyManifest(ctx context.Context, headers nats.Headers, _ []byte, ack, nak func() error) {
+func (c *Coordinator) handlePRClosed(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
 	ctx, span := tracer.Start(
 		otel.GetTextMapPropagator().Extract(ctx, headers),
-		"handleEmptyManifest",
+		"handlePRClosed",
 	)
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
 
-	owner := headers["pr.owner"]
-	repo := headers["pr.repo"]
-	number := headers["pr.number"]
-	sha := headers["sha.active"]
-	appName := headers["app.name"]
-	origin := headers["app.origin"]
+	owner := headers.Get("pr.owner")
+	repo := headers.Get("pr.repo")
+	number := headers.Get("pr.number")
+	appName := headers.Get("app.name")
+	origin := headers.Get("app.origin")
 	span.SetAttributes(
 		attribute.String("pr.owner", owner),
 		attribute.String("pr.repo", repo),
 		attribute.String("pr.number", number),
-		attribute.String("sha.active", sha),
 		attribute.String("app.name", appName),
 		attribute.String("app.origin", origin),
 	)
-	key := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, appName)
-	if err := c.store.StoreObject(ctx, key, "---"); err != nil {
-		c.log.ErrorContext(ctx, "failed to store the manifest", "error", err)
+	c.log.DebugContext(ctx, "new diff.report.generated event",
+		"owner", owner,
+		"repo", repo,
+		"pr", number,
+		"appName", appName,
+	)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	pr, err := nats.Unmarshal[models.PullRequest](data)
+	if err != nil {
+		c.log.ErrorContext(ctx, "failed to unmarshal pr object", "error", err)
 		span.SetStatus(codes.Error, err.Error())
 		nak()
 		return
 	}
-	headers["manifest.location"] = key
-	c.bus.Publish(ctx, subjects.HelmManifestRendered, headers, nil)
+	c.index.Delete(pr)
+	elements := c.index.GetElements()
+	c.store.SetValue(ctx, keys.Index, elements)
+	c.notifier.Notify("index", elements)
 	ack()
 }

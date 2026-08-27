@@ -2,7 +2,6 @@ package directoryworker
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	sigYAML "sigs.k8s.io/yaml"
 
+	"github.com/trolleksii/argocd-diff-reporter/internal/keys"
 	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 	internalnats "github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/subjects"
@@ -24,8 +24,7 @@ import (
 // or consumes so the test stream covers them all.
 var directoryStreamSubjects = []string{
 	subjects.GitDirectoryFetched,
-	subjects.DirectoryManifestRendered,
-	subjects.DirectoryManifestRenderFailed,
+	subjects.ManifestRenderFinished,
 }
 
 const directoryTestStream = "directoryworker-test"
@@ -83,9 +82,9 @@ spec:
 		appName = "myapp"
 	)
 
-	spec := models.AppSpec{
+	spec := models.ArgoAppSpec{
 		AppName: appName,
-		Source: models.AppSource{
+		Source: models.ArgoAppSource{
 			Path:     ".",
 			Revision: "main",
 		},
@@ -102,10 +101,12 @@ spec:
 		"pr.number":      number,
 		"sha.active":     sha,
 		"app.origin":     origin,
+		"RunId":          t.Name(),
+		"app.name":       appName,
 		"chart.location": dir,
 	}
 
-	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.DirectoryManifestRendered)
+	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.ManifestRenderFinished)
 
 	ackCalled := false
 	nakCalled := false
@@ -117,7 +118,7 @@ spec:
 	assert.True(t, ackCalled, "ack should be called on successful render")
 	assert.False(t, nakCalled, "nak should not be called on successful render")
 
-	expectedKey := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, appName)
+	expectedKey := keys.Manifest(owner, repo, number, sha, origin, appName)
 	stored, err := internalnats.GetObject[string](ctx, store, expectedKey)
 	require.NoError(t, err, "manifest should be stored at key %q", expectedKey)
 	assert.NotEmpty(t, stored, "stored manifest should not be empty")
@@ -127,9 +128,10 @@ spec:
 	select {
 	case hdrs := <-manifestRenderedCh:
 		assert.Equal(t, expectedKey, hdrs["manifest.location"], "manifest.location header should carry the store key")
+		assert.Empty(t, hdrs["error.msg"], "error.msg should not be set on success")
 		assert.Equal(t, appName, hdrs["app.name"], "app.name header should be set")
 	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for DirectoryManifestRendered message")
+		t.Fatal("timed out waiting for ManifestRenderFinished message")
 	}
 }
 
@@ -171,9 +173,9 @@ metadata:
 		appName = "recurse-app"
 	)
 
-	spec := models.AppSpec{
+	spec := models.ArgoAppSpec{
 		AppName: appName,
-		Source: models.AppSource{
+		Source: models.ArgoAppSource{
 			Path:     ".",
 			Revision: "main",
 		},
@@ -190,17 +192,19 @@ metadata:
 		"pr.number":      number,
 		"sha.active":     sha,
 		"app.origin":     origin,
+		"RunId":          t.Name(),
+		"app.name":       appName,
 		"chart.location": dir,
 	}
 
-	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.DirectoryManifestRendered)
+	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.ManifestRenderFinished)
 
 	ack := func() error { return nil }
 	nak := func() error { return nil }
 
 	w.handleDirectoryRender(ctx, headers, data, ack, nak)
 
-	expectedKey := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, appName)
+	expectedKey := keys.Manifest(owner, repo, number, sha, origin, appName)
 	stored, err := internalnats.GetObject[string](ctx, store, expectedKey)
 	require.NoError(t, err, "manifest should be stored at key %q", expectedKey)
 	assert.Contains(t, stored, "root-config", "stored manifest should contain the root-level resource")
@@ -209,8 +213,9 @@ metadata:
 	select {
 	case hdrs := <-manifestRenderedCh:
 		assert.Equal(t, expectedKey, hdrs["manifest.location"], "manifest.location header should carry the store key")
+		assert.Empty(t, hdrs["error.msg"], "error.msg should not be set on success")
 	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for DirectoryManifestRendered message")
+		t.Fatal("timed out waiting for ManifestRenderFinished message")
 	}
 }
 
@@ -261,9 +266,9 @@ resources:
 		appName = "kustomize-app"
 	)
 
-	spec := models.AppSpec{
+	spec := models.ArgoAppSpec{
 		AppName: appName,
-		Source: models.AppSource{
+		Source: models.ArgoAppSource{
 			Path:     ".",
 			Revision: "main",
 		},
@@ -277,10 +282,12 @@ resources:
 		"pr.number":      number,
 		"sha.active":     sha,
 		"app.origin":     origin,
+		"RunId":          t.Name(),
+		"app.name":       appName,
 		"chart.location": dir,
 	}
 
-	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.DirectoryManifestRendered)
+	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.ManifestRenderFinished)
 
 	ackCalled := false
 	nakCalled := false
@@ -292,7 +299,7 @@ resources:
 	assert.True(t, ackCalled, "ack should be called on successful krusty render")
 	assert.False(t, nakCalled, "nak should not be called on successful krusty render")
 
-	expectedKey := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, appName)
+	expectedKey := keys.Manifest(owner, repo, number, sha, origin, appName)
 	stored, err := internalnats.GetObject[string](ctx, store, expectedKey)
 	require.NoError(t, err, "manifest should be stored at key %q", expectedKey)
 	assert.NotEmpty(t, stored, "stored manifest should not be empty")
@@ -302,9 +309,10 @@ resources:
 	select {
 	case hdrs := <-manifestRenderedCh:
 		assert.Equal(t, expectedKey, hdrs["manifest.location"], "manifest.location header should carry the store key")
+		assert.Empty(t, hdrs["error.msg"], "error.msg should not be set on success")
 		assert.Equal(t, appName, hdrs["app.name"], "app.name header should be set")
 	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for DirectoryManifestRendered message")
+		t.Fatal("timed out waiting for ManifestRenderFinished message")
 	}
 }
 
@@ -355,9 +363,9 @@ resources:
 		appName = "overlay-app"
 	)
 
-	spec := models.AppSpec{
+	spec := models.ArgoAppSpec{
 		AppName: appName,
-		Source: models.AppSource{
+		Source: models.ArgoAppSource{
 			Path:     ".",
 			Revision: "main",
 		},
@@ -374,10 +382,12 @@ resources:
 		"pr.number":      number,
 		"sha.active":     sha,
 		"app.origin":     origin,
+		"RunId":          t.Name(),
+		"app.name":       appName,
 		"chart.location": dir,
 	}
 
-	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.DirectoryManifestRendered)
+	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.ManifestRenderFinished)
 
 	ackCalled := false
 	nakCalled := false
@@ -389,7 +399,7 @@ resources:
 	assert.True(t, ackCalled, "ack should be called on successful krusty overlay render")
 	assert.False(t, nakCalled, "nak should not be called on successful krusty overlay render")
 
-	expectedKey := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, appName)
+	expectedKey := keys.Manifest(owner, repo, number, sha, origin, appName)
 	stored, err := internalnats.GetObject[string](ctx, store, expectedKey)
 	require.NoError(t, err, "manifest should be stored at key %q", expectedKey)
 	assert.NotEmpty(t, stored, "stored manifest should not be empty")
@@ -398,14 +408,15 @@ resources:
 	select {
 	case hdrs := <-manifestRenderedCh:
 		assert.Equal(t, expectedKey, hdrs["manifest.location"], "manifest.location header should carry the store key")
+		assert.Empty(t, hdrs["error.msg"], "error.msg should not be set on success")
 		assert.Equal(t, appName, hdrs["app.name"], "app.name header should be set")
 	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for DirectoryManifestRendered message")
+		t.Fatal("timed out waiting for ManifestRenderFinished message")
 	}
 }
 
 // ---------------------------------------------------------------------------
-// handleDirectoryRender — empty directory publishes DirectoryManifestRenderFailed
+// handleDirectoryRender — empty directory publishes ManifestRenderFinished with error.msg
 // ---------------------------------------------------------------------------
 
 func TestHandleDirectoryRender_EmptyDirectory_PublishesFailure(t *testing.T) {
@@ -415,9 +426,9 @@ func TestHandleDirectoryRender_EmptyDirectory_PublishesFailure(t *testing.T) {
 	emptyDir := t.TempDir()
 
 	const appName = "empty-app"
-	spec := models.AppSpec{
+	spec := models.ArgoAppSpec{
 		AppName: appName,
-		Source: models.AppSource{
+		Source: models.ArgoAppSource{
 			Path:     ".",
 			Revision: "main",
 		},
@@ -434,10 +445,12 @@ func TestHandleDirectoryRender_EmptyDirectory_PublishesFailure(t *testing.T) {
 		"pr.number":      "99",
 		"sha.active":     "sha-empty",
 		"app.origin":     "apps/empty.yaml",
+		"RunId":          t.Name(),
+		"app.name":       appName,
 		"chart.location": emptyDir,
 	}
 
-	renderFailedCh := testutil.SubscribeOnce(t, bus, subjects.DirectoryManifestRenderFailed)
+	renderFailedCh := testutil.SubscribeOnce(t, bus, subjects.ManifestRenderFinished)
 
 	ackCalled := false
 	nakCalled := false
@@ -452,8 +465,9 @@ func TestHandleDirectoryRender_EmptyDirectory_PublishesFailure(t *testing.T) {
 	select {
 	case hdrs := <-renderFailedCh:
 		assert.NotEmpty(t, hdrs["error.msg"], "error.msg header should be set on render failure")
+		assert.Empty(t, hdrs["manifest.location"], "manifest.location should not be set on render failure")
 	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for DirectoryManifestRenderFailed message")
+		t.Fatal("timed out waiting for ManifestRenderFinished message")
 	}
 }
 
@@ -527,9 +541,9 @@ resources:
 		appName = "ns-app"
 	)
 
-	spec := models.AppSpec{
+	spec := models.ArgoAppSpec{
 		AppName: appName,
-		Source: models.AppSource{
+		Source: models.ArgoAppSource{
 			Path:     ".",
 			Revision: "main",
 		},
@@ -546,10 +560,12 @@ resources:
 		"pr.number":      number,
 		"sha.active":     sha,
 		"app.origin":     origin,
+		"RunId":          t.Name(),
+		"app.name":       appName,
 		"chart.location": dir,
 	}
 
-	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.DirectoryManifestRendered)
+	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.ManifestRenderFinished)
 
 	ackCalled := false
 	nakCalled := false
@@ -561,7 +577,7 @@ resources:
 	assert.True(t, ackCalled, "ack should be called on successful krusty overlay render")
 	assert.False(t, nakCalled, "nak should not be called on successful krusty overlay render")
 
-	expectedKey := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, appName)
+	expectedKey := keys.Manifest(owner, repo, number, sha, origin, appName)
 	stored, err := internalnats.GetObject[string](ctx, store, expectedKey)
 	require.NoError(t, err, "manifest should be stored at key %q", expectedKey)
 	assert.NotEmpty(t, stored, "stored manifest should not be empty")
@@ -572,9 +588,10 @@ resources:
 	select {
 	case hdrs := <-manifestRenderedCh:
 		assert.Equal(t, expectedKey, hdrs["manifest.location"], "manifest.location header should carry the store key")
+		assert.Empty(t, hdrs["error.msg"], "error.msg should not be set on success")
 		assert.Equal(t, appName, hdrs["app.name"], "app.name header should be set")
 	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for DirectoryManifestRendered message")
+		t.Fatal("timed out waiting for ManifestRenderFinished message")
 	}
 }
 
@@ -624,9 +641,9 @@ resources:
 		appName = "suffix-app"
 	)
 
-	spec := models.AppSpec{
+	spec := models.ArgoAppSpec{
 		AppName: appName,
-		Source: models.AppSource{
+		Source: models.ArgoAppSource{
 			Path:     ".",
 			Revision: "main",
 		},
@@ -643,10 +660,12 @@ resources:
 		"pr.number":      number,
 		"sha.active":     sha,
 		"app.origin":     origin,
+		"RunId":          t.Name(),
+		"app.name":       appName,
 		"chart.location": dir,
 	}
 
-	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.DirectoryManifestRendered)
+	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.ManifestRenderFinished)
 
 	ackCalled := false
 	nakCalled := false
@@ -658,7 +677,7 @@ resources:
 	assert.True(t, ackCalled, "ack should be called on successful krusty overlay render")
 	assert.False(t, nakCalled, "nak should not be called on successful krusty overlay render")
 
-	expectedKey := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, appName)
+	expectedKey := keys.Manifest(owner, repo, number, sha, origin, appName)
 	stored, err := internalnats.GetObject[string](ctx, store, expectedKey)
 	require.NoError(t, err, "manifest should be stored at key %q", expectedKey)
 	assert.NotEmpty(t, stored, "stored manifest should not be empty")
@@ -669,9 +688,10 @@ resources:
 	select {
 	case hdrs := <-manifestRenderedCh:
 		assert.Equal(t, expectedKey, hdrs["manifest.location"], "manifest.location header should carry the store key")
+		assert.Empty(t, hdrs["error.msg"], "error.msg should not be set on success")
 		assert.Equal(t, appName, hdrs["app.name"], "app.name header should be set")
 	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for DirectoryManifestRendered message")
+		t.Fatal("timed out waiting for ManifestRenderFinished message")
 	}
 }
 
@@ -721,9 +741,9 @@ resources:
 		appName = "labels-app"
 	)
 
-	spec := models.AppSpec{
+	spec := models.ArgoAppSpec{
 		AppName: appName,
-		Source: models.AppSource{
+		Source: models.ArgoAppSource{
 			Path:     ".",
 			Revision: "main",
 		},
@@ -740,10 +760,12 @@ resources:
 		"pr.number":      number,
 		"sha.active":     sha,
 		"app.origin":     origin,
+		"RunId":          t.Name(),
+		"app.name":       appName,
 		"chart.location": dir,
 	}
 
-	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.DirectoryManifestRendered)
+	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.ManifestRenderFinished)
 
 	ackCalled := false
 	nakCalled := false
@@ -755,7 +777,7 @@ resources:
 	assert.True(t, ackCalled, "ack should be called on successful krusty overlay render")
 	assert.False(t, nakCalled, "nak should not be called on successful krusty overlay render")
 
-	expectedKey := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, appName)
+	expectedKey := keys.Manifest(owner, repo, number, sha, origin, appName)
 	stored, err := internalnats.GetObject[string](ctx, store, expectedKey)
 	require.NoError(t, err, "manifest should be stored at key %q", expectedKey)
 	assert.NotEmpty(t, stored, "stored manifest should not be empty")
@@ -766,9 +788,10 @@ resources:
 	select {
 	case hdrs := <-manifestRenderedCh:
 		assert.Equal(t, expectedKey, hdrs["manifest.location"], "manifest.location header should carry the store key")
+		assert.Empty(t, hdrs["error.msg"], "error.msg should not be set on success")
 		assert.Equal(t, appName, hdrs["app.name"], "app.name header should be set")
 	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for DirectoryManifestRendered message")
+		t.Fatal("timed out waiting for ManifestRenderFinished message")
 	}
 }
 
@@ -818,9 +841,9 @@ resources:
 		appName = "annotations-app"
 	)
 
-	spec := models.AppSpec{
+	spec := models.ArgoAppSpec{
 		AppName: appName,
-		Source: models.AppSource{
+		Source: models.ArgoAppSource{
 			Path:     ".",
 			Revision: "main",
 		},
@@ -837,10 +860,12 @@ resources:
 		"pr.number":      number,
 		"sha.active":     sha,
 		"app.origin":     origin,
+		"RunId":          t.Name(),
+		"app.name":       appName,
 		"chart.location": dir,
 	}
 
-	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.DirectoryManifestRendered)
+	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.ManifestRenderFinished)
 
 	ackCalled := false
 	nakCalled := false
@@ -852,7 +877,7 @@ resources:
 	assert.True(t, ackCalled, "ack should be called on successful krusty overlay render")
 	assert.False(t, nakCalled, "nak should not be called on successful krusty overlay render")
 
-	expectedKey := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, appName)
+	expectedKey := keys.Manifest(owner, repo, number, sha, origin, appName)
 	stored, err := internalnats.GetObject[string](ctx, store, expectedKey)
 	require.NoError(t, err, "manifest should be stored at key %q", expectedKey)
 	assert.NotEmpty(t, stored, "stored manifest should not be empty")
@@ -863,9 +888,10 @@ resources:
 	select {
 	case hdrs := <-manifestRenderedCh:
 		assert.Equal(t, expectedKey, hdrs["manifest.location"], "manifest.location header should carry the store key")
+		assert.Empty(t, hdrs["error.msg"], "error.msg should not be set on success")
 		assert.Equal(t, appName, hdrs["app.name"], "app.name header should be set")
 	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for DirectoryManifestRendered message")
+		t.Fatal("timed out waiting for ManifestRenderFinished message")
 	}
 }
 
@@ -915,9 +941,9 @@ resources:
 		appName = "force-labels-app"
 	)
 
-	spec := models.AppSpec{
+	spec := models.ArgoAppSpec{
 		AppName: appName,
-		Source: models.AppSource{
+		Source: models.ArgoAppSource{
 			Path:     ".",
 			Revision: "main",
 		},
@@ -935,10 +961,12 @@ resources:
 		"pr.number":      number,
 		"sha.active":     sha,
 		"app.origin":     origin,
+		"RunId":          t.Name(),
+		"app.name":       appName,
 		"chart.location": dir,
 	}
 
-	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.DirectoryManifestRendered)
+	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.ManifestRenderFinished)
 
 	ackCalled := false
 	nakCalled := false
@@ -950,7 +978,7 @@ resources:
 	assert.True(t, ackCalled, "ack should be called on successful krusty overlay render")
 	assert.False(t, nakCalled, "nak should not be called on successful krusty overlay render")
 
-	expectedKey := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, appName)
+	expectedKey := keys.Manifest(owner, repo, number, sha, origin, appName)
 	stored, err := internalnats.GetObject[string](ctx, store, expectedKey)
 	require.NoError(t, err, "manifest should be stored at key %q", expectedKey)
 	assert.NotEmpty(t, stored, "stored manifest should not be empty")
@@ -963,9 +991,10 @@ resources:
 	select {
 	case hdrs := <-manifestRenderedCh:
 		assert.Equal(t, expectedKey, hdrs["manifest.location"], "manifest.location header should carry the store key")
+		assert.Empty(t, hdrs["error.msg"], "error.msg should not be set on success")
 		assert.Equal(t, appName, hdrs["app.name"], "app.name header should be set")
 	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for DirectoryManifestRendered message")
+		t.Fatal("timed out waiting for ManifestRenderFinished message")
 	}
 }
 
@@ -1015,9 +1044,9 @@ resources:
 		appName = "images-app"
 	)
 
-	spec := models.AppSpec{
+	spec := models.ArgoAppSpec{
 		AppName: appName,
-		Source: models.AppSource{
+		Source: models.ArgoAppSource{
 			Path:     ".",
 			Revision: "main",
 		},
@@ -1034,10 +1063,12 @@ resources:
 		"pr.number":      number,
 		"sha.active":     sha,
 		"app.origin":     origin,
+		"RunId":          t.Name(),
+		"app.name":       appName,
 		"chart.location": dir,
 	}
 
-	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.DirectoryManifestRendered)
+	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.ManifestRenderFinished)
 
 	ackCalled := false
 	nakCalled := false
@@ -1049,7 +1080,7 @@ resources:
 	assert.True(t, ackCalled, "ack should be called on successful krusty overlay render")
 	assert.False(t, nakCalled, "nak should not be called on successful krusty overlay render")
 
-	expectedKey := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, appName)
+	expectedKey := keys.Manifest(owner, repo, number, sha, origin, appName)
 	stored, err := internalnats.GetObject[string](ctx, store, expectedKey)
 	require.NoError(t, err, "manifest should be stored at key %q", expectedKey)
 	assert.NotEmpty(t, stored, "stored manifest should not be empty")
@@ -1060,9 +1091,10 @@ resources:
 	select {
 	case hdrs := <-manifestRenderedCh:
 		assert.Equal(t, expectedKey, hdrs["manifest.location"], "manifest.location header should carry the store key")
+		assert.Empty(t, hdrs["error.msg"], "error.msg should not be set on success")
 		assert.Equal(t, appName, hdrs["app.name"], "app.name header should be set")
 	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for DirectoryManifestRendered message")
+		t.Fatal("timed out waiting for ManifestRenderFinished message")
 	}
 }
 
@@ -1112,9 +1144,9 @@ resources:
 		appName = "replicas-app"
 	)
 
-	spec := models.AppSpec{
+	spec := models.ArgoAppSpec{
 		AppName: appName,
-		Source: models.AppSource{
+		Source: models.ArgoAppSource{
 			Path:     ".",
 			Revision: "main",
 		},
@@ -1133,10 +1165,12 @@ resources:
 		"pr.number":      number,
 		"sha.active":     sha,
 		"app.origin":     origin,
+		"RunId":          t.Name(),
+		"app.name":       appName,
 		"chart.location": dir,
 	}
 
-	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.DirectoryManifestRendered)
+	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.ManifestRenderFinished)
 
 	ackCalled := false
 	nakCalled := false
@@ -1148,7 +1182,7 @@ resources:
 	assert.True(t, ackCalled, "ack should be called on successful krusty overlay render")
 	assert.False(t, nakCalled, "nak should not be called on successful krusty overlay render")
 
-	expectedKey := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, appName)
+	expectedKey := keys.Manifest(owner, repo, number, sha, origin, appName)
 	stored, err := internalnats.GetObject[string](ctx, store, expectedKey)
 	require.NoError(t, err, "manifest should be stored at key %q", expectedKey)
 	assert.NotEmpty(t, stored, "stored manifest should not be empty")
@@ -1160,9 +1194,10 @@ resources:
 	select {
 	case hdrs := <-manifestRenderedCh:
 		assert.Equal(t, expectedKey, hdrs["manifest.location"], "manifest.location header should carry the store key")
+		assert.Empty(t, hdrs["error.msg"], "error.msg should not be set on success")
 		assert.Equal(t, appName, hdrs["app.name"], "app.name header should be set")
 	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for DirectoryManifestRendered message")
+		t.Fatal("timed out waiting for ManifestRenderFinished message")
 	}
 }
 
@@ -1212,9 +1247,9 @@ resources:
 		appName = "patches-app"
 	)
 
-	spec := models.AppSpec{
+	spec := models.ArgoAppSpec{
 		AppName: appName,
-		Source: models.AppSource{
+		Source: models.ArgoAppSource{
 			Path:     ".",
 			Revision: "main",
 		},
@@ -1250,10 +1285,12 @@ spec:
 		"pr.number":      number,
 		"sha.active":     sha,
 		"app.origin":     origin,
+		"RunId":          t.Name(),
+		"app.name":       appName,
 		"chart.location": dir,
 	}
 
-	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.DirectoryManifestRendered)
+	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.ManifestRenderFinished)
 
 	ackCalled := false
 	nakCalled := false
@@ -1265,7 +1302,7 @@ spec:
 	assert.True(t, ackCalled, "ack should be called on successful krusty overlay render")
 	assert.False(t, nakCalled, "nak should not be called on successful krusty overlay render")
 
-	expectedKey := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, appName)
+	expectedKey := keys.Manifest(owner, repo, number, sha, origin, appName)
 	stored, err := internalnats.GetObject[string](ctx, store, expectedKey)
 	require.NoError(t, err, "manifest should be stored at key %q", expectedKey)
 	assert.NotEmpty(t, stored, "stored manifest should not be empty")
@@ -1278,9 +1315,10 @@ spec:
 	select {
 	case hdrs := <-manifestRenderedCh:
 		assert.Equal(t, expectedKey, hdrs["manifest.location"], "manifest.location header should carry the store key")
+		assert.Empty(t, hdrs["error.msg"], "error.msg should not be set on success")
 		assert.Equal(t, appName, hdrs["app.name"], "app.name header should be set")
 	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for DirectoryManifestRendered message")
+		t.Fatal("timed out waiting for ManifestRenderFinished message")
 	}
 }
 
@@ -1331,9 +1369,9 @@ resources:
 		appName = "combined-app"
 	)
 
-	spec := models.AppSpec{
+	spec := models.ArgoAppSpec{
 		AppName: appName,
-		Source: models.AppSource{
+		Source: models.ArgoAppSource{
 			Path:     ".",
 			Revision: "main",
 		},
@@ -1355,10 +1393,12 @@ resources:
 		"pr.number":      number,
 		"sha.active":     sha,
 		"app.origin":     origin,
+		"RunId":          t.Name(),
+		"app.name":       appName,
 		"chart.location": dir,
 	}
 
-	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.DirectoryManifestRendered)
+	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.ManifestRenderFinished)
 
 	ackCalled := false
 	nakCalled := false
@@ -1370,7 +1410,7 @@ resources:
 	assert.True(t, ackCalled, "ack should be called on successful krusty overlay render")
 	assert.False(t, nakCalled, "nak should not be called on successful krusty overlay render")
 
-	expectedKey := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, appName)
+	expectedKey := keys.Manifest(owner, repo, number, sha, origin, appName)
 	stored, err := internalnats.GetObject[string](ctx, store, expectedKey)
 	require.NoError(t, err, "manifest should be stored at key %q", expectedKey)
 	assert.NotEmpty(t, stored, "stored manifest should not be empty")
@@ -1385,9 +1425,10 @@ resources:
 	select {
 	case hdrs := <-manifestRenderedCh:
 		assert.Equal(t, expectedKey, hdrs["manifest.location"], "manifest.location header should carry the store key")
+		assert.Empty(t, hdrs["error.msg"], "error.msg should not be set on success")
 		assert.Equal(t, appName, hdrs["app.name"], "app.name header should be set")
 	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for DirectoryManifestRendered message")
+		t.Fatal("timed out waiting for ManifestRenderFinished message")
 	}
 }
 
@@ -1437,9 +1478,9 @@ resources:
 		appName = "yml-detect-app"
 	)
 
-	spec := models.AppSpec{
+	spec := models.ArgoAppSpec{
 		AppName: appName,
-		Source: models.AppSource{
+		Source: models.ArgoAppSource{
 			Path:     ".",
 			Revision: "main",
 		},
@@ -1453,10 +1494,12 @@ resources:
 		"pr.number":      number,
 		"sha.active":     sha,
 		"app.origin":     origin,
+		"RunId":          t.Name(),
+		"app.name":       appName,
 		"chart.location": dir,
 	}
 
-	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.DirectoryManifestRendered)
+	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.ManifestRenderFinished)
 
 	ackCalled := false
 	nakCalled := false
@@ -1468,7 +1511,7 @@ resources:
 	assert.True(t, ackCalled, "ack should be called on successful krusty render")
 	assert.False(t, nakCalled, "nak should not be called on successful krusty render")
 
-	expectedKey := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, appName)
+	expectedKey := keys.Manifest(owner, repo, number, sha, origin, appName)
 	stored, err := internalnats.GetObject[string](ctx, store, expectedKey)
 	require.NoError(t, err, "manifest should be stored at key %q", expectedKey)
 	assert.NotEmpty(t, stored, "stored manifest should not be empty")
@@ -1479,9 +1522,10 @@ resources:
 	select {
 	case hdrs := <-manifestRenderedCh:
 		assert.Equal(t, expectedKey, hdrs["manifest.location"], "manifest.location header should carry the store key")
+		assert.Empty(t, hdrs["error.msg"], "error.msg should not be set on success")
 		assert.Equal(t, appName, hdrs["app.name"], "app.name header should be set")
 	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for DirectoryManifestRendered message")
+		t.Fatal("timed out waiting for ManifestRenderFinished message")
 	}
 }
 
@@ -1531,9 +1575,9 @@ resources:
 		appName = "cap-detect-app"
 	)
 
-	spec := models.AppSpec{
+	spec := models.ArgoAppSpec{
 		AppName: appName,
-		Source: models.AppSource{
+		Source: models.ArgoAppSource{
 			Path:     ".",
 			Revision: "main",
 		},
@@ -1547,10 +1591,12 @@ resources:
 		"pr.number":      number,
 		"sha.active":     sha,
 		"app.origin":     origin,
+		"RunId":          t.Name(),
+		"app.name":       appName,
 		"chart.location": dir,
 	}
 
-	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.DirectoryManifestRendered)
+	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.ManifestRenderFinished)
 
 	ackCalled := false
 	nakCalled := false
@@ -1562,7 +1608,7 @@ resources:
 	assert.True(t, ackCalled, "ack should be called on successful krusty render")
 	assert.False(t, nakCalled, "nak should not be called on successful krusty render")
 
-	expectedKey := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, appName)
+	expectedKey := keys.Manifest(owner, repo, number, sha, origin, appName)
 	stored, err := internalnats.GetObject[string](ctx, store, expectedKey)
 	require.NoError(t, err, "manifest should be stored at key %q", expectedKey)
 	assert.NotEmpty(t, stored, "stored manifest should not be empty")
@@ -1573,9 +1619,10 @@ resources:
 	select {
 	case hdrs := <-manifestRenderedCh:
 		assert.Equal(t, expectedKey, hdrs["manifest.location"], "manifest.location header should carry the store key")
+		assert.Empty(t, hdrs["error.msg"], "error.msg should not be set on success")
 		assert.Equal(t, appName, hdrs["app.name"], "app.name header should be set")
 	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for DirectoryManifestRendered message")
+		t.Fatal("timed out waiting for ManifestRenderFinished message")
 	}
 }
 
@@ -1622,9 +1669,9 @@ spec:
 		appName = "mixed-ext-app"
 	)
 
-	spec := models.AppSpec{
+	spec := models.ArgoAppSpec{
 		AppName: appName,
-		Source: models.AppSource{
+		Source: models.ArgoAppSource{
 			Path:     ".",
 			Revision: "main",
 		},
@@ -1641,10 +1688,12 @@ spec:
 		"pr.number":      number,
 		"sha.active":     sha,
 		"app.origin":     origin,
+		"RunId":          t.Name(),
+		"app.name":       appName,
 		"chart.location": dir,
 	}
 
-	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.DirectoryManifestRendered)
+	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.ManifestRenderFinished)
 
 	ackCalled := false
 	nakCalled := false
@@ -1656,7 +1705,7 @@ spec:
 	assert.True(t, ackCalled, "ack should be called on successful render")
 	assert.False(t, nakCalled, "nak should not be called on successful render")
 
-	expectedKey := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, appName)
+	expectedKey := keys.Manifest(owner, repo, number, sha, origin, appName)
 	stored, err := internalnats.GetObject[string](ctx, store, expectedKey)
 	require.NoError(t, err, "manifest should be stored at key %q", expectedKey)
 	assert.Contains(t, stored, "ConfigMap")
@@ -1667,9 +1716,10 @@ spec:
 	select {
 	case hdrs := <-manifestRenderedCh:
 		assert.Equal(t, expectedKey, hdrs["manifest.location"], "manifest.location header should carry the store key")
+		assert.Empty(t, hdrs["error.msg"], "error.msg should not be set on success")
 		assert.Equal(t, appName, hdrs["app.name"], "app.name header should be set")
 	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for DirectoryManifestRendered message")
+		t.Fatal("timed out waiting for ManifestRenderFinished message")
 	}
 }
 
@@ -1719,9 +1769,9 @@ resources:
 		appName = "yml-resource-app"
 	)
 
-	spec := models.AppSpec{
+	spec := models.ArgoAppSpec{
 		AppName: appName,
-		Source: models.AppSource{
+		Source: models.ArgoAppSource{
 			Path:     ".",
 			Revision: "main",
 		},
@@ -1735,10 +1785,12 @@ resources:
 		"pr.number":      number,
 		"sha.active":     sha,
 		"app.origin":     origin,
+		"RunId":          t.Name(),
+		"app.name":       appName,
 		"chart.location": dir,
 	}
 
-	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.DirectoryManifestRendered)
+	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.ManifestRenderFinished)
 
 	ackCalled := false
 	nakCalled := false
@@ -1750,7 +1802,7 @@ resources:
 	assert.True(t, ackCalled, "ack should be called on successful krusty render")
 	assert.False(t, nakCalled, "nak should not be called on successful krusty render")
 
-	expectedKey := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, appName)
+	expectedKey := keys.Manifest(owner, repo, number, sha, origin, appName)
 	stored, err := internalnats.GetObject[string](ctx, store, expectedKey)
 	require.NoError(t, err, "manifest should be stored at key %q", expectedKey)
 	assert.NotEmpty(t, stored, "stored manifest should not be empty")
@@ -1761,8 +1813,9 @@ resources:
 	select {
 	case hdrs := <-manifestRenderedCh:
 		assert.Equal(t, expectedKey, hdrs["manifest.location"], "manifest.location header should carry the store key")
+		assert.Empty(t, hdrs["error.msg"], "error.msg should not be set on success")
 		assert.Equal(t, appName, hdrs["app.name"], "app.name header should be set")
 	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for DirectoryManifestRendered message")
+		t.Fatal("timed out waiting for ManifestRenderFinished message")
 	}
 }

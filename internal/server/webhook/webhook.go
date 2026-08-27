@@ -78,14 +78,16 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		repoName := repo.GetName()
 		pr := event.CheckSuite.PullRequests[0]
 		prObj := models.PullRequest{
-			Owner:   owner,
-			Repo:    repoName,
-			Number:  strconv.Itoa(pr.GetNumber()),
-			Title:   pr.GetTitle(),
-			Author:  pr.GetUser().GetLogin(),
-			BaseSHA: pr.GetBase().GetSHA(),
-			HeadSHA: pr.GetHead().GetSHA(),
-			Files:   make(map[string]models.FileResult),
+			PullRequestMeta: models.PullRequestMeta{
+				Owner:   owner,
+				Repo:    repoName,
+				Number:  strconv.Itoa(pr.GetNumber()),
+				Title:   pr.GetTitle(),
+				Author:  pr.GetUser().GetLogin(),
+				BaseSHA: pr.GetBase().GetSHA(),
+				HeadSHA: pr.GetHead().GetSHA(),
+			},
+			Files: make(map[string]models.FileResult),
 		}
 
 		span.SetAttributes(
@@ -134,9 +136,11 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			pr := event.GetPullRequest()
 			var headers nats.Headers = make(map[string]string)
 			prObj := models.PullRequest{
-				Owner:  owner,
-				Repo:   repoName,
-				Number: strconv.Itoa(pr.GetNumber()),
+				PullRequestMeta: models.PullRequestMeta{
+					Owner:  owner,
+					Repo:   repoName,
+					Number: strconv.Itoa(pr.GetNumber()),
+				},
 			}
 			span.SetAttributes(
 				attribute.String("pr.number", prObj.Number),
@@ -155,14 +159,16 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case "opened", "synchronize", "reopened":
 			pr := event.GetPullRequest()
 			prObj := models.PullRequest{
-				Owner:   owner,
-				Repo:    repoName,
-				Number:  strconv.Itoa(pr.GetNumber()),
-				Title:   pr.GetTitle(),
-				Author:  pr.GetUser().GetLogin(),
-				BaseSHA: pr.GetBase().GetSHA(),
-				HeadSHA: pr.GetHead().GetSHA(),
-				Files:   make(map[string]models.FileResult),
+				PullRequestMeta: models.PullRequestMeta{
+					Owner:   owner,
+					Repo:    repoName,
+					Number:  strconv.Itoa(pr.GetNumber()),
+					Title:   pr.GetTitle(),
+					Author:  pr.GetUser().GetLogin(),
+					BaseSHA: pr.GetBase().GetSHA(),
+					HeadSHA: pr.GetHead().GetSHA(),
+				},
+				Files: make(map[string]models.FileResult),
 			}
 
 			span.SetAttributes(

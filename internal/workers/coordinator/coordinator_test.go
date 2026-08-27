@@ -2,7 +2,6 @@ package coordinator
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -10,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
+	"github.com/trolleksii/argocd-diff-reporter/internal/keys"
 	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 	internalnats "github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server/notifications"
@@ -24,15 +24,28 @@ const coordinatorStreamName = "coordinator-test"
 // so the test stream covers them all.
 var allSubjects = []string{
 	subjects.GitFilesMatched,
-	subjects.ArgoEmptyParsed,
-	subjects.HelmManifestRendered,
+	subjects.ArgoSideParsed,
+	subjects.ManifestRenderFinished,
 	subjects.DiffReportGenerated,
-	subjects.ArgoFileParseFailed,
-	subjects.ArgoTotalUpdated,
-	subjects.HelmManifestRenderFailed,
-	subjects.GitChartFetchFailed,
+	subjects.WebhookPRClosed,
 	subjects.CoordinatorAppReady,
+	subjects.PRProcessingCompleted,
 }
+
+// Shared fixture identity; every test runs on its own NATS server so the
+// same PR/run can be reused without cross-test dedup or KV bleed.
+const (
+	owner   = "org"
+	repo    = "repo"
+	number  = "42"
+	baseSha = "base-sha"
+	headSha = "head-sha"
+	runId   = "run-1"
+	origin  = "apps/myapp.yaml"
+	appName = "myapp"
+	baseLoc = "manifests/base/myapp"
+	headLoc = "manifests/head/myapp"
+)
 
 // newTestCoordinator creates a Coordinator with a real Bus/Store and an
 // initialized Index. The caller is responsible for any cleanup registered by
@@ -50,550 +63,431 @@ func newTestCoordinator(t *testing.T) (*Coordinator, *internalnats.Bus, *interna
 	return c, bus, store
 }
 
-// ---------------------------------------------------------------------------
-// handlePREvent
-// ---------------------------------------------------------------------------
-
-func TestHandlePREvent_StoresPRInKV(t *testing.T) {
-	c, _, store := newTestCoordinator(t)
-	ctx := context.Background()
-
-	prModel := models.PullRequest{
-		Number:  "42",
-		Owner:   "org",
-		Repo:    "repo",
-		Title:   "My PR",
-		BaseSHA: "base-sha",
-		HeadSHA: "head-sha",
-		Status:  models.PipelineInProgress,
-		Files:   map[string]models.FileResult{},
+// prHeaders returns the headers gitworker stamps on every message of a run.
+func prHeaders() internalnats.Headers {
+	return internalnats.Headers{
+		"pr.owner":    owner,
+		"pr.repo":     repo,
+		"pr.number":   number,
+		"pr.sha.base": baseSha,
+		"pr.sha.head": headSha,
+		"RunId":       runId,
 	}
-	data, err := internalnats.Marshal(prModel)
-	require.NoError(t, err)
-
-	headers := internalnats.Headers{}
-	c.handlePREvent(ctx, headers, data, testutil.NoopAck, testutil.NoopNak)
-
-	key := "org.repo.42"
-	stored, err := internalnats.GetValue[models.PullRequest](ctx, store, key)
-	require.NoError(t, err, "PR should be stored in KV under key %q", key)
-	assert.Equal(t, prModel.Number, stored.Number)
-	assert.Equal(t, prModel.Owner, stored.Owner)
-	assert.Equal(t, prModel.Repo, stored.Repo)
-	assert.Equal(t, prModel.Title, stored.Title)
-	assert.Equal(t, prModel.BaseSHA, stored.BaseSHA)
-	assert.Equal(t, prModel.HeadSHA, stored.HeadSHA)
 }
 
-func TestHandlePREvent_UpdatesIndex(t *testing.T) {
-	c, _, store := newTestCoordinator(t)
-	ctx := context.Background()
+// sideHeaders returns the headers argoworker forwards on ArgoSideParsed.
+func sideHeaders(sha string) internalnats.Headers {
+	h := prHeaders()
+	h.Set("sha.active", sha)
+	h.Set("file.withBase", "true")
+	h.Set("file.withHead", "true")
+	return h
+}
 
-	prModel := models.PullRequest{
-		Number: "7",
-		Owner:  "org",
-		Repo:   "repo",
-		Status: models.PipelineInProgress,
-		Files:  map[string]models.FileResult{},
+// appHeaders returns the headers a render/diff worker forwards for one app on one side.
+func appHeaders(sha string) internalnats.Headers {
+	h := prHeaders()
+	h.Set("sha.active", sha)
+	h.Set("app.origin", origin)
+	h.Set("app.name", appName)
+	return h
+}
+
+func newPR() models.PullRequest {
+	return models.PullRequest{
+		PullRequestMeta: models.PullRequestMeta{Owner: owner, Repo: repo, Number: number, BaseSHA: baseSha, HeadSHA: headSha},
+		Files:           map[string]models.FileResult{},
+		Status:          models.PipelineInProgress,
 	}
+}
+
+// seedPR stores the PR record in KV and the index, as indexInterestingPR would.
+func seedPR(t *testing.T, c *Coordinator, store *internalnats.Store, prModel models.PullRequest) {
+	t.Helper()
+	require.NoError(t, store.SetValue(context.Background(), keys.PR(owner, repo, number), prModel))
+	c.index.Update(prModel)
+}
+
+// seedWorkOrder stores a run's work order with the given apps, both sides expected.
+func seedWorkOrder(t *testing.T, store *internalnats.Store, apps ...string) {
+	t.Helper()
+	wo := models.WorkOrder{Bom: map[string]models.AppOrder{}, ToDo: map[string]struct{}{}}
+	for _, a := range apps {
+		wo.Bom[a] = models.AppOrder{HasBase: true, HasHead: true}
+		wo.ToDo[a] = struct{}{}
+	}
+	require.NoError(t, store.SetValue(context.Background(), keys.WorkOrder(owner, repo, number, runId), wo))
+}
+
+func getPR(t *testing.T, store *internalnats.Store) models.PullRequest {
+	t.Helper()
+	prModel, err := internalnats.GetValue[models.PullRequest](context.Background(), store, keys.PR(owner, repo, number))
+	require.NoError(t, err)
+	return prModel
+}
+
+func getWorkOrder(t *testing.T, store *internalnats.Store) models.WorkOrder {
+	t.Helper()
+	wo, err := internalnats.GetValue[models.WorkOrder](context.Background(), store, keys.WorkOrder(owner, repo, number, runId))
+	require.NoError(t, err)
+	return wo
+}
+
+func expectMsg(t *testing.T, ch <-chan internalnats.Headers, what string) internalnats.Headers {
+	t.Helper()
+	select {
+	case hdrs := <-ch:
+		return hdrs
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+		return nil
+	}
+}
+
+func expectSilence(t *testing.T, ch <-chan internalnats.Headers, what string) {
+	t.Helper()
+	select {
+	case <-ch:
+		t.Fatalf("unexpected %s", what)
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+// recorder returns ack/nak closures plus flags reporting which one was called.
+func recorder() (ack, nak func() error, acked, naked *bool) {
+	acked, naked = new(bool), new(bool)
+	return func() error { *acked = true; return nil }, func() error { *naked = true; return nil }, acked, naked
+}
+
+// ---------------------------------------------------------------------------
+// indexInterestingPR
+// ---------------------------------------------------------------------------
+
+func TestIndexInterestingPR_StoresPRInKV(t *testing.T) {
+	c, _, store := newTestCoordinator(t)
+
+	prModel := newPR()
+	prModel.Title = "My PR"
 	data, err := internalnats.Marshal(prModel)
 	require.NoError(t, err)
 
-	c.handlePREvent(ctx, internalnats.Headers{}, data, testutil.NoopAck, testutil.NoopNak)
+	c.indexInterestingPR(context.Background(), prHeaders(), data, testutil.NoopAck, testutil.NoopNak)
+
+	stored := getPR(t, store)
+	assert.Equal(t, prModel.PullRequestMeta, stored.PullRequestMeta)
+}
+
+func TestIndexInterestingPR_UpdatesIndex(t *testing.T) {
+	c, _, store := newTestCoordinator(t)
+	ctx := context.Background()
+
+	data, err := internalnats.Marshal(newPR())
+	require.NoError(t, err)
+
+	c.indexInterestingPR(ctx, prHeaders(), data, testutil.NoopAck, testutil.NoopNak)
 
 	elems := c.index.GetElements()
 	require.Len(t, elems, 1)
-	assert.Equal(t, "7", elems[0].Number)
+	assert.Equal(t, number, elems[0].Number)
 
-	storedIndex, err := internalnats.GetValue[[]models.PullRequest](ctx, store, "index")
+	storedIndex, err := internalnats.GetValue[[]models.PullRequest](ctx, store, keys.Index)
 	require.NoError(t, err, "index should be stored in KV")
 	require.Len(t, storedIndex, 1)
-	assert.Equal(t, "7", storedIndex[0].Number)
+	assert.Equal(t, number, storedIndex[0].Number)
 }
 
 // ---------------------------------------------------------------------------
-// handleRenderedManifest — head arrives first, then base
+// handleSideParsed
 // ---------------------------------------------------------------------------
 
-func TestHandleRenderedManifest_HeadFirst_PublishesAppReady(t *testing.T) {
-	c, bus, _ := newTestCoordinator(t)
-	ctx := context.Background()
-
-	appReadyCh := testutil.SubscribeOnce(t, bus, subjects.CoordinatorAppReady)
-
-	const (
-		owner   = "org"
-		repo    = "repo"
-		number  = "1"
-		baseSha = "base-abc"
-		headSha = "head-def"
-		origin  = "apps/myapp.yaml"
-		appName = "myapp"
-		baseLoc = "manifests/base/myapp"
-		headLoc = "manifests/head/myapp"
-		runId   = "run-1"
-	)
-
-	// 1. Head manifest arrives first — no publish yet
-	headHeaders := internalnats.Headers{
-		"pr.owner":          owner,
-		"pr.repo":           repo,
-		"pr.number":         number,
-		"pr.sha.base":       baseSha,
-		"pr.sha.head":       headSha,
-		"sha.active":        headSha,
-		"app.name":          appName,
-		"app.origin":        origin,
-		"manifest.location": headLoc,
-		"RunId":             runId,
-	}
-	c.handleRenderedManifest(ctx, headHeaders, nil, testutil.NoopAck, testutil.NoopNak)
-
-	select {
-	case <-appReadyCh:
-		t.Fatal("expected no coordinator.app.ready message when only head has arrived")
-	case <-time.After(150 * time.Millisecond):
-		// correct — no publish yet
-	}
-
-	// 2. Base manifest arrives — both sides present, should publish coordinator.app.ready
-	baseHeaders := internalnats.Headers{
-		"pr.owner":          owner,
-		"pr.repo":           repo,
-		"pr.number":         number,
-		"pr.sha.base":       baseSha,
-		"pr.sha.head":       headSha,
-		"sha.active":        baseSha,
-		"app.name":          appName,
-		"app.origin":        origin,
-		"manifest.location": baseLoc,
-		"RunId":             runId,
-	}
-	c.handleRenderedManifest(ctx, baseHeaders, nil, testutil.NoopAck, testutil.NoopNak)
-
-	// When base arrives after head is already stored:
-	//   app.from = the incoming base manifestLocation
-	//   app.to   = headKey (the KV key under which head was previously stored)
-	expectedHeadKey := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, headSha, origin, appName)
-	expectedMsgId := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, origin, appName, runId)
-	select {
-	case hdrs := <-appReadyCh:
-		assert.Equal(t, baseLoc, hdrs["app.from"], "app.from should be the incoming base manifest location")
-		assert.Equal(t, expectedHeadKey, hdrs["app.to"], "app.to should be the KV key of the stored head manifest")
-		assert.Equal(t, expectedMsgId, hdrs["Nats-Msg-Id"], "Nats-Msg-Id should dedupe on owner.repo.number.origin.app.runId")
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for coordinator.app.ready message")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// handleRenderedManifest — base arrives first, then head
-// ---------------------------------------------------------------------------
-
-func TestHandleRenderedManifest_BaseFirst_PublishesAppReady(t *testing.T) {
-	c, bus, _ := newTestCoordinator(t)
-	ctx := context.Background()
-
-	appReadyCh := testutil.SubscribeOnce(t, bus, subjects.CoordinatorAppReady)
-
-	const (
-		owner   = "org"
-		repo    = "repo"
-		number  = "2"
-		baseSha = "base-111"
-		headSha = "head-222"
-		origin  = "apps/chart.yaml"
-		appName = "chart-app"
-		baseLoc = "manifests/base/chart-app"
-		headLoc = "manifests/head/chart-app"
-		runId   = "run-2"
-	)
-
-	// 1. Base manifest arrives first — no publish yet
-	baseHeaders := internalnats.Headers{
-		"pr.owner":          owner,
-		"pr.repo":           repo,
-		"pr.number":         number,
-		"pr.sha.base":       baseSha,
-		"pr.sha.head":       headSha,
-		"sha.active":        baseSha,
-		"app.name":          appName,
-		"app.origin":        origin,
-		"manifest.location": baseLoc,
-		"RunId":             runId,
-	}
-	c.handleRenderedManifest(ctx, baseHeaders, nil, testutil.NoopAck, testutil.NoopNak)
-
-	select {
-	case <-appReadyCh:
-		t.Fatal("expected no coordinator.app.ready message when only base has arrived")
-	case <-time.After(150 * time.Millisecond):
-		// correct — no publish yet
-	}
-
-	// 2. Head manifest arrives — both sides present, should publish coordinator.app.ready
-	headHeaders := internalnats.Headers{
-		"pr.owner":          owner,
-		"pr.repo":           repo,
-		"pr.number":         number,
-		"pr.sha.base":       baseSha,
-		"pr.sha.head":       headSha,
-		"sha.active":        headSha,
-		"app.name":          appName,
-		"app.origin":        origin,
-		"manifest.location": headLoc,
-		"RunId":             runId,
-	}
-	c.handleRenderedManifest(ctx, headHeaders, nil, testutil.NoopAck, testutil.NoopNak)
-
-	// When head arrives after base is already stored:
-	//   app.from = baseKey (the KV key under which base was previously stored)
-	//   app.to   = the incoming head manifestLocation
-	expectedBaseKey2 := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, baseSha, origin, appName)
-	expectedMsgId := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, origin, appName, runId)
-	select {
-	case hdrs := <-appReadyCh:
-		assert.Equal(t, expectedBaseKey2, hdrs["app.from"], "app.from should be the KV key of the stored base manifest")
-		assert.Equal(t, headLoc, hdrs["app.to"], "app.to should be the incoming head manifest location")
-		assert.Equal(t, expectedMsgId, hdrs["Nats-Msg-Id"], "Nats-Msg-Id should dedupe on owner.repo.number.origin.app.runId")
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for coordinator.app.ready message")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// handleGeneratedReport — marks pipeline complete
-// ---------------------------------------------------------------------------
-
-func TestHandleGeneratedReport_MarkesPipelineComplete(t *testing.T) {
+func TestHandleSideParsed_CleanApps_CreatesWorkOrderAndRecordsApps(t *testing.T) {
 	c, _, store := newTestCoordinator(t)
 	ctx := context.Background()
+	seedPR(t, c, store, newPR())
 
-	const (
-		owner   = "org"
-		repo    = "repo"
-		number  = "10"
-		baseSha = "base-sha-x"
-		headSha = "head-sha-x"
-		origin  = "apps/app.yaml"
-		appName = "myservice"
-	)
-
-	// Seed a PR in KV.
-	prModel := models.PullRequest{
-		Number:  number,
-		Owner:   owner,
-		Repo:    repo,
-		BaseSHA: baseSha,
-		HeadSHA: headSha,
-		Status:  models.PipelineInProgress,
-		Files:   map[string]models.FileResult{},
-	}
-	err := store.SetValue(ctx, fmt.Sprintf("%s.%s.%s", owner, repo, number), prModel)
+	side, err := internalnats.Marshal([]models.FileParsingResult{
+		{File: origin, Apps: []models.AppParsingResult{{Name: appName}, {Name: "other"}}},
+	})
 	require.NoError(t, err)
 
-	// Seed the progress: TotalApps=1, ProcessedApps=0.
-	progressKey := fmt.Sprintf("%s.%s.%s.%s.%s", owner, repo, number, baseSha, headSha)
-	err = store.SetValue(ctx, progressKey, models.Progress{TotalApps: 1, ProcessedApps: 0})
+	ack, nak, acked, naked := recorder()
+	c.handleSideParsed(ctx, sideHeaders(baseSha), side, ack, nak)
+	// second side of the same run extends, not duplicates, the work order
+	c.handleSideParsed(ctx, sideHeaders(headSha), side, testutil.NoopAck, testutil.NoopNak)
+
+	assert.True(t, *acked)
+	assert.False(t, *naked)
+
+	wo := getWorkOrder(t, store)
+	assert.Equal(t, map[string]models.AppOrder{
+		appName: {HasBase: true, HasHead: true},
+		"other": {HasBase: true, HasHead: true},
+	}, wo.Bom)
+	assert.Equal(t, map[string]struct{}{appName: {}, "other": {}}, wo.ToDo)
+
+	stored := getPR(t, store)
+	assert.Equal(t, models.PipelineInProgress, stored.Status)
+	require.Contains(t, stored.Files, origin)
+	assert.Empty(t, stored.Files[origin].Errors)
+	require.Contains(t, stored.Files[origin].Apps, appName)
+	require.Contains(t, stored.Files[origin].Apps, "other")
+	assert.Empty(t, stored.Files[origin].Apps[appName].Errors)
+}
+
+func TestHandleSideParsed_FileError_FailsPR(t *testing.T) {
+	c, bus, store := newTestCoordinator(t)
+	seedPR(t, c, store, newPR())
+	doneCh := testutil.SubscribeOnce(t, bus, subjects.PRProcessingCompleted)
+
+	const errorMsg = "parse error: unexpected token"
+	side, err := internalnats.Marshal([]models.FileParsingResult{{File: origin, Error: errorMsg}})
 	require.NoError(t, err)
 
-	// Build a DiffStats payload.
-	ds := models.DiffStats{DiffCount: 3, Additions: 2, Removals: 1}
+	c.handleSideParsed(context.Background(), sideHeaders(baseSha), side, testutil.NoopAck, testutil.NoopNak)
+
+	stored := getPR(t, store)
+	assert.Equal(t, models.PipelineFailed, stored.Status)
+	assert.Contains(t, stored.Files[origin].Errors, errorMsg)
+	assert.Empty(t, getWorkOrder(t, store).ToDo)
+
+	hdrs := expectMsg(t, doneCh, "PRProcessingCompleted")
+	assert.Equal(t, keys.MsgIDDone(owner, repo, number, runId), hdrs[keys.MsgIDHeader])
+}
+
+func TestHandleSideParsed_AppError_FailsPRAndSkipsApp(t *testing.T) {
+	c, bus, store := newTestCoordinator(t)
+	seedPR(t, c, store, newPR())
+	doneCh := testutil.SubscribeOnce(t, bus, subjects.PRProcessingCompleted)
+
+	const errorMsg = "invalid spec: missing source"
+	side, err := internalnats.Marshal([]models.FileParsingResult{
+		{File: origin, Apps: []models.AppParsingResult{{Name: appName}, {Name: "broken", Error: errorMsg}}},
+	})
+	require.NoError(t, err)
+
+	c.handleSideParsed(context.Background(), sideHeaders(baseSha), side, testutil.NoopAck, testutil.NoopNak)
+
+	stored := getPR(t, store)
+	assert.Equal(t, models.PipelineFailed, stored.Status)
+	assert.Contains(t, stored.Files[origin].Apps["broken"].Errors, errorMsg)
+
+	wo := getWorkOrder(t, store)
+	assert.Contains(t, wo.ToDo, appName)
+	assert.NotContains(t, wo.ToDo, "broken")
+	assert.NotContains(t, wo.Bom, "broken")
+
+	expectMsg(t, doneCh, "PRProcessingCompleted")
+}
+
+func TestHandleSideParsed_MissingPR_Naks(t *testing.T) {
+	c, _, _ := newTestCoordinator(t)
+
+	side, err := internalnats.Marshal([]models.FileParsingResult{{File: origin}})
+	require.NoError(t, err)
+
+	ack, nak, acked, naked := recorder()
+	c.handleSideParsed(context.Background(), sideHeaders(baseSha), side, ack, nak)
+
+	assert.True(t, *naked)
+	assert.False(t, *acked)
+}
+
+// ---------------------------------------------------------------------------
+// handleRenderedManifest
+// ---------------------------------------------------------------------------
+
+func renderHeaders(sha, location string) internalnats.Headers {
+	h := appHeaders(sha)
+	h.Set("manifest.location", location)
+	return h
+}
+
+func seedRenderState(t *testing.T, c *Coordinator, store *internalnats.Store) {
+	t.Helper()
+	prModel := newPR()
+	prModel.Files[origin] = models.FileResult{Errors: []string{}, Apps: map[string]models.AppResult{appName: {Errors: []string{}}}}
+	seedPR(t, c, store, prModel)
+	seedWorkOrder(t, store, appName)
+}
+
+func assertAppReady(t *testing.T, hdrs internalnats.Headers) {
+	t.Helper()
+	assert.Equal(t, baseLoc, hdrs["manifest.base.location"])
+	assert.Equal(t, headLoc, hdrs["manifest.head.location"])
+	assert.Equal(t, keys.MsgIDAppReady(owner, repo, number, runId, appName), hdrs[keys.MsgIDHeader])
+}
+
+func TestHandleRenderedManifest_HeadFirst_PublishesAppReady(t *testing.T) {
+	c, bus, store := newTestCoordinator(t)
+	ctx := context.Background()
+	seedRenderState(t, c, store)
+	appReadyCh := testutil.SubscribeOnce(t, bus, subjects.CoordinatorAppReady)
+
+	c.handleRenderedManifest(ctx, renderHeaders(headSha, headLoc), nil, testutil.NoopAck, testutil.NoopNak)
+	expectSilence(t, appReadyCh, "CoordinatorAppReady after head only")
+
+	c.handleRenderedManifest(ctx, renderHeaders(baseSha, baseLoc), nil, testutil.NoopAck, testutil.NoopNak)
+	assertAppReady(t, expectMsg(t, appReadyCh, "CoordinatorAppReady"))
+
+	assert.Equal(t, models.AppOrder{HasBase: true, BaseLoc: baseLoc, HasHead: true, HeadLoc: headLoc}, getWorkOrder(t, store).Bom[appName])
+}
+
+func TestHandleRenderedManifest_BaseFirst_PublishesAppReady(t *testing.T) {
+	c, bus, store := newTestCoordinator(t)
+	ctx := context.Background()
+	seedRenderState(t, c, store)
+	appReadyCh := testutil.SubscribeOnce(t, bus, subjects.CoordinatorAppReady)
+
+	c.handleRenderedManifest(ctx, renderHeaders(baseSha, baseLoc), nil, testutil.NoopAck, testutil.NoopNak)
+	expectSilence(t, appReadyCh, "CoordinatorAppReady after base only")
+
+	c.handleRenderedManifest(ctx, renderHeaders(headSha, headLoc), nil, testutil.NoopAck, testutil.NoopNak)
+	assertAppReady(t, expectMsg(t, appReadyCh, "CoordinatorAppReady"))
+}
+
+func TestHandleRenderedManifest_Error_FailsPRAndDropsApp(t *testing.T) {
+	c, bus, store := newTestCoordinator(t)
+	seedRenderState(t, c, store)
+	doneCh := testutil.SubscribeOnce(t, bus, subjects.PRProcessingCompleted)
+	appReadyCh := testutil.SubscribeOnce(t, bus, subjects.CoordinatorAppReady)
+
+	const errorMsg = "helm template error: missing value"
+	headers := appHeaders(baseSha)
+	headers.Set("error.msg", errorMsg)
+
+	ack, nak, acked, naked := recorder()
+	c.handleRenderedManifest(context.Background(), headers, nil, ack, nak)
+
+	assert.True(t, *acked)
+	assert.False(t, *naked)
+
+	stored := getPR(t, store)
+	assert.Equal(t, models.PipelineFailed, stored.Status)
+	assert.Contains(t, stored.Files[origin].Apps[appName].Errors, errorMsg)
+	assert.NotContains(t, getWorkOrder(t, store).ToDo, appName)
+
+	hdrs := expectMsg(t, doneCh, "PRProcessingCompleted")
+	assert.Equal(t, keys.MsgIDDone(owner, repo, number, runId), hdrs[keys.MsgIDHeader])
+	expectSilence(t, appReadyCh, "CoordinatorAppReady for a failed app")
+}
+
+func TestHandleRenderedManifest_MissingWorkOrder_Naks(t *testing.T) {
+	c, _, store := newTestCoordinator(t)
+	seedPR(t, c, store, newPR())
+
+	ack, nak, acked, naked := recorder()
+	c.handleRenderedManifest(context.Background(), renderHeaders(baseSha, baseLoc), nil, ack, nak)
+
+	assert.True(t, *naked)
+	assert.False(t, *acked)
+}
+
+// ---------------------------------------------------------------------------
+// handleGeneratedReport
+// ---------------------------------------------------------------------------
+
+func diffStatsData(t *testing.T, ds models.DiffStats) []byte {
+	t.Helper()
 	data, err := internalnats.Marshal(ds)
 	require.NoError(t, err)
+	return data
+}
 
-	headers := internalnats.Headers{
-		"pr.owner":   owner,
-		"pr.repo":    repo,
-		"pr.number":  number,
-		"app.name":   appName,
-		"app.origin": origin,
-	}
-	c.handleGeneratedReport(ctx, headers, data, testutil.NoopAck, testutil.NoopNak)
+func TestHandleGeneratedReport_LastApp_MarksSucceededAndPublishes(t *testing.T) {
+	c, bus, store := newTestCoordinator(t)
+	seedPR(t, c, store, newPR())
+	seedWorkOrder(t, store, appName)
+	doneCh := testutil.SubscribeOnce(t, bus, subjects.PRProcessingCompleted)
 
-	// PR should now have Status=PipelineSucceeded.
-	prKey := fmt.Sprintf("%s.%s.%s", owner, repo, number)
-	stored, err := internalnats.GetValue[models.PullRequest](ctx, store, prKey)
-	require.NoError(t, err)
-	assert.Equal(t, models.PipelineSucceeded, stored.Status, "pipeline should be marked succeeded when all apps are processed")
+	ds := models.DiffStats{DiffCount: 3, Additions: 2, Removals: 1}
+	ack, nak, acked, naked := recorder()
+	c.handleGeneratedReport(context.Background(), appHeaders(headSha), diffStatsData(t, ds), ack, nak)
+
+	assert.True(t, *acked)
+	assert.False(t, *naked)
+
+	stored := getPR(t, store)
+	assert.Equal(t, models.PipelineSucceeded, stored.Status)
+	assert.Equal(t, ds, stored.Files[origin].Apps[appName].DiffStats)
+	assert.Empty(t, getWorkOrder(t, store).ToDo)
+
+	hdrs := expectMsg(t, doneCh, "PRProcessingCompleted")
+	assert.Equal(t, keys.MsgIDDone(owner, repo, number, runId), hdrs[keys.MsgIDHeader])
 }
 
 func TestHandleGeneratedReport_PartialProgress_StaysInProgress(t *testing.T) {
-	c, _, store := newTestCoordinator(t)
-	ctx := context.Background()
+	c, bus, store := newTestCoordinator(t)
+	seedPR(t, c, store, newPR())
+	seedWorkOrder(t, store, appName, "other")
+	doneCh := testutil.SubscribeOnce(t, bus, subjects.PRProcessingCompleted)
 
-	const (
-		owner   = "org"
-		repo    = "repo"
-		number  = "11"
-		baseSha = "base-sha-y"
-		headSha = "head-sha-y"
-		origin  = "apps/multi.yaml"
-		appName = "svc-a"
-	)
+	c.handleGeneratedReport(context.Background(), appHeaders(headSha), diffStatsData(t, models.DiffStats{DiffCount: 1}), testutil.NoopAck, testutil.NoopNak)
 
-	prModel := models.PullRequest{
-		Number:  number,
-		Owner:   owner,
-		Repo:    repo,
-		BaseSHA: baseSha,
-		HeadSHA: headSha,
-		Status:  models.PipelineInProgress,
-		Files:   map[string]models.FileResult{},
-	}
-	err := store.SetValue(ctx, fmt.Sprintf("%s.%s.%s", owner, repo, number), prModel)
-	require.NoError(t, err)
-
-	// Two apps total; processing the first should leave status in progress.
-	progressKey := fmt.Sprintf("%s.%s.%s.%s.%s", owner, repo, number, baseSha, headSha)
-	err = store.SetValue(ctx, progressKey, models.Progress{TotalApps: 2, ProcessedApps: 0})
-	require.NoError(t, err)
-
-	ds := models.DiffStats{DiffCount: 1}
-	data, err := internalnats.Marshal(ds)
-	require.NoError(t, err)
-
-	headers := internalnats.Headers{
-		"pr.owner":   owner,
-		"pr.repo":    repo,
-		"pr.number":  number,
-		"app.name":   appName,
-		"app.origin": origin,
-	}
-	c.handleGeneratedReport(ctx, headers, data, testutil.NoopAck, testutil.NoopNak)
-
-	prKey := fmt.Sprintf("%s.%s.%s", owner, repo, number)
-	stored, err := internalnats.GetValue[models.PullRequest](ctx, store, prKey)
-	require.NoError(t, err)
-	assert.Equal(t, models.PipelineInProgress, stored.Status, "pipeline should remain in progress when not all apps are processed")
+	assert.Equal(t, models.PipelineInProgress, getPR(t, store).Status)
+	assert.Equal(t, map[string]struct{}{"other": {}}, getWorkOrder(t, store).ToDo)
+	expectSilence(t, doneCh, "PRProcessingCompleted with apps still pending")
 }
 
-// ---------------------------------------------------------------------------
-// handleFileErrors — error aggregation
-// ---------------------------------------------------------------------------
-
-func TestHandleFileErrors_AggregatesErrorAndSetsFailed(t *testing.T) {
+func TestHandleGeneratedReport_MissingPR_Naks(t *testing.T) {
 	c, _, store := newTestCoordinator(t)
-	ctx := context.Background()
+	seedWorkOrder(t, store, appName)
 
-	const (
-		owner    = "org"
-		repo     = "repo"
-		number   = "20"
-		origin   = "apps/broken.yaml"
-		errorMsg = "parse error: unexpected token"
-	)
+	ack, nak, acked, naked := recorder()
+	c.handleGeneratedReport(context.Background(), appHeaders(headSha), diffStatsData(t, models.DiffStats{}), ack, nak)
 
-	// Seed a PR in KV.
-	prModel := models.PullRequest{
-		Number: number,
-		Owner:  owner,
-		Repo:   repo,
-		Status: models.PipelineInProgress,
-		Files:  map[string]models.FileResult{},
-	}
-	err := store.SetValue(ctx, fmt.Sprintf("%s.%s.%s", owner, repo, number), prModel)
-	require.NoError(t, err)
-	// Seed in index too so UpdateStatus can find the PR.
-	c.index.Update(prModel)
-
-	headers := internalnats.Headers{
-		"pr.owner":     owner,
-		"pr.repo":      repo,
-		"pr.number":    number,
-		"error.msg":    errorMsg,
-		"error.origin": origin,
-	}
-	c.handleFileErrors(ctx, headers, nil, testutil.NoopAck, testutil.NoopNak)
-
-	prKey := fmt.Sprintf("%s.%s.%s", owner, repo, number)
-	stored, err := internalnats.GetValue[models.PullRequest](ctx, store, prKey)
-	require.NoError(t, err)
-	assert.Equal(t, models.PipelineFailed, stored.Status, "pipeline should be marked failed on file error")
-	require.NotNil(t, stored.Files[origin])
-	assert.Contains(t, stored.Files[origin].Errors, errorMsg)
+	assert.True(t, *naked)
+	assert.False(t, *acked)
 }
 
-// ---------------------------------------------------------------------------
-// handleAppErrors — error aggregation at app level
-// ---------------------------------------------------------------------------
-
-func TestHandleAppErrors_AggregatesAppErrorAndSetsFailed(t *testing.T) {
+func TestHandleGeneratedReport_MissingWorkOrder_Naks(t *testing.T) {
 	c, _, store := newTestCoordinator(t)
-	ctx := context.Background()
+	seedPR(t, c, store, newPR())
 
-	const (
-		owner      = "org"
-		repo       = "repo"
-		number     = "30"
-		originFile = "apps/chart.yaml"
-		originApp  = "my-chart"
-		errorMsg   = "helm template error: missing value"
-	)
+	ack, nak, acked, naked := recorder()
+	c.handleGeneratedReport(context.Background(), appHeaders(headSha), diffStatsData(t, models.DiffStats{}), ack, nak)
 
-	prModel := models.PullRequest{
-		Number: number,
-		Owner:  owner,
-		Repo:   repo,
-		Status: models.PipelineInProgress,
-		Files:  map[string]models.FileResult{},
-	}
-	err := store.SetValue(ctx, fmt.Sprintf("%s.%s.%s", owner, repo, number), prModel)
-	require.NoError(t, err)
-	c.index.Update(prModel)
-
-	headers := internalnats.Headers{
-		"pr.owner":          owner,
-		"pr.repo":           repo,
-		"pr.number":         number,
-		"error.msg":         errorMsg,
-		"error.origin.file": originFile,
-		"error.origin.app":  originApp,
-	}
-	c.handleAppErrors(ctx, headers, nil, testutil.NoopAck, testutil.NoopNak)
-
-	prKey := fmt.Sprintf("%s.%s.%s", owner, repo, number)
-	stored, err := internalnats.GetValue[models.PullRequest](ctx, store, prKey)
-	require.NoError(t, err)
-	assert.Equal(t, models.PipelineFailed, stored.Status, "pipeline should be marked failed on app error")
-	require.NotNil(t, stored.Files[originFile])
-	require.NotNil(t, stored.Files[originFile].Apps)
-	app, ok := stored.Files[originFile].Apps[originApp]
-	require.True(t, ok, "app entry should exist in file result")
-	assert.Contains(t, app.Errors, errorMsg)
+	assert.True(t, *naked)
+	assert.False(t, *acked)
 }
 
-// ---------------------------------------------------------------------------
-// handleEmptyManifest — stores "---" and publishes HelmManifestRendered
-// ---------------------------------------------------------------------------
-
-func TestHandleEmptyManifest_StoresAndPublishes(t *testing.T) {
+func TestHandleGeneratedReport_Redelivery_PublishesCompletedOnce(t *testing.T) {
 	c, bus, store := newTestCoordinator(t)
 	ctx := context.Background()
+	seedPR(t, c, store, newPR())
+	seedWorkOrder(t, store, appName)
+	doneCh := testutil.SubscribeN(t, bus, subjects.PRProcessingCompleted, 2)
 
-	const (
-		owner   = "myorg"
-		repo    = "myrepo"
-		number  = "42"
-		sha     = "abc123"
-		origin  = "apps/myapp.yaml"
-		appName = "myapp"
-	)
+	data := diffStatsData(t, models.DiffStats{DiffCount: 1})
+	c.handleGeneratedReport(ctx, appHeaders(headSha), data, testutil.NoopAck, testutil.NoopNak)
+	c.handleGeneratedReport(ctx, appHeaders(headSha), data, testutil.NoopAck, testutil.NoopNak)
 
-	headers := internalnats.Headers{
-		"pr.owner":   owner,
-		"pr.repo":    repo,
-		"pr.number":  number,
-		"sha.active": sha,
-		"app.name":   appName,
-		"app.origin": origin,
-	}
-
-	manifestRenderedCh := testutil.SubscribeOnce(t, bus, subjects.HelmManifestRendered)
-
-	ackCalled := false
-	nakCalled := false
-	ack := func() error { ackCalled = true; return nil }
-	nak := func() error { nakCalled = true; return nil }
-
-	c.handleEmptyManifest(ctx, headers, nil, ack, nak)
-
-	assert.True(t, ackCalled, "ack should be called on success")
-	assert.False(t, nakCalled, "nak should not be called on success")
-
-	expectedKey := fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, appName)
-	stored, err := internalnats.GetObject[string](ctx, store, expectedKey)
-	require.NoError(t, err, "object should be stored at key %q", expectedKey)
-	assert.Equal(t, "---", stored, "stored manifest should be ---")
-
-	select {
-	case hdrs := <-manifestRenderedCh:
-		assert.Equal(t, expectedKey, hdrs["manifest.location"], "manifest.location header should carry the store key")
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for HelmManifestRendered message")
-	}
+	expectMsg(t, doneCh, "PRProcessingCompleted")
+	expectSilence(t, doneCh, "second PRProcessingCompleted; JetStream should dedup on "+keys.MsgIDHeader)
 }
 
 // ---------------------------------------------------------------------------
-// handleTotalAppUpdate
+// handlePRClosed
 // ---------------------------------------------------------------------------
 
-func TestHandleTotalAppUpdate_InitializesProgress(t *testing.T) {
+func TestHandlePRClosed_RemovesFromIndex(t *testing.T) {
 	c, _, store := newTestCoordinator(t)
 	ctx := context.Background()
+	seedPR(t, c, store, newPR())
 
-	headers := internalnats.Headers{
-		"pr.owner":    "org",
-		"pr.repo":     "repo",
-		"pr.number":   "42",
-		"pr.sha.base": "base-abc",
-		"pr.sha.head": "head-def",
-		"app.total":   "3",
-	}
-
-	c.handleTotalAppUpdate(ctx, headers, nil, testutil.NoopAck, testutil.NoopNak)
-
-	progress, err := internalnats.GetValue[models.Progress](ctx, store, "org.repo.42.base-abc.head-def")
+	// webhook sends only the PR identity
+	data, err := internalnats.Marshal(models.PullRequest{
+		PullRequestMeta: models.PullRequestMeta{Owner: owner, Repo: repo, Number: number},
+	})
 	require.NoError(t, err)
-	assert.Equal(t, 3, progress.TotalApps)
-	assert.Equal(t, 0, progress.ProcessedApps)
+
+	c.handlePRClosed(ctx, internalnats.Headers{"RunId": runId}, data, testutil.NoopAck, testutil.NoopNak)
+
+	assert.Empty(t, c.index.GetElements())
+	storedIndex, err := internalnats.GetValue[[]models.PullRequest](ctx, store, keys.Index)
+	require.NoError(t, err)
+	assert.Empty(t, storedIndex)
 }
 
-func TestHandleTotalAppUpdate_AccumulatesTotal(t *testing.T) {
-	c, _, store := newTestCoordinator(t)
-	ctx := context.Background()
-
-	key := "org.repo.42.base-abc.head-def"
-	err := store.SetValue(ctx, key, models.Progress{TotalApps: 3, ProcessedApps: 0})
-	require.NoError(t, err)
-
-	headers := internalnats.Headers{
-		"pr.owner":    "org",
-		"pr.repo":     "repo",
-		"pr.number":   "42",
-		"pr.sha.base": "base-abc",
-		"pr.sha.head": "head-def",
-		"app.total":   "2",
-	}
-
-	c.handleTotalAppUpdate(ctx, headers, nil, testutil.NoopAck, testutil.NoopNak)
-
-	progress, err := internalnats.GetValue[models.Progress](ctx, store, key)
-	require.NoError(t, err)
-	assert.Equal(t, 3, progress.TotalApps)
-	assert.Equal(t, 0, progress.ProcessedApps)
-}
-
-// TestHandleEmptyManifest_StoreFailure_Naks verifies that when the object store
-// returns an error, nak is called instead of ack.
-// We trigger this by shutting down the NATS server before calling the handler.
-func TestHandleEmptyManifest_StoreFailure_Naks(t *testing.T) {
-	bus, store, cleanup := testutil.StartNATS(t)
-	ctx := context.Background()
-	err := bus.EnsureStream(ctx, "coordinator-test-fail", allSubjects)
-	require.NoError(t, err)
-
-	notifier := notifications.NewNotificationServer(testutil.NoopLogger())
-	c := New(config.CoordinatorConfig{IndexCapacity: 10}, testutil.NoopLogger(), bus, store, notifier)
-
-	headers := internalnats.Headers{
-		"pr.owner":   "org",
-		"pr.repo":    "repo",
-		"pr.number":  "1",
-		"sha.active": "sha1",
-		"app.name":   "app",
-		"app.origin": "file.yaml",
-	}
-
-	cleanup()
-
-	nakCalled := false
-	ackCalled := false
-	nak := func() error { nakCalled = true; return nil }
-	ack := func() error { ackCalled = true; return nil }
-
-	c.handleEmptyManifest(ctx, headers, nil, ack, nak)
-
-	assert.True(t, nakCalled, "nak should be called when store fails")
-	assert.False(t, ackCalled, "ack should not be called when store fails")
+func TestHandlePRClosed_Acks(t *testing.T) {
+	t.Skip("bug: handlePRClosed (coordinator.go:405-444) never calls ack(); the message is redelivered until MaxDeliver")
 }

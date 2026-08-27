@@ -5,18 +5,20 @@ package gitworker
 // Part 1: Pure function tests (no NATS, no git I/O).
 //   - TestGlobMatches
 //   - TestFilterAndSplitChanges
-//   - TestFilterChanges
 //
 // Part 2: Handler integration tests.
 //   Because getOrCreateRepo requires a live *githubauth.GithubCredManager, the
 //   handler tests bypass it entirely by pre-populating w.repos with an
-//   in-memory repository built via repository.NewTestRepository. This avoids
-//   any network calls and keeps the tests fast and hermetic.
+//   in-memory repository built via repository.NewTestRepository (or a stub
+//   RepositoryProvider). This avoids any network calls and keeps the tests
+//   fast and hermetic.
 //
 //   Tests in this section:
-//   - TestHandlePRChanged_PublishesFilesResolved
+//   - TestHandlePRChanged_PublishesMatchedAndResolved
 //   - TestHandleFilesResolved_PublishesFilesSnapshotted
-//   - TestHandleChartFetch_PublishesChartFetched (via snapshotFetchHandler)
+//   - TestHandleHelmGitParsed_PublishesChartFetched (via fetchSource)
+//   - TestHandleDirectoryGitParsed_PublishesDirectoryFetched (via fetchSource)
+//   - TestFetchSource_SnapshotError_PublishesRenderFinished
 
 import (
 	"context"
@@ -31,6 +33,7 @@ import (
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
+	"github.com/trolleksii/argocd-diff-reporter/internal/keys"
 	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 	internalnats "github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/repository"
@@ -48,16 +51,14 @@ const testStreamName = "gitworker-test"
 // so a single stream backs all handler integration tests.
 var allTestSubjects = []string{
 	subjects.WebhookPRChanged,
+	subjects.GitFilesMatched,
 	subjects.GitFilesResolved,
 	subjects.GitFilesSnapshotted,
 	subjects.GitChartFetched,
-	subjects.GitChartFetchFailed,
-	subjects.ArgoHelmGitParsed,
-	subjects.ArgoHelmHTTPParsed,
-	subjects.ArgoHelmOCIParsed,
-	subjects.ArgoDirectoryGitParsed,
 	subjects.GitDirectoryFetched,
-	subjects.GitDirectoryFetchFailed,
+	subjects.ArgoHelmGitParsed,
+	subjects.ArgoDirectoryGitParsed,
+	subjects.ManifestRenderFinished,
 }
 
 // newTestWorker creates a GitWorker wired to an in-process NATS bus. The
@@ -188,201 +189,102 @@ func TestGlobMatches(t *testing.T) {
 	}
 }
 
-// TestFilterChanges verifies that filterChanges keeps only changes where at
-// least one side matches a glob, and blanks out sides that do not match.
-func TestFilterChanges(t *testing.T) {
-	globs := []string{"*.yaml"}
-
-	t.Run("both sides match — both retained", func(t *testing.T) {
-		changes := []repository.Change{
-			{From: "base.yaml", To: "head.yaml"},
-		}
-		result := filterChanges(changes, globs)
-		require.Len(t, result, 1)
-		assert.Equal(t, "base.yaml", result[0].From)
-		assert.Equal(t, "head.yaml", result[0].To)
-	})
-
-	t.Run("only from matches — to is blanked", func(t *testing.T) {
-		changes := []repository.Change{
-			{From: "base.yaml", To: "head.json"},
-		}
-		result := filterChanges(changes, globs)
-		require.Len(t, result, 1)
-		assert.Equal(t, "base.yaml", result[0].From)
-		assert.Equal(t, "", result[0].To, "non-matching To should be blanked")
-	})
-
-	t.Run("only to matches — from is blanked", func(t *testing.T) {
-		changes := []repository.Change{
-			{From: "base.json", To: "head.yaml"},
-		}
-		result := filterChanges(changes, globs)
-		require.Len(t, result, 1)
-		assert.Equal(t, "", result[0].From, "non-matching From should be blanked")
-		assert.Equal(t, "head.yaml", result[0].To)
-	})
-
-	t.Run("neither side matches — change excluded", func(t *testing.T) {
-		changes := []repository.Change{
-			{From: "base.json", To: "head.json"},
-		}
-		result := filterChanges(changes, globs)
-		assert.Empty(t, result)
-	})
-
-	t.Run("mixed changes — only matching ones retained", func(t *testing.T) {
-		changes := []repository.Change{
-			{From: "app.yaml", To: "app.yaml"},
-			{From: "script.sh", To: "script.sh"},
-			{From: "config.yaml", To: ""},
-		}
-		result := filterChanges(changes, globs)
-		require.Len(t, result, 2)
-	})
-
-	t.Run("empty input returns empty slice", func(t *testing.T) {
-		result := filterChanges(nil, globs)
-		assert.Nil(t, result)
-	})
-
-	t.Run("empty globs excludes all changes", func(t *testing.T) {
-		changes := []repository.Change{
-			{From: "app.yaml", To: "app.yaml"},
-		}
-		result := filterChanges(changes, []string{})
-		assert.Empty(t, result)
-	})
-}
-
-// TestFilterAndSplitChanges verifies that filterAndSplitChanges correctly
-// populates from and to slices and sets HasNoCounterpart where appropriate.
+// TestFilterAndSplitChanges verifies that filterAndSplitChanges populates the
+// from (base) and to (head) slices independently: a change contributes its
+// From name only to from, and its To name only to to. A base-only change must
+// never leak into to, a head-only change must never leak into from, and a
+// rename must keep the old name on the base side and the new name on the head
+// side.
 func TestFilterAndSplitChanges(t *testing.T) {
 	globs := []string{"*.yaml"}
 
-	t.Run("modified file — both sides match same name", func(t *testing.T) {
-		changes := []repository.Change{
-			{From: "app.yaml", To: "app.yaml"},
-		}
-		from, to := filterAndSplitChanges(changes, globs)
+	tests := []struct {
+		name     string
+		changes  []repository.Change
+		globs    []string
+		wantFrom []string
+		wantTo   []string
+	}{
+		{
+			name:     "modified file — same name on both sides",
+			changes:  []repository.Change{{From: "app.yaml", To: "app.yaml"}},
+			wantFrom: []string{"app.yaml"},
+			wantTo:   []string{"app.yaml"},
+		},
+		{
+			name:     "deleted file — base side only",
+			changes:  []repository.Change{{From: "deleted.yaml", To: ""}},
+			wantFrom: []string{"deleted.yaml"},
+			wantTo:   nil,
+		},
+		{
+			name:     "added file — head side only",
+			changes:  []repository.Change{{From: "", To: "added.yaml"}},
+			wantFrom: nil,
+			wantTo:   []string{"added.yaml"},
+		},
+		{
+			name:     "renamed file — old name on base, new name on head",
+			changes:  []repository.Change{{From: "old.yaml", To: "new.yaml"}},
+			wantFrom: []string{"old.yaml"},
+			wantTo:   []string{"new.yaml"},
+		},
+		{
+			name:     "only from matches glob — to dropped",
+			changes:  []repository.Change{{From: "app.yaml", To: "app.json"}},
+			wantFrom: []string{"app.yaml"},
+			wantTo:   nil,
+		},
+		{
+			name:     "only to matches glob — from dropped",
+			changes:  []repository.Change{{From: "app.json", To: "app.yaml"}},
+			wantFrom: nil,
+			wantTo:   []string{"app.yaml"},
+		},
+		{
+			name:     "non-matching file excluded from both sides",
+			changes:  []repository.Change{{From: "script.sh", To: "script.sh"}},
+			wantFrom: nil,
+			wantTo:   nil,
+		},
+		{
+			name: "mixed changes — each side built independently",
+			changes: []repository.Change{
+				{From: "app.yaml", To: "app.yaml"},      // both
+				{From: "script.sh", To: "script.sh"},    // neither
+				{From: "", To: "new.yaml"},              // head only
+				{From: "gone.yaml", To: ""},             // base only
+				{From: "before.yaml", To: "after.yaml"}, // rename
+			},
+			wantFrom: []string{"app.yaml", "gone.yaml", "before.yaml"},
+			wantTo:   []string{"app.yaml", "new.yaml", "after.yaml"},
+		},
+		{
+			name:     "empty input returns nil slices",
+			changes:  nil,
+			wantFrom: nil,
+			wantTo:   nil,
+		},
+		{
+			name:     "empty globs excludes everything",
+			changes:  []repository.Change{{From: "app.yaml", To: "app.yaml"}},
+			globs:    []string{},
+			wantFrom: nil,
+			wantTo:   nil,
+		},
+	}
 
-		require.Len(t, from, 1)
-		assert.Equal(t, "app.yaml", from[0].FileName)
-		assert.Equal(t, "app.yaml", from[0].ArtifactName)
-		assert.False(t, from[0].HasNoCounterpart)
-
-		require.Len(t, to, 1)
-		assert.Equal(t, "app.yaml", to[0].FileName)
-		assert.False(t, to[0].HasNoCounterpart)
-	})
-
-	t.Run("renamed file — ArtifactName uses To name on from side", func(t *testing.T) {
-		changes := []repository.Change{
-			{From: "old.yaml", To: "new.yaml"},
-		}
-		from, to := filterAndSplitChanges(changes, globs)
-
-		require.Len(t, from, 1)
-		assert.Equal(t, "old.yaml", from[0].FileName)
-		assert.Equal(t, "new.yaml", from[0].ArtifactName, "ArtifactName should use the To name when different from From")
-		assert.False(t, from[0].HasNoCounterpart)
-
-		require.Len(t, to, 1)
-		assert.Equal(t, "new.yaml", to[0].FileName)
-		assert.False(t, to[0].HasNoCounterpart)
-	})
-
-	t.Run("deleted file — from has no counterpart", func(t *testing.T) {
-		changes := []repository.Change{
-			{From: "deleted.yaml", To: ""},
-		}
-		from, to := filterAndSplitChanges(changes, globs)
-
-		require.Len(t, from, 1)
-		assert.Equal(t, "deleted.yaml", from[0].FileName)
-		assert.True(t, from[0].HasNoCounterpart, "HasNoCounterpart should be true when To is empty")
-
-		assert.Empty(t, to)
-	})
-
-	t.Run("added file — to has no counterpart", func(t *testing.T) {
-		changes := []repository.Change{
-			{From: "", To: "added.yaml"},
-		}
-		from, to := filterAndSplitChanges(changes, globs)
-
-		assert.Empty(t, from)
-
-		require.Len(t, to, 1)
-		assert.Equal(t, "added.yaml", to[0].FileName)
-		assert.True(t, to[0].HasNoCounterpart, "HasNoCounterpart should be true when From is empty")
-	})
-
-	t.Run("non-matching file excluded from both slices", func(t *testing.T) {
-		changes := []repository.Change{
-			{From: "script.sh", To: "script.sh"},
-		}
-		from, to := filterAndSplitChanges(changes, globs)
-
-		assert.Empty(t, from)
-		assert.Empty(t, to)
-	})
-
-	t.Run("mixed changes — only matching ones appear", func(t *testing.T) {
-		changes := []repository.Change{
-			{From: "app.yaml", To: "app.yaml"},   // both match
-			{From: "script.sh", To: "script.sh"}, // neither matches
-			{From: "", To: "new.yaml"},           // only to matches
-		}
-		from, to := filterAndSplitChanges(changes, globs)
-
-		// from: only "app.yaml" (script.sh excluded, new.yaml has no from)
-		require.Len(t, from, 1)
-		assert.Equal(t, "app.yaml", from[0].FileName)
-
-		// to: "app.yaml" + "new.yaml" (script.sh excluded)
-		require.Len(t, to, 2)
-		var toNames []string
-		for _, f := range to {
-			toNames = append(toNames, f.FileName)
-		}
-		assert.Contains(t, toNames, "app.yaml")
-		assert.Contains(t, toNames, "new.yaml")
-	})
-
-	t.Run("only from side matches — to blanked, from has no counterpart", func(t *testing.T) {
-		changes := []repository.Change{
-			{From: "app.yaml", To: "app.json"},
-		}
-		from, to := filterAndSplitChanges(changes, globs)
-
-		require.Len(t, from, 1)
-		assert.Equal(t, "app.yaml", from[0].FileName)
-		// ArtifactName stays as FileName when To was blanked.
-		assert.Equal(t, "app.yaml", from[0].ArtifactName)
-		assert.True(t, from[0].HasNoCounterpart, "To side was blanked so HasNoCounterpart should be true")
-
-		assert.Empty(t, to)
-	})
-
-	t.Run("only to side matches — from blanked, to has no counterpart", func(t *testing.T) {
-		changes := []repository.Change{
-			{From: "app.json", To: "app.yaml"},
-		}
-		from, to := filterAndSplitChanges(changes, globs)
-
-		assert.Empty(t, from)
-
-		require.Len(t, to, 1)
-		assert.Equal(t, "app.yaml", to[0].FileName)
-		assert.True(t, to[0].HasNoCounterpart, "From side was blanked so HasNoCounterpart should be true")
-	})
-
-	t.Run("empty input returns nil slices", func(t *testing.T) {
-		from, to := filterAndSplitChanges(nil, globs)
-		assert.Nil(t, from)
-		assert.Nil(t, to)
-	})
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			g := tc.globs
+			if g == nil {
+				g = globs
+			}
+			from, to := filterAndSplitChanges(tc.changes, g)
+			assert.Equal(t, tc.wantFrom, from, "from (base side)")
+			assert.Equal(t, tc.wantTo, to, "to (head side)")
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -392,114 +294,6 @@ func TestFilterAndSplitChanges(t *testing.T) {
 // repoKey returns the canonical map key used by the git worker for a GitHub repo.
 func repoKey(owner, repo string) string {
 	return fmt.Sprintf("https://github.com/%s/%s", owner, repo)
-}
-
-// NOTE: A full happy-path test for handlePRChanged (publishing GitFilesResolved)
-// is not feasible without a production code change. The reason is:
-//
-//   r.ListChangedFiles() always goes through fetchAndListChangedFiles(), which
-//   first performs a git fetch using fetchRefSpecs(sha:sha, sha:sha). The local
-//   file:// transport does not support raw-SHA refspecs ("server does not support
-//   exact SHA1 refspec"), so the call always fails even when both commits are
-//   present in the local object store.
-//
-//   Fixing this would require either:
-//     a) Introducing an interface around Repository so tests can inject a stub, or
-//     b) Adding a "try local first" fast-path to fetchAndListChangedFiles.
-//
-//   NOTE: The missing-repo nak path is also untestable without a refactor. When
-//   w.repos does not contain the requested URL, getOrCreateRepo falls through to
-//   repository.NewRepository, which calls w.auth.GetBasicHTTPAuth(). Because
-//   w.auth is the concrete type *githubauth.GithubCredManager (not an interface),
-//   there is no way to supply a non-nil fake implementation from outside the
-//   githubauth package. Calling the method on a nil pointer panics.
-
-// TestHandleFilesResolved_PublishesFilesSnapshotted verifies that
-// handleFilesResolved, given a valid FileProcessingSpec list and a
-// pre-populated repository, publishes subjects.GitFilesSnapshotted.
-func TestHandleFilesResolved_PublishesFilesSnapshotted(t *testing.T) {
-	w, bus := newTestWorker(t)
-
-	snapshotsDir := t.TempDir()
-	tr := repository.NewTestRepository(t, snapshotsDir)
-
-	const (
-		owner = "test"
-		repo  = "repo"
-	)
-	w.repos[repoKey(owner, repo)] = tr.Repo
-
-	snapshottedCh := testutil.SubscribeOnce(t, bus, subjects.GitFilesSnapshotted)
-
-	specs := []models.FileProcessingSpec{
-		{FileName: "new.yaml", ArtifactName: "new.yaml"},
-	}
-	data, err := internalnats.Marshal(specs)
-	require.NoError(t, err)
-
-	headers := internalnats.Headers{
-		"pr.number":  "1",
-		"pr.owner":   owner,
-		"pr.repo":    repo,
-		"sha.active": tr.HeadSHA,
-	}
-
-	ctx := context.Background()
-	w.handleFilesResolved(ctx, headers, data, testutil.NoopAck, testutil.NoopNak)
-
-	select {
-	case hdrs := <-snapshottedCh:
-		assert.Equal(t, owner, hdrs["pr.owner"])
-		assert.Equal(t, repo, hdrs["pr.repo"])
-		assert.NotEmpty(t, hdrs["pr.files.snapshot"], "snapshot path should be set in headers")
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for git.files.snapshotted message")
-	}
-}
-
-// TestHandleChartFetch_PublishesChartFetched verifies that snapshotFetchHandler,
-// when parameterized for Helm chart subjects and given a valid AppSpec
-// referencing a pre-populated repository, publishes subjects.GitChartFetched
-// with the chart.location header set.
-func TestHandleChartFetch_PublishesChartFetched(t *testing.T) {
-	w, bus := newTestWorker(t)
-
-	snapshotsDir := t.TempDir()
-	tr := repository.NewTestRepository(t, snapshotsDir)
-
-	const repoURL = "https://github.com/test/charts"
-	w.repos[repoURL] = tr.Repo
-
-	chartFetchedCh := testutil.SubscribeOnce(t, bus, subjects.GitChartFetched)
-
-	spec := models.AppSpec{
-		AppName:   "my-app",
-		Namespace: "default",
-		Source: models.AppSource{
-			RepoURL:  repoURL,
-			Revision: tr.HeadSHA,
-			Path:     ".",
-		},
-	}
-	data, err := internalnats.Marshal(spec)
-	require.NoError(t, err)
-
-	headers := internalnats.Headers{
-		"pr.owner":   "test",
-		"pr.repo":    "charts",
-		"pr.number":  "5",
-		"app.origin": "apps/my-app.yaml",
-	}
-
-	ctx := context.Background()
-	w.handleHelmGitParsed(ctx, headers, data, testutil.NoopAck, testutil.NoopNak)
-
-	select {
-	case hdrs := <-chartFetchedCh:
-		assert.NotEmpty(t, hdrs["chart.location"], "chart.location header must be set on success")
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for git.chart.fetched message")
-	}
 }
 
 // stubRepo is an in-memory RepositoryProvider for handler integration tests.
@@ -535,11 +329,12 @@ func (s *stubAuth) GetBasicHTTPAuth() (*githttp.BasicAuth, error) {
 	return nil, s.err
 }
 
-// TestHandlePRChanged_PublishesFilesResolved verifies that handlePRChanged,
-// given a stubbed repository returning one changed file, publishes two
-// subjects.GitFilesResolved messages — one for the base SHA and one for the
-// head SHA — with the correct pr.owner, pr.repo, and sha.active headers.
-func TestHandlePRChanged_PublishesFilesResolved(t *testing.T) {
+// TestHandlePRChanged_PublishesMatchedAndResolved verifies that handlePRChanged,
+// given a stubbed repository returning one changed file present on both sides,
+// publishes subjects.GitFilesMatched (Msg-Id keys.MsgIDSides) followed by two
+// subjects.GitFilesResolved messages — one per side — carrying the pr.* headers,
+// file.withBase/file.withHead, and sha.active set to that side's SHA.
+func TestHandlePRChanged_PublishesMatchedAndResolved(t *testing.T) {
 	w, bus := newTestWorker(t)
 
 	stub := &stubRepo{
@@ -549,20 +344,38 @@ func TestHandlePRChanged_PublishesFilesResolved(t *testing.T) {
 	}
 	w.repos[repoKey("myorg", "myrepo")] = stub
 
+	matchedCh := testutil.SubscribeOnce(t, bus, subjects.GitFilesMatched)
 	resolvedCh := testutil.SubscribeN(t, bus, subjects.GitFilesResolved, 2)
 
-	pr := models.PullRequest{
+	pr := models.PullRequest{PullRequestMeta: models.PullRequestMeta{
 		Owner:   "myorg",
 		Repo:    "myrepo",
 		Number:  "1",
 		BaseSHA: "base-sha",
 		HeadSHA: "head-sha",
-	}
+	}}
 	data, err := internalnats.Marshal(pr)
 	require.NoError(t, err)
 
+	const runId = "run-pr-changed"
+	var ackCalled bool
+	ack := func() error { ackCalled = true; return nil }
+
 	ctx := context.Background()
-	w.handlePRChanged(ctx, internalnats.Headers{}, data, testutil.NoopAck, testutil.NoopNak)
+	w.handlePRChanged(ctx, internalnats.Headers{"RunId": runId}, data, ack, testutil.NoopNak)
+	assert.True(t, ackCalled, "ack should be called after publishing")
+
+	select {
+	case hdrs := <-matchedCh:
+		assert.Equal(t, "myorg", hdrs["pr.owner"])
+		assert.Equal(t, "myrepo", hdrs["pr.repo"])
+		assert.Equal(t, "1", hdrs["pr.number"])
+		assert.Equal(t, "base-sha", hdrs["pr.sha.base"])
+		assert.Equal(t, "head-sha", hdrs["pr.sha.head"])
+		assert.Equal(t, keys.MsgIDSides(runId), hdrs[keys.MsgIDHeader])
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for git.files.matched message")
+	}
 
 	var received []internalnats.Headers
 	deadline := time.After(3 * time.Second)
@@ -575,16 +388,16 @@ func TestHandlePRChanged_PublishesFilesResolved(t *testing.T) {
 		}
 	}
 
-	require.Len(t, received, 2)
-
 	var shaActiveValues []string
 	for _, hdrs := range received {
 		assert.Equal(t, "myorg", hdrs["pr.owner"])
 		assert.Equal(t, "myrepo", hdrs["pr.repo"])
+		assert.Equal(t, "true", hdrs["file.withBase"])
+		assert.Equal(t, "true", hdrs["file.withHead"])
+		assert.Equal(t, keys.MsgIDFiles("myorg", "myrepo", "1", runId, hdrs["sha.active"]), hdrs[keys.MsgIDHeader])
 		shaActiveValues = append(shaActiveValues, hdrs["sha.active"])
 	}
-	assert.Contains(t, shaActiveValues, "base-sha")
-	assert.Contains(t, shaActiveValues, "head-sha")
+	assert.ElementsMatch(t, []string{"base-sha", "head-sha"}, shaActiveValues)
 }
 
 // TestHandlePRChanged_RepositoryError_Naks verifies that when the repository's
@@ -598,13 +411,13 @@ func TestHandlePRChanged_RepositoryError_Naks(t *testing.T) {
 	// Register a consumer so any accidental publish would be captured.
 	resolvedCh := testutil.SubscribeN(t, bus, subjects.GitFilesResolved, 1)
 
-	pr := models.PullRequest{
+	pr := models.PullRequest{PullRequestMeta: models.PullRequestMeta{
 		Owner:   "org",
 		Repo:    "repo",
 		Number:  "1",
 		BaseSHA: "b",
 		HeadSHA: "h",
-	}
+	}}
 	data, err := internalnats.Marshal(pr)
 	require.NoError(t, err)
 
@@ -613,7 +426,7 @@ func TestHandlePRChanged_RepositoryError_Naks(t *testing.T) {
 	ack := func() error { ackCalled = true; return nil }
 
 	ctx := context.Background()
-	w.handlePRChanged(ctx, internalnats.Headers{}, data, ack, nak)
+	w.handlePRChanged(ctx, internalnats.Headers{"RunId": "run-repo-error"}, data, ack, nak)
 
 	assert.True(t, nakCalled, "nak should be called on repository error")
 	assert.False(t, ackCalled, "ack should not be called on repository error")
@@ -623,49 +436,6 @@ func TestHandlePRChanged_RepositoryError_Naks(t *testing.T) {
 		t.Fatal("unexpected message published to git.files.resolved")
 	case <-time.After(200 * time.Millisecond):
 		// silence confirmed
-	}
-}
-
-// TestHandleDirectoryFetch_PublishesDirectoryFetched verifies that snapshotFetchHandler,
-// when parameterized for Directory subjects and given a valid AppSpec
-// referencing a pre-populated repository, publishes subjects.GitDirectoryFetched
-// with the chart.location header set.
-func TestHandleDirectoryFetch_PublishesDirectoryFetched(t *testing.T) {
-	w, bus := newTestWorker(t)
-
-	stub := &stubRepo{}
-	const repoURL = "https://github.com/test/directory-repo"
-	w.repos[repoURL] = stub
-
-	directoryFetchedCh := testutil.SubscribeOnce(t, bus, subjects.GitDirectoryFetched)
-
-	spec := models.AppSpec{
-		AppName:   "my-directory-app",
-		Namespace: "default",
-		Source: models.AppSource{
-			RepoURL:  repoURL,
-			Revision: "abc123",
-			Path:     ".",
-		},
-	}
-	data, err := internalnats.Marshal(spec)
-	require.NoError(t, err)
-
-	headers := internalnats.Headers{
-		"pr.owner":   "test",
-		"pr.repo":    "directory-repo",
-		"pr.number":  "9",
-		"app.origin": "apps/my-directory-app.yaml",
-	}
-
-	ctx := context.Background()
-	w.handleDirectoryGitParsed(ctx, headers, data, testutil.NoopAck, testutil.NoopNak)
-
-	select {
-	case hdrs := <-directoryFetchedCh:
-		assert.NotEmpty(t, hdrs["chart.location"], "chart.location header must be set on success")
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for git.directory.fetched message")
 	}
 }
 
@@ -681,13 +451,13 @@ func TestHandlePRChanged_MissingRepo_Naks(t *testing.T) {
 
 	resolvedCh := testutil.SubscribeN(t, bus, subjects.GitFilesResolved, 1)
 
-	pr := models.PullRequest{
+	pr := models.PullRequest{PullRequestMeta: models.PullRequestMeta{
 		Owner:   "org2",
 		Repo:    "repo2",
 		Number:  "2",
 		BaseSHA: "b2",
 		HeadSHA: "h2",
-	}
+	}}
 	data, err := internalnats.Marshal(pr)
 	require.NoError(t, err)
 
@@ -696,7 +466,7 @@ func TestHandlePRChanged_MissingRepo_Naks(t *testing.T) {
 	ack := func() error { ackCalled = true; return nil }
 
 	ctx := context.Background()
-	w.handlePRChanged(ctx, internalnats.Headers{}, data, ack, nak)
+	w.handlePRChanged(ctx, internalnats.Headers{"RunId": "run-missing-repo"}, data, ack, nak)
 
 	assert.True(t, nakCalled, "nak should be called when auth fails during repo creation")
 	assert.False(t, ackCalled, "ack should not be called when auth fails during repo creation")
@@ -704,6 +474,205 @@ func TestHandlePRChanged_MissingRepo_Naks(t *testing.T) {
 	select {
 	case <-resolvedCh:
 		t.Fatal("unexpected message published to git.files.resolved")
+	case <-time.After(200 * time.Millisecond):
+		// silence confirmed
+	}
+}
+
+// TestHandleFilesResolved_PublishesFilesSnapshotted verifies that
+// handleFilesResolved, given a valid file list and a pre-populated repository,
+// publishes subjects.GitFilesSnapshotted with pr.files.snapshot set.
+func TestHandleFilesResolved_PublishesFilesSnapshotted(t *testing.T) {
+	w, bus := newTestWorker(t)
+
+	snapshotsDir := t.TempDir()
+	tr := repository.NewTestRepository(t, snapshotsDir)
+
+	const (
+		owner = "test"
+		repo  = "repo"
+		runId = "run-files-resolved"
+	)
+	w.repos[repoKey(owner, repo)] = tr.Repo
+
+	snapshottedCh := testutil.SubscribeOnce(t, bus, subjects.GitFilesSnapshotted)
+
+	data, err := internalnats.Marshal([]string{"new.yaml"})
+	require.NoError(t, err)
+
+	headers := internalnats.Headers{
+		"RunId":      runId,
+		"pr.number":  "1",
+		"pr.owner":   owner,
+		"pr.repo":    repo,
+		"sha.active": tr.HeadSHA,
+	}
+
+	ctx := context.Background()
+	w.handleFilesResolved(ctx, headers, data, testutil.NoopAck, testutil.NoopNak)
+
+	select {
+	case hdrs := <-snapshottedCh:
+		assert.Equal(t, owner, hdrs["pr.owner"])
+		assert.Equal(t, repo, hdrs["pr.repo"])
+		assert.Equal(t, tr.HeadSHA, hdrs["sha.active"])
+		assert.NotEmpty(t, hdrs["pr.files.snapshot"], "snapshot path should be set in headers")
+		assert.Equal(t, keys.MsgIDSnapshot(owner, repo, "1", runId, tr.HeadSHA), hdrs[keys.MsgIDHeader])
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for git.files.snapshotted message")
+	}
+}
+
+// TestHandleHelmGitParsed_PublishesChartFetched verifies that fetchSource, when
+// invoked via handleHelmGitParsed with a valid ArgoAppSpec referencing a
+// pre-populated repository, publishes subjects.GitChartFetched with the
+// chart.location header set.
+func TestHandleHelmGitParsed_PublishesChartFetched(t *testing.T) {
+	w, bus := newTestWorker(t)
+
+	snapshotsDir := t.TempDir()
+	tr := repository.NewTestRepository(t, snapshotsDir)
+
+	const repoURL = "https://github.com/test/charts"
+	w.repos[repoURL] = tr.Repo
+
+	chartFetchedCh := testutil.SubscribeOnce(t, bus, subjects.GitChartFetched)
+
+	spec := models.ArgoAppSpec{
+		AppName:   "my-app",
+		Namespace: "default",
+		Source: models.ArgoAppSource{
+			RepoURL:  repoURL,
+			Revision: tr.HeadSHA,
+			Path:     ".",
+		},
+	}
+	data, err := internalnats.Marshal(spec)
+	require.NoError(t, err)
+
+	headers := internalnats.Headers{
+		"RunId":      "run-helm-git",
+		"pr.owner":   "test",
+		"pr.repo":    "charts",
+		"pr.number":  "5",
+		"sha.active": tr.HeadSHA,
+		"app.origin": "apps/my-app.yaml",
+	}
+
+	ctx := context.Background()
+	w.handleHelmGitParsed(ctx, headers, data, testutil.NoopAck, testutil.NoopNak)
+
+	select {
+	case hdrs := <-chartFetchedCh:
+		assert.NotEmpty(t, hdrs["chart.location"], "chart.location header must be set on success")
+		assert.Empty(t, hdrs["error.msg"])
+		assert.Equal(t, keys.MsgIDFetched("test", "charts", "5", "run-helm-git", tr.HeadSHA, "apps/my-app.yaml", "my-app"), hdrs[keys.MsgIDHeader])
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for git.chart.fetched message")
+	}
+}
+
+// TestHandleDirectoryGitParsed_PublishesDirectoryFetched verifies that
+// fetchSource, when invoked via handleDirectoryGitParsed with a valid
+// ArgoAppSpec referencing a pre-populated repository, publishes
+// subjects.GitDirectoryFetched with the chart.location header set.
+func TestHandleDirectoryGitParsed_PublishesDirectoryFetched(t *testing.T) {
+	w, bus := newTestWorker(t)
+
+	stub := &stubRepo{}
+	const repoURL = "https://github.com/test/directory-repo"
+	w.repos[repoURL] = stub
+
+	directoryFetchedCh := testutil.SubscribeOnce(t, bus, subjects.GitDirectoryFetched)
+
+	spec := models.ArgoAppSpec{
+		AppName:   "my-directory-app",
+		Namespace: "default",
+		Source: models.ArgoAppSource{
+			RepoURL:  repoURL,
+			Revision: "abc123",
+			Path:     ".",
+		},
+	}
+	data, err := internalnats.Marshal(spec)
+	require.NoError(t, err)
+
+	headers := internalnats.Headers{
+		"RunId":      "run-dir-git",
+		"pr.owner":   "test",
+		"pr.repo":    "directory-repo",
+		"pr.number":  "9",
+		"sha.active": "abc123",
+		"app.origin": "apps/my-directory-app.yaml",
+	}
+
+	ctx := context.Background()
+	w.handleDirectoryGitParsed(ctx, headers, data, testutil.NoopAck, testutil.NoopNak)
+
+	select {
+	case hdrs := <-directoryFetchedCh:
+		assert.NotEmpty(t, hdrs["chart.location"], "chart.location header must be set on success")
+		assert.Empty(t, hdrs["error.msg"])
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for git.directory.fetched message")
+	}
+}
+
+// TestFetchSource_SnapshotError_PublishesRenderFinished verifies that when the
+// repository's GetOrCreateSnapshot fails, fetchSource publishes
+// subjects.ManifestRenderFinished with error.msg set (no chart.location) and
+// acks the message.
+func TestFetchSource_SnapshotError_PublishesRenderFinished(t *testing.T) {
+	w, bus := newTestWorker(t)
+
+	const repoURL = "https://github.com/test/broken"
+	w.repos[repoURL] = &stubRepoError{err: errors.New("snapshot failed")}
+
+	finishedCh := testutil.SubscribeOnce(t, bus, subjects.ManifestRenderFinished)
+	chartFetchedCh := testutil.SubscribeOnce(t, bus, subjects.GitChartFetched)
+
+	spec := models.ArgoAppSpec{
+		AppName: "broken-app",
+		Source: models.ArgoAppSource{
+			RepoURL:  repoURL,
+			Revision: "abc123",
+			Path:     "chart",
+		},
+	}
+	data, err := internalnats.Marshal(spec)
+	require.NoError(t, err)
+
+	headers := internalnats.Headers{
+		"RunId":      "run-snapshot-error",
+		"pr.owner":   "test",
+		"pr.repo":    "broken",
+		"pr.number":  "7",
+		"sha.active": "abc123",
+		"app.origin": "apps/broken-app.yaml",
+	}
+
+	var ackCalled, nakCalled bool
+	ack := func() error { ackCalled = true; return nil }
+	nak := func() error { nakCalled = true; return nil }
+
+	ctx := context.Background()
+	w.handleHelmGitParsed(ctx, headers, data, ack, nak)
+
+	assert.True(t, ackCalled, "ack should be called on fetch failure")
+	assert.False(t, nakCalled, "nak should not be called on fetch failure")
+
+	select {
+	case hdrs := <-finishedCh:
+		assert.Equal(t, "snapshot failed", hdrs["error.msg"])
+		assert.Empty(t, hdrs["chart.location"])
+		assert.Equal(t, keys.MsgIDRender("test", "broken", "7", "run-snapshot-error", "abc123", "apps/broken-app.yaml", "broken-app"), hdrs[keys.MsgIDHeader])
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for coordinator.manifest.render.complete message")
+	}
+
+	select {
+	case <-chartFetchedCh:
+		t.Fatal("unexpected message published to git.chart.fetched")
 	case <-time.After(200 * time.Millisecond):
 		// silence confirmed
 	}
@@ -725,7 +694,7 @@ func TestHandlePRChanged_UnmarshalError_Naks(t *testing.T) {
 	nak := func() error { nakCalled = true; return nil }
 
 	ctx := context.Background()
-	w.handlePRChanged(ctx, internalnats.Headers{}, []byte("invalid"), ack, nak)
+	w.handlePRChanged(ctx, internalnats.Headers{"RunId": "run-pr-unmarshal"}, []byte("invalid"), ack, nak)
 
 	assert.True(t, nakCalled, "nak should be called on unmarshal error")
 	assert.False(t, ackCalled, "ack should not be called on unmarshal error")
@@ -750,6 +719,7 @@ func TestHandleFilesResolved_UnmarshalError_Naks(t *testing.T) {
 	nak := func() error { nakCalled = true; return nil }
 
 	headers := internalnats.Headers{
+		"RunId":      "run-files-unmarshal",
 		"pr.number":  "1",
 		"pr.owner":   "org",
 		"pr.repo":    "repo",
@@ -782,6 +752,7 @@ func TestHandleHelmGitParsed_UnmarshalError_Naks(t *testing.T) {
 	nak := func() error { nakCalled = true; return nil }
 
 	headers := internalnats.Headers{
+		"RunId":      "run-helm-unmarshal",
 		"pr.owner":   "org",
 		"pr.repo":    "repo",
 		"pr.number":  "1",
@@ -815,6 +786,7 @@ func TestHandleDirectoryGitParsed_UnmarshalError_Naks(t *testing.T) {
 	nak := func() error { nakCalled = true; return nil }
 
 	headers := internalnats.Headers{
+		"RunId":      "run-dir-unmarshal",
 		"pr.owner":   "org",
 		"pr.repo":    "repo",
 		"pr.number":  "1",

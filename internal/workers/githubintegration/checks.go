@@ -13,6 +13,7 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
+	"github.com/trolleksii/argocd-diff-reporter/internal/keys"
 	"github.com/trolleksii/argocd-diff-reporter/internal/models"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/subjects"
@@ -90,7 +91,7 @@ func (w *GithubChecks) CreatePendingCheck(ctx context.Context, headers nats.Head
 		nak()
 	}
 
-	key := fmt.Sprintf("checks.%s.%s.%s.%s", pr.Owner, pr.Repo, pr.Number, pr.HeadSHA)
+	key := keys.CheckRun(pr.Owner, pr.Repo, pr.Number, pr.HeadSHA)
 	w.store.SetValue(ctx, key, cr.GetID())
 	ack()
 }
@@ -107,7 +108,7 @@ func (w *GithubChecks) UpdateCheckResult(ctx context.Context, headers nats.Heade
 		return
 	}
 	headSHA := headers["pr.sha.head"]
-	key := fmt.Sprintf("checks.%s.%s.%s.%s", owner, repo, number, headSHA)
+	key := keys.CheckRun(owner, repo, number, headSHA)
 	checkId, err := nats.GetValue[int64](ctx, w.store, key)
 	if err != nil {
 		w.log.ErrorContext(ctx, "failed to find check id", "owner", owner, "repo", repo, "number", number)
