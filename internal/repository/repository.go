@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log/slog"
@@ -99,18 +100,50 @@ func NewRepository(ctx context.Context, url, cloneRootDir, snapshotsRootDir stri
 		os.MkdirAll(cloneDir, 0755)
 	}
 
-	httpAuth, err := r.auth.GetBasicHTTPAuth()
+	env, err := r.gitEnv()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get HTTP auth: %w", err)
+		return nil, err
 	}
-
-	repo, err := git.PlainClone(cloneDir, false, &git.CloneOptions{Auth: httpAuth, URL: url})
+	if err := runGit(env, "init", "--quiet", "--bare", cloneDir); err != nil {
+		return nil, fmt.Errorf("failed to init repository: %w", err)
+	}
+	if err := runGit(env, "-C", cloneDir, "remote", "add", "origin", url); err != nil {
+		return nil, fmt.Errorf("failed to add origin remote: %w", err)
+	}
+	repo, err := git.PlainOpen(cloneDir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to clone repository: %w", err)
+		return nil, fmt.Errorf("failed to open repository: %w", err)
 	}
 	r.repo = repo
 	go r.startQueuePoller(ctx)
 	return r, nil
+}
+
+func (r *Repository) gitEnv() ([]string, error) {
+	httpAuth, err := r.auth.GetBasicHTTPAuth()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get HTTP auth: %w", err)
+	}
+	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	if httpAuth != nil && (httpAuth.Username != "" || httpAuth.Password != "") {
+		cred := base64.StdEncoding.EncodeToString([]byte(httpAuth.Username + ":" + httpAuth.Password))
+		env = append(env,
+			"GIT_CONFIG_COUNT=1",
+			"GIT_CONFIG_KEY_0=http.extraHeader",
+			"GIT_CONFIG_VALUE_0=Authorization: Basic "+cred,
+		)
+	}
+	return env, nil
+}
+
+// runGit executes a git command, folding stderr into the returned error.
+func runGit(env []string, args ...string) error {
+	cmd := exec.Command("git", args...)
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 func (r *Repository) startQueuePoller(ctx context.Context) {
@@ -206,14 +239,20 @@ func (r *Repository) snapshotExists(dir string) bool {
 
 func (r *Repository) fetchAndListChangedFiles(base, head string) ([]Change, error) {
 	var refSpecs []config.RefSpec
-	if _, err := r.repo.CommitObject(plumbing.NewHash(head)); err != nil {
-		refSpecs = append(refSpecs, config.RefSpec(fmt.Sprintf("%s:%s", head, head)))
-	}
-	if _, err := r.repo.CommitObject(plumbing.NewHash(base)); err != nil {
-		refSpecs = append(refSpecs, config.RefSpec(fmt.Sprintf("%s:%s", base, base)))
+	if r.isShallow() {
+		refSpecs = append(refSpecs,
+			config.RefSpec(fmt.Sprintf("%s:%s", head, head)),
+			config.RefSpec(fmt.Sprintf("%s:%s", base, base)))
+	} else {
+		if _, err := r.repo.CommitObject(plumbing.NewHash(head)); err != nil {
+			refSpecs = append(refSpecs, config.RefSpec(fmt.Sprintf("%s:%s", head, head)))
+		}
+		if _, err := r.repo.CommitObject(plumbing.NewHash(base)); err != nil {
+			refSpecs = append(refSpecs, config.RefSpec(fmt.Sprintf("%s:%s", base, base)))
+		}
 	}
 	if len(refSpecs) > 0 {
-		if err := r.fetchRefSpecs(refSpecs); err != nil {
+		if err := r.fetchRefSpecs(refSpecs, false); err != nil {
 			return nil, err
 		}
 	}
@@ -265,21 +304,38 @@ func (r *Repository) getOrCreateSnapshot(ref, repoDir string, files []string) (s
 	return snapshotDir, nil
 }
 
-func (r *Repository) fetchRefSpecs(refSpecs []config.RefSpec) error {
-	httpAuth, err := r.auth.GetBasicHTTPAuth()
+func (r *Repository) fetchRefSpecs(refSpecs []config.RefSpec, depth1 bool) error {
+	env, err := r.gitEnv()
 	if err != nil {
-		return fmt.Errorf("failed to get HTTP auth: %w", err)
+		return err
 	}
-	err = r.repo.Fetch(&git.FetchOptions{
-		Auth:       httpAuth,
-		RemoteName: "origin",
-		Depth:      0,
-		RefSpecs:   refSpecs,
-	})
-	if err == git.NoErrAlreadyUpToDate {
-		return nil
+	args := []string{"-C", r.cloneDir, "fetch", "--quiet"}
+	if depth1 {
+		args = append(args, "--depth=1")
+	} else if r.isShallow() {
+		args = append(args, "--unshallow")
 	}
-	return err
+	args = append(args, "origin")
+	for _, rs := range refSpecs {
+		args = append(args, string(rs))
+	}
+	if err := runGit(env, args...); err != nil {
+		return err
+	}
+	// The CLI wrote new packs and refs behind go-git's back; reopen so its
+	// object storage picks them up (the pack list is cached at first access).
+	repo, err := git.PlainOpen(r.cloneDir)
+	if err != nil {
+		return fmt.Errorf("failed to reopen repository after fetch: %w", err)
+	}
+	r.repo = repo
+	return nil
+}
+
+// isShallow reports whether the local repository has shallow history.
+func (r *Repository) isShallow() bool {
+	out, err := exec.Command("git", "-C", r.cloneDir, "rev-parse", "--is-shallow-repository").Output()
+	return err == nil && strings.TrimSpace(string(out)) == "true"
 }
 
 func (r *Repository) fetchRef(ref string) (*plumbing.Hash, error) {
@@ -288,11 +344,14 @@ func (r *Repository) fetchRef(ref string) (*plumbing.Hash, error) {
 		return hash, nil
 	}
 
-	// Try a direct fetch
+	dst := ref
+	if ref == "HEAD" {
+		dst = "refs/remotes/origin/HEAD"
+	}
 	if err := r.fetchRefSpecs([]config.RefSpec{
-		config.RefSpec(fmt.Sprintf("+%s:%s", ref, ref)),
-	}); err == nil {
-		return r.repo.ResolveRevision(plumbing.Revision(ref))
+		config.RefSpec(fmt.Sprintf("+%s:%s", ref, dst)),
+	}, true); err == nil {
+		return r.repo.ResolveRevision(plumbing.Revision(dst))
 	}
 
 	// As a last resort, list remote refs and match by suffix
@@ -330,12 +389,7 @@ func (r *Repository) fetchRef(ref string) (*plumbing.Hash, error) {
 		return nil, fmt.Errorf("ref %q not found in remote", ref)
 	}
 
-	if err := r.repo.Fetch(&git.FetchOptions{
-		Auth:       httpAuth,
-		RemoteName: "origin",
-		Depth:      0,
-		RefSpecs:   refSpecs,
-	}); err != nil {
+	if err := r.fetchRefSpecs(refSpecs, true); err != nil {
 		return nil, err
 	}
 	return r.repo.ResolveRevision(plumbing.Revision(ref))
