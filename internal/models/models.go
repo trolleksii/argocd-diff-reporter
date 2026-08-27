@@ -110,6 +110,7 @@ type FileParsingResult struct {
 }
 
 type AppOrder struct {
+	Origin  string
 	HasBase bool
 	BaseLoc string
 	HasHead bool
@@ -117,8 +118,10 @@ type AppOrder struct {
 }
 
 type WorkOrder struct {
-	Bom  map[string]AppOrder
-	ToDo map[string]struct{}
+	BaseParsed bool
+	HeadParsed bool
+	Bom        map[string]AppOrder
+	ToDo       map[string]struct{}
 }
 
 // PullRequest holds GitHub pull request metadata and the aggregated results

@@ -148,9 +148,16 @@ func (c *Coordinator) handleSideParsed(ctx context.Context, headers nats.Headers
 	wo, err := nats.GetValue[models.WorkOrder](ctx, c.store, woKey)
 	if err != nil {
 		wo = models.WorkOrder{
-			Bom:  make(map[string]models.AppOrder),
-			ToDo: make(map[string]struct{}),
+			BaseParsed: headers.Get("file.withBase") != "true",
+			HeadParsed: headers.Get("file.withHead") != "true",
+			Bom:        make(map[string]models.AppOrder),
+			ToDo:       make(map[string]struct{}),
 		}
+	}
+	if isHead {
+		wo.HeadParsed = true
+	} else {
+		wo.BaseParsed = true
 	}
 	for _, af := range side {
 		fRes, ok := pr.Files[af.File]
@@ -161,7 +168,6 @@ func (c *Coordinator) handleSideParsed(ctx context.Context, headers nats.Headers
 			}
 		}
 		if af.Error != "" {
-			// store the error in the results
 			fRes.Errors = append(fRes.Errors, af.Error)
 			pr.Files[af.File] = fRes
 			pr.Status = models.PipelineFailed
@@ -184,16 +190,24 @@ func (c *Coordinator) handleSideParsed(ctx context.Context, headers nats.Headers
 				statusChanged = true
 				continue
 			}
-			if _, ok := wo.Bom[a.Name]; !ok {
-				ao := models.AppOrder{
-					HasBase: headers.Get("file.withBase") == "true",
-					HasHead: headers.Get("file.withHead") == "true",
-				}
-				wo.Bom[a.Name] = ao
-				wo.ToDo[a.Name] = struct{}{}
+			ao := wo.Bom[a.Name]
+			ao.Origin = af.File
+			if isHead {
+				ao.HasHead = true
+			} else {
+				ao.HasBase = true
 			}
+			wo.Bom[a.Name] = ao
+			wo.ToDo[a.Name] = struct{}{}
 		}
 		pr.Files[af.File] = fRes
+	}
+	// Apps seen on this side still wait for their render; apps missing from it
+	// (added/removed document) may already have their only half rendered.
+	for name, ao := range wo.Bom {
+		if ready(wo, ao) {
+			c.publishAppReady(ctx, headers, name, ao.Origin, ao.BaseLoc, ao.HeadLoc)
+		}
 	}
 	if statusChanged {
 		data, err := nats.Marshal(pr)
@@ -282,11 +296,8 @@ func (c *Coordinator) handleRenderedManifest(ctx context.Context, headers nats.H
 			ao.BaseLoc = manifestLocation
 		}
 		wo.Bom[appName] = ao
-		if appIsReady(ao) {
-			headers.Set("manifest.base.location", ao.BaseLoc)
-			headers.Set("manifest.head.location", ao.HeadLoc)
-			headers.Set(keys.MsgIDHeader, keys.MsgIDAppReady(owner, repo, number, runId, appName))
-			c.bus.Publish(ctx, subjects.CoordinatorAppReady, headers, nil)
+		if ready(wo, ao) {
+			c.publishAppReady(ctx, headers, appName, ao.Origin, ao.BaseLoc, ao.HeadLoc)
 		}
 	}
 
@@ -311,8 +322,26 @@ func (c *Coordinator) handleRenderedManifest(ctx context.Context, headers nats.H
 	ack()
 }
 
-func appIsReady(ao models.AppOrder) bool {
-	return (!ao.HasBase || ao.BaseLoc != "") && (!ao.HasHead || ao.HeadLoc != "")
+// ready reports whether an app can be diffed: both sides are known and every
+// side the app was seen on has rendered. A side it was not seen on diffs
+// against an empty manifest.
+func ready(wo models.WorkOrder, ao models.AppOrder) bool {
+	return wo.BaseParsed && wo.HeadParsed &&
+		(!ao.HasBase || ao.BaseLoc != "") &&
+		(!ao.HasHead || ao.HeadLoc != "")
+}
+
+func (c *Coordinator) publishAppReady(ctx context.Context, headers nats.Headers, appName, fileName, baseManifest, headManifest string) {
+	owner := headers.Get("pr.owner")
+	repo := headers.Get("pr.repo")
+	number := headers.Get("pr.number")
+	runId := headers.Get("RunId")
+	headers.Set("app.name", appName)
+	headers.Set("app.origin", fileName)
+	headers.Set("manifest.base.location", baseManifest)
+	headers.Set("manifest.head.location", headManifest)
+	headers.Set(keys.MsgIDHeader, keys.MsgIDAppReady(owner, repo, number, runId, appName))
+	c.bus.Publish(ctx, subjects.CoordinatorAppReady, headers, nil)
 }
 
 func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {

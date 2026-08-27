@@ -108,12 +108,12 @@ func seedPR(t *testing.T, c *Coordinator, store *internalnats.Store, prModel mod
 	c.index.Update(prModel)
 }
 
-// seedWorkOrder stores a run's work order with the given apps, both sides expected.
+// seedWorkOrder stores a run's work order with the given apps seen on both parsed sides.
 func seedWorkOrder(t *testing.T, store *internalnats.Store, apps ...string) {
 	t.Helper()
-	wo := models.WorkOrder{Bom: map[string]models.AppOrder{}, ToDo: map[string]struct{}{}}
+	wo := models.WorkOrder{BaseParsed: true, HeadParsed: true, Bom: map[string]models.AppOrder{}, ToDo: map[string]struct{}{}}
 	for _, a := range apps {
-		wo.Bom[a] = models.AppOrder{HasBase: true, HasHead: true}
+		wo.Bom[a] = models.AppOrder{Origin: origin, HasBase: true, HasHead: true}
 		wo.ToDo[a] = struct{}{}
 	}
 	require.NoError(t, store.SetValue(context.Background(), keys.WorkOrder(owner, repo, number, runId), wo))
@@ -219,9 +219,11 @@ func TestHandleSideParsed_CleanApps_CreatesWorkOrderAndRecordsApps(t *testing.T)
 	assert.False(t, *naked)
 
 	wo := getWorkOrder(t, store)
+	assert.True(t, wo.BaseParsed)
+	assert.True(t, wo.HeadParsed)
 	assert.Equal(t, map[string]models.AppOrder{
-		appName: {HasBase: true, HasHead: true},
-		"other": {HasBase: true, HasHead: true},
+		appName: {Origin: origin, HasBase: true, HasHead: true},
+		"other": {Origin: origin, HasBase: true, HasHead: true},
 	}, wo.Bom)
 	assert.Equal(t, map[string]struct{}{appName: {}, "other": {}}, wo.ToDo)
 
@@ -279,6 +281,72 @@ func TestHandleSideParsed_AppError_FailsPRAndSkipsApp(t *testing.T) {
 	expectMsg(t, doneCh, "PRProcessingCompleted")
 }
 
+// removedAppSides returns base/head payloads where "removed" exists on base only.
+func removedAppSides(t *testing.T) (base, head []byte) {
+	t.Helper()
+	base, err := internalnats.Marshal([]models.FileParsingResult{
+		{File: origin, Apps: []models.AppParsingResult{{Name: appName}, {Name: "removed"}}},
+	})
+	require.NoError(t, err)
+	head, err = internalnats.Marshal([]models.FileParsingResult{
+		{File: origin, Apps: []models.AppParsingResult{{Name: appName}}},
+	})
+	require.NoError(t, err)
+	return base, head
+}
+
+func assertRemovedAppReady(t *testing.T, hdrs internalnats.Headers) {
+	t.Helper()
+	assert.Equal(t, "removed", hdrs["app.name"])
+	assert.Equal(t, origin, hdrs["app.origin"])
+	assert.Equal(t, "manifests/base/removed", hdrs["manifest.base.location"])
+	assert.Equal(t, "", hdrs["manifest.head.location"])
+	assert.Equal(t, keys.MsgIDAppReady(owner, repo, number, runId, "removed"), hdrs[keys.MsgIDHeader])
+}
+
+// Regression: a document removed from a multi-doc file yields an app parsed on
+// base only. After the last side it is marked one-sided so its base render
+// diffs against an empty head.
+func TestHandleSideParsed_AppRemovedOnHead_RenderAfterLastSide(t *testing.T) {
+	c, bus, store := newTestCoordinator(t)
+	ctx := context.Background()
+	seedPR(t, c, store, newPR())
+	appReadyCh := testutil.SubscribeOnce(t, bus, subjects.CoordinatorAppReady)
+	base, head := removedAppSides(t)
+
+	c.handleSideParsed(ctx, sideHeaders(baseSha), base, testutil.NoopAck, testutil.NoopNak)
+	c.handleSideParsed(ctx, sideHeaders(headSha), head, testutil.NoopAck, testutil.NoopNak)
+	expectSilence(t, appReadyCh, "CoordinatorAppReady before render")
+
+	wo := getWorkOrder(t, store)
+	assert.Equal(t, models.AppOrder{Origin: origin, HasBase: true, HasHead: false}, wo.Bom["removed"])
+	assert.Equal(t, models.AppOrder{Origin: origin, HasBase: true, HasHead: true}, wo.Bom[appName])
+
+	h := renderHeaders(baseSha, "manifests/base/removed")
+	h.Set("app.name", "removed")
+	c.handleRenderedManifest(ctx, h, nil, testutil.NoopAck, testutil.NoopNak)
+	assertRemovedAppReady(t, expectMsg(t, appReadyCh, "CoordinatorAppReady for removed app"))
+}
+
+// Same as above but the base render lands before the head side is parsed:
+// the last side must publish app.ready itself.
+func TestHandleSideParsed_AppRemovedOnHead_RenderBeforeLastSide(t *testing.T) {
+	c, bus, store := newTestCoordinator(t)
+	ctx := context.Background()
+	seedPR(t, c, store, newPR())
+	appReadyCh := testutil.SubscribeOnce(t, bus, subjects.CoordinatorAppReady)
+	base, head := removedAppSides(t)
+
+	c.handleSideParsed(ctx, sideHeaders(baseSha), base, testutil.NoopAck, testutil.NoopNak)
+	h := renderHeaders(baseSha, "manifests/base/removed")
+	h.Set("app.name", "removed")
+	c.handleRenderedManifest(ctx, h, nil, testutil.NoopAck, testutil.NoopNak)
+	expectSilence(t, appReadyCh, "CoordinatorAppReady before head side parsed")
+
+	c.handleSideParsed(ctx, sideHeaders(headSha), head, testutil.NoopAck, testutil.NoopNak)
+	assertRemovedAppReady(t, expectMsg(t, appReadyCh, "CoordinatorAppReady for removed app"))
+}
+
 func TestHandleSideParsed_MissingPR_Naks(t *testing.T) {
 	c, _, _ := newTestCoordinator(t)
 
@@ -329,7 +397,7 @@ func TestHandleRenderedManifest_HeadFirst_PublishesAppReady(t *testing.T) {
 	c.handleRenderedManifest(ctx, renderHeaders(baseSha, baseLoc), nil, testutil.NoopAck, testutil.NoopNak)
 	assertAppReady(t, expectMsg(t, appReadyCh, "CoordinatorAppReady"))
 
-	assert.Equal(t, models.AppOrder{HasBase: true, BaseLoc: baseLoc, HasHead: true, HeadLoc: headLoc}, getWorkOrder(t, store).Bom[appName])
+	assert.Equal(t, models.AppOrder{Origin: origin, HasBase: true, BaseLoc: baseLoc, HasHead: true, HeadLoc: headLoc}, getWorkOrder(t, store).Bom[appName])
 }
 
 func TestHandleRenderedManifest_BaseFirst_PublishesAppReady(t *testing.T) {
