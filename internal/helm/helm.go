@@ -20,7 +20,6 @@ import (
 	"helm.sh/helm/v3/pkg/chartutil"
 	"helm.sh/helm/v3/pkg/cli"
 	"helm.sh/helm/v3/pkg/cli/values"
-	"helm.sh/helm/v3/pkg/downloader"
 	"helm.sh/helm/v3/pkg/getter"
 	"helm.sh/helm/v3/pkg/registry"
 	"helm.sh/helm/v3/pkg/strvals"
@@ -152,50 +151,6 @@ func loadAndValidateChart(chartPath string) (*chart.Chart, error) {
 	}
 
 	return chart, nil
-}
-
-func resolveDependencies(ctx context.Context, chart *chart.Chart, chartPath string, installClient *action.Install, settings *cli.EnvSettings) error {
-	if chart.Metadata.Dependencies == nil {
-		return nil
-	}
-
-	if err := action.CheckDependencies(chart, chart.Metadata.Dependencies); err != nil {
-		slog.Info("Chart dependencies need to be updated", "reason", err)
-
-		manager := &downloader.Manager{
-			Out:              io.Discard,
-			ChartPath:        chartPath,
-			Keyring:          installClient.ChartPathOptions.Keyring,
-			SkipUpdate:       false,
-			Getters:          getter.All(settings),
-			RepositoryConfig: settings.RepositoryConfig,
-			RepositoryCache:  settings.RepositoryCache,
-			Debug:            settings.Debug,
-			RegistryClient:   installClient.GetRegistryClient(),
-		}
-
-		if err := updateDependenciesWithContext(ctx, manager); err != nil {
-			return fmt.Errorf("failed to update chart dependencies: %w", err)
-		}
-	}
-
-	return nil
-}
-
-func updateDependenciesWithContext(ctx context.Context, manager *downloader.Manager) error {
-	// Create a channel to handle the dependency update
-	done := make(chan error, 1)
-
-	go func() {
-		done <- manager.Update()
-	}()
-
-	select {
-	case err := <-done:
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 }
 
 // CredsProvider resolves credentials for a repo URL. Scoping and caching are
@@ -535,7 +490,7 @@ func RenderChart(ctx context.Context, namespace, releaseName, chartPath, chartVe
 		return "", fmt.Errorf("failed to load chart from %q: %w", chartPath, err)
 	}
 
-	if err := resolveDependencies(ctx, chart, chartPath, installClient, settings); err != nil {
+	if err := fetchMissingDependencies(ctx, chart, chartPath); err != nil {
 		return "", fmt.Errorf("failed to resolve chart dependencies: %w", err)
 	}
 
