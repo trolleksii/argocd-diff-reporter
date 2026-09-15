@@ -73,18 +73,6 @@
         .diff-content.collapsed {
             display: none;
         }
-        .all-collapsed .diff-content {
-            display: none;
-        }
-        .all-collapsed .diff-toggle {
-            transform: rotate(-90deg);
-        }
-        .all-expanded .diff-content {
-            display: block;
-        }
-        .all-expanded .diff-toggle {
-            transform: rotate(0deg);
-        }
         .diff-detail {
             margin-bottom: 16px;
         }
@@ -316,8 +304,8 @@
         </div>
         {{else}}
         <div class="diff-controls">
-            <button hx-on:click="document.querySelector('.container').className = 'container all-expanded'">Expand All</button>
-            <button hx-on:click="document.querySelector('.container').className = 'container all-collapsed'">Collapse All</button>
+            <button hx-on:click="document.querySelectorAll('.diff-content, .diff-toggle').forEach(e => e.classList.remove('collapsed'))">Expand All</button>
+            <button hx-on:click="document.querySelectorAll('.diff-content, .diff-toggle').forEach(e => e.classList.add('collapsed'))">Collapse All</button>
         </div>
         {{.Body}}
         {{end}}
