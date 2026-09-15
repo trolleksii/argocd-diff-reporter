@@ -2,34 +2,32 @@
 // server handlers, so every producer and consumer agrees on the layout.
 package keys
 
-import "fmt"
-
 // Index is the KV key holding the UI's pull request index.
 const Index = "index"
 
 // PR is the KV key of a pull request's summary record.
 func PR(owner, repo, number string) string {
-	return fmt.Sprintf("%s.%s.%s", owner, repo, number)
+	return owner + "." + repo + "." + number
 }
 
 // WorkOrder is the KV key of one run's per-app progress record.
 func WorkOrder(owner, repo, number, runId string) string {
-	return fmt.Sprintf("%s.%s.%s.%s", owner, repo, number, runId)
+	return owner + "." + repo + "." + number + "." + runId
 }
 
 // CheckRun is the KV key of the GitHub check-run id created for a head commit.
 func CheckRun(owner, repo, number, headSha string) string {
-	return fmt.Sprintf("checks.%s.%s.%s.%s", owner, repo, number, headSha)
+	return "checks" + "." + owner + "." + repo + "." + number + "." + headSha
 }
 
 // Manifest is the object-store key of one app's rendered manifest on one side.
 func Manifest(owner, repo, number, sha, origin, app string) string {
-	return fmt.Sprintf("%s.%s.%s.%s.%s.%s", owner, repo, number, sha, origin, app)
+	return owner + "." + repo + "." + number + "." + sha + "." + origin + "." + app
 }
 
 // Report is the object-store key of one app's diff report.
 func Report(owner, repo, number, baseSha, headSha, origin, app string) string {
-	return fmt.Sprintf("%s.%s.%s.%s.%s.%s.%s", owner, repo, number, baseSha, headSha, origin, app)
+	return owner + "." + repo + "." + number + "." + baseSha + "." + headSha + "." + origin + "." + app
 }
 
 // Nats-Msg-Id values. Workers forward received headers verbatim, so every
