@@ -143,7 +143,7 @@ func (w *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.He
 
 		var fa []models.AppParsingResult
 		for _, app := range apps {
-			sub, spec, err := w.buildAppSpec(ctx, app, headers)
+			sub, spec, err := w.buildAppSpec(ctx, app)
 			if err != nil {
 				fa = append(fa, models.AppParsingResult{Name: app.Name, Error: err.Error()})
 				continue
@@ -178,7 +178,7 @@ func (w *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.He
 	ack()
 }
 
-func (w *ArgoWorker) buildAppSpec(ctx context.Context, app appv1alpha1.Application, headers nats.Headers) (string, models.ArgoAppSpec, error) {
+func (w *ArgoWorker) buildAppSpec(ctx context.Context, app appv1alpha1.Application) (string, models.ArgoAppSpec, error) {
 	sourceType, err := app.Spec.Source.ExplicitType()
 	if err != nil {
 		w.log.ErrorContext(ctx, "multiple explicit source types set", "error", err)
