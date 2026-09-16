@@ -14,6 +14,7 @@ import (
 	"github.com/trolleksii/argocd-diff-reporter/internal/githubauth"
 	"github.com/trolleksii/argocd-diff-reporter/internal/helm"
 	"github.com/trolleksii/argocd-diff-reporter/internal/logging"
+	"github.com/trolleksii/argocd-diff-reporter/internal/metrics"
 	"github.com/trolleksii/argocd-diff-reporter/internal/nats"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server"
 	"github.com/trolleksii/argocd-diff-reporter/internal/server/diffapi"
@@ -59,6 +60,11 @@ func main() {
 		log.Error("failed to init tracer", "error", err)
 	}
 	defer trCleanup()
+	mCleanup, err := metrics.Init(ctx, cfg.Tracing, logger)
+	if err != nil {
+		log.Error("failed to init metrics", "error", err)
+	}
+	defer mCleanup()
 	natsSrv, err := nats.New(ctx, cfg.Nats, logger)
 	if err != nil {
 		logger.Error("failed to start NATS", "error", err)
