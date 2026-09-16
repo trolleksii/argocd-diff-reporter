@@ -785,7 +785,7 @@ func TestBuildAppSpec_MultipleExplicitTypes_ReportsAppError(t *testing.T) {
 func TestBuildAppSpec_UnsupportedSourceType_Plugin_ReturnsError(t *testing.T) {
 	w := New(testutil.NoopLogger(), nil, nil)
 
-	_, _, err := w.buildAppSpec(context.Background(), pluginApp("plugin-app"), internalnats.Headers{})
+	_, _, err := w.buildAppSpec(context.Background(), pluginApp("plugin-app"))
 	require.Error(t, err, "buildAppSpec should fail for unsupported source types")
 	assert.Contains(t, err.Error(), "unsupported source type",
 		"error should mention unsupported source type")
@@ -956,7 +956,7 @@ func TestBuildAppSpec_HelmApp_PropagatesProject(t *testing.T) {
 	app := helmApp("proj-app", "oci://registry.example.com/charts", "", "my-chart")
 	app.Spec.Project = "team-a"
 
-	subject, spec, err := w.buildAppSpec(context.Background(), app, internalnats.Headers{})
+	subject, spec, err := w.buildAppSpec(context.Background(), app)
 	require.NoError(t, err, "buildAppSpec should succeed for a helm OCI app")
 	assert.Equal(t, subjects.ArgoHelmOCIParsed, subject)
 	assert.Equal(t, "team-a", spec.Project,
