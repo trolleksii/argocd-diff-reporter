@@ -1,16 +1,5 @@
 ## ArgoCD Diff Report{{ with .EnvironmentId }} ({{ . }}){{ end }}
 
-{{- if eq .Status -1 }}
-
-### ❌ Errors
-
-{{range $k, $v := .Files}}{{if $v.Errors}}**{{$k}}**:
-{{range $v.Errors}}- {{.}}
-{{end}}
-{{end}}
-{{- end}}
-{{- end}}
-
 ### 📋 Summary
 
 - **Files processed**: {{len .Files}}
@@ -21,14 +10,28 @@
 - **Total applications**: {{.TotalApps}}
 - **Total changes**: {{.TotalChanges}}
 
-{{- if .Files}}
+{{- if eq .Status -1 }}
+### ❌ Errors
 
+{{range $k, $v := .Files}}{{if $v.Errors}}**{{$k}}**:
+{{range $v.Errors}}- {{.}}
+{{end}}
+{{end}}
+{{- end}}
+{{- end}}
+
+{{- if .Files}}
 ### 📄 File Details
 
-{{range $k, $v := .Files}}{{statusIcon $v}} **{{$k}}** ({{$.Status}})
-{{range $kk, $vv := $v.Apps}}- {{diffIcon $vv.DiffStats.DiffCount}} [{{$kk}}]({{report $k $kk}}): {{$vv.DiffStats.DiffCount}} change(s)
+{{range $fileName, $fileRes := .Files}}{{statusIcon $fileRes}} **{{$fileName}}**
+{{range $appName, $appRes := $fileRes.Apps}}
+{{- if gt $appRes.Errors 0}}
+- {{$appName}} : {{join $appRes.Errors "; "}}
+{{- else}}
+-  [{{$appName}}]({{report $fileName $appName}}): {{$appRes.DiffStats.DiffCount}} change(s)
+{{- end}}
 {{end}}
-{{- range $v.Errors}}  - ❌ {{.}}
+{{- range $fileRes.Errors}}  - ❌ {{.}}
 {{end}}
 {{end}}
 {{- end}}

@@ -79,12 +79,12 @@ func (w *GithubChecks) CreatePendingCheck(ctx context.Context, headers nats.Head
 	cr, _, err := w.client.Checks.CreateCheckRun(ctx, pr.Owner, pr.Repo, github.CreateCheckRunOptions{
 		Name:    w.title,
 		HeadSHA: pr.HeadSHA,
-		Status:  github.Ptr("in_progress"),
+		Status:  new("in_progress"),
 		Output: &github.CheckRunOutput{
-			Title:   github.Ptr("Processing ArgoCD Diff"),
-			Summary: github.Ptr("Analyzing changes and generating diff reports..."),
+			Title:   new("Processing ArgoCD Diff"),
+			Summary: new("Analyzing changes and generating diff reports..."),
 		},
-		DetailsURL: github.Ptr(fmt.Sprintf("%s/pulls/%s/%s/%s", w.cfg.UIBaseURL, pr.Owner, pr.Repo, pr.Number)),
+		DetailsURL: new(fmt.Sprintf("%s/pulls/%s/%s/%s", w.cfg.UIBaseURL, pr.Owner, pr.Repo, pr.Number)),
 	})
 	if err != nil {
 		w.log.ErrorContext(ctx, "failed to create a check run", "error", err)
@@ -157,14 +157,14 @@ func (w *GithubChecks) UpdateCheckResult(ctx context.Context, headers nats.Heade
 
 	_, _, err = w.client.Checks.UpdateCheckRun(ctx, owner, repo, checkId, github.UpdateCheckRunOptions{
 		Name:       w.title,
-		Status:     github.Ptr("completed"),
-		Conclusion: github.Ptr(conclusion),
+		Status:     new("completed"),
+		Conclusion: new(conclusion),
 		Output: &github.CheckRunOutput{
-			Title:   github.Ptr(title),
-			Summary: github.Ptr(summary),
-			Text:    github.Ptr(buildDetailedOutput(w.log, d)),
+			Title:   new(title),
+			Summary: new(summary),
+			Text:    new(buildDetailedOutput(w.log, d)),
 		},
-		DetailsURL: github.Ptr(fmt.Sprintf("%s/pulls/%s/%s/%s", w.cfg.UIBaseURL, owner, repo, number)),
+		DetailsURL: new(fmt.Sprintf("%s/pulls/%s/%s/%s", w.cfg.UIBaseURL, owner, repo, number)),
 	})
 	if err != nil {
 		w.log.ErrorContext(ctx, "failed to update github check status", "error", err)
@@ -216,6 +216,7 @@ func buildDetailedOutput(log *slog.Logger, data ChecksDetails) string {
 		"report": func(file, app string) string {
 			return fmt.Sprintf("%s:%s:%s", data.BaseURL, file, app)
 		},
+		"join": strings.Join,
 	}
 	checkReportTmpl := template.Must(template.New("report").Funcs(helpers).Parse(string(t)))
 	var b strings.Builder
