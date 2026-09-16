@@ -96,14 +96,12 @@ func (w *DirectoryWorker) handleDirectoryRender(ctx context.Context, headers nat
 		"path", spec.Source.Path,
 		"revision", spec.Source.Revision)
 
-	sourcePath := filepath.Join(snapshotDir, spec.Source.Path)
-
 	if spec.SourceType == models.SourceTypeUndefined {
-		chartYAML := filepath.Join(sourcePath, "Chart.yaml")
+		chartYAML := filepath.Join(snapshotDir, "Chart.yaml")
 		if _, statErr := os.Stat(chartYAML); statErr == nil {
 			msg := "unexpected Helm source routed to directory worker: Chart.yaml found at path"
 			headers.Set("error.msg", msg)
-			w.log.ErrorContext(ctx, msg, "app", spec.AppName, "path", sourcePath)
+			w.log.ErrorContext(ctx, msg, "app", spec.AppName, "path", snapshotDir)
 			span.SetStatus(codes.Error, msg)
 			headers.Set(keys.MsgIDHeader, keys.MsgIDRender(owner, repo, number, runId, sha, origin, spec.AppName))
 			w.bus.Publish(ctx, subjects.ManifestRenderFinished, headers, nil)
@@ -113,7 +111,7 @@ func (w *DirectoryWorker) handleDirectoryRender(ctx context.Context, headers nat
 		kustomizationFilenames := []string{"kustomization.yaml", "kustomization.yml", "Kustomization"}
 		spec.SourceType = models.SourceTypeDirectory
 		for _, name := range kustomizationFilenames {
-			if _, statErr := os.Stat(filepath.Join(sourcePath, name)); statErr == nil {
+			if _, statErr := os.Stat(filepath.Join(snapshotDir, name)); statErr == nil {
 				spec.SourceType = models.SourceTypeKustomize
 				break
 			}
@@ -123,9 +121,9 @@ func (w *DirectoryWorker) handleDirectoryRender(ctx context.Context, headers nat
 	manifestLocation := keys.Manifest(owner, repo, number, sha, origin, spec.AppName)
 	switch spec.SourceType {
 	case models.SourceTypeKustomize:
-		err = w.renderKustomize(ctx, spec, sourcePath, manifestLocation)
+		err = w.renderKustomize(ctx, spec, snapshotDir, manifestLocation)
 	case models.SourceTypeDirectory:
-		err = w.renderDirectory(ctx, spec, sourcePath, manifestLocation)
+		err = w.renderDirectory(ctx, spec, snapshotDir, manifestLocation)
 	}
 	if err != nil {
 		headers.Set("error.msg", err.Error())
