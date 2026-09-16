@@ -428,8 +428,7 @@ func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.He
 		headers.Set(keys.MsgIDHeader, keys.MsgIDDone(owner, repo, number, headers.Get("RunId")))
 		c.bus.Publish(ctx, subjects.PRProcessingCompleted, headers, data)
 	}
-	startMs, err := strconv.ParseInt(headers.Get("start.time"), 10, 64)
-	if err != nil {
+	if startMs, err := strconv.ParseInt(headers.Get("start.time"), 10, 64); err == nil {
 		prDuration.Record(ctx, time.Since(time.UnixMilli(startMs)).Seconds(), metric.WithAttributes(
 			attribute.String("pr.owner", pr.Owner),
 			attribute.String("pr.repo", pr.Repo),
@@ -437,7 +436,7 @@ func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.He
 			attribute.String("status", "succeeded"),
 		))
 	} else {
-		c.log.ErrorContext(ctx, "failed to parse start.time header")
+		c.log.ErrorContext(ctx, "failed to parse start.time header", "error", err)
 	}
 	c.index.UpdateStatus(pr)
 	elements := c.index.GetElements()
