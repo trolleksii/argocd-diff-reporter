@@ -25,7 +25,7 @@
 
 {{range $fileName, $fileRes := .Files}}{{statusIcon $fileRes}} **{{$fileName}}**
 {{range $appName, $appRes := $fileRes.Apps}}
-{{- if gt $appRes.Errors 0}}
+{{- if $appRes.Errors}}
 - {{$appName}} : {{join $appRes.Errors "; "}}
 {{- else}}
 -  [{{$appName}}]({{report $fileName $appName}}): {{$appRes.DiffStats.DiffCount}} change(s)
