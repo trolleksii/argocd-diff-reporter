@@ -16,9 +16,9 @@ import (
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 )
 
-func Init(ctx context.Context, cfg config.TracingConfig, log *slog.Logger) (func(), error) {
+func Init(ctx context.Context, cfg config.TelemetryConfig, log *slog.Logger) (func(), error) {
 	noop := func() {}
-	if cfg.Endpoint == "" {
+	if !cfg.EmitMetrics || cfg.Endpoint == "" {
 		return noop, nil
 	}
 

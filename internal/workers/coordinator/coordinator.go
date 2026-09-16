@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/trolleksii/argocd-diff-reporter/internal/config"
 	"github.com/trolleksii/argocd-diff-reporter/internal/keys"
@@ -20,6 +22,12 @@ import (
 )
 
 var tracer = otel.Tracer("argocd-diff-reporter/internal/workers/coordinator")
+var prDuration, _ = otel.Meter("argocd-diff-reporter/internal/workers/coordinator").Float64Histogram(
+	"pr.processing.duration",
+	metric.WithDescription("Time from webhook receipt to PRProcessingCompleted"),
+	metric.WithUnit("s"),
+	metric.WithExplicitBucketBoundaries(0.5, 1, 2, 5, 10, 20, 30, 60),
+)
 
 type Coordinator struct {
 	bus      *nats.Bus
@@ -419,6 +427,17 @@ func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.He
 		}
 		headers.Set(keys.MsgIDHeader, keys.MsgIDDone(owner, repo, number, headers.Get("RunId")))
 		c.bus.Publish(ctx, subjects.PRProcessingCompleted, headers, data)
+	}
+	startMs, err := strconv.ParseInt(headers.Get("start.time"), 10, 64)
+	if err != nil {
+		prDuration.Record(ctx, time.Since(time.UnixMilli(startMs)).Seconds(), metric.WithAttributes(
+			attribute.String("pr.owner", pr.Owner),
+			attribute.String("pr.repo", pr.Repo),
+			attribute.String("pr.number", pr.Number),
+			attribute.String("status", "succeeded"),
+		))
+	} else {
+		c.log.ErrorContext(ctx, "failed to parse start.time header")
 	}
 	c.index.UpdateStatus(pr)
 	elements := c.index.GetElements()

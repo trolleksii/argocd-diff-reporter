@@ -9,7 +9,7 @@ import (
 )
 
 func TestInitTracerUnsupportedProtocol(t *testing.T) {
-	_, err := InitTracer(context.Background(), config.TracingConfig{
+	_, err := InitTracer(context.Background(), config.TelemetryConfig{
 		Endpoint: "localhost:4317",
 		Protocol: "udp",
 	}, slog.Default())

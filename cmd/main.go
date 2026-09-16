@@ -55,12 +55,12 @@ func main() {
 		syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	trCleanup, err := tracing.InitTracer(ctx, cfg.Tracing, logger)
+	trCleanup, err := tracing.InitTracer(ctx, cfg.Telemetry, logger)
 	if err != nil {
 		log.Error("failed to init tracer", "error", err)
 	}
 	defer trCleanup()
-	mCleanup, err := metrics.Init(ctx, cfg.Tracing, logger)
+	mCleanup, err := metrics.Init(ctx, cfg.Telemetry, logger)
 	if err != nil {
 		log.Error("failed to init metrics", "error", err)
 	}

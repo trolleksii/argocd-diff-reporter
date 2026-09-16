@@ -43,7 +43,7 @@ github:
 	assert.Equal(t, "0.0.0.0:8000", cfg.Server.Addr)
 	assert.Equal(t, "repositories", cfg.Workers.GitWorker.CloneBaseDir)
 	assert.Equal(t, "snapshots", cfg.Workers.GitWorker.SnapshotBaseDir)
-	assert.Equal(t, "argocd-diff-reporter", cfg.Tracing.Service)
+	assert.Equal(t, "argocd-diff-reporter", cfg.Telemetry.Service)
 }
 
 func TestLoad_YAMLOverridesDefaults(t *testing.T) {
@@ -75,7 +75,7 @@ github:
 	assert.Equal(t, "my-repos", cfg.Workers.GitWorker.CloneBaseDir)
 	assert.Equal(t, "my-snaps", cfg.Workers.GitWorker.SnapshotBaseDir)
 	assert.Equal(t, "my-charts", cfg.Workers.HelmWorker.ChartCacheDir)
-	assert.Equal(t, "custom-service", cfg.Tracing.Service)
+	assert.Equal(t, "custom-service", cfg.Telemetry.Service)
 }
 
 func TestLoad_GithubChecksEnvironmentId(t *testing.T) {
@@ -176,9 +176,9 @@ func TestApplyEnv_OverridesTracingFields(t *testing.T) {
 	cfg := &Config{}
 	require.NoError(t, cfg.ApplyEnv())
 
-	assert.Equal(t, "http://otel.example.com", cfg.Tracing.Endpoint)
-	assert.Equal(t, "my-service", cfg.Tracing.Service)
-	assert.Equal(t, "v1.2.3", cfg.Tracing.Version)
+	assert.Equal(t, "http://otel.example.com", cfg.Telemetry.Endpoint)
+	assert.Equal(t, "my-service", cfg.Telemetry.Service)
+	assert.Equal(t, "v1.2.3", cfg.Telemetry.Version)
 }
 
 func TestApplyEnv_OverridesGithubToken(t *testing.T) {

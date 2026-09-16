@@ -154,7 +154,7 @@ func TestServeDiff_MaxBytes_Truncates(t *testing.T) {
 
 	seedPR(t, store, models.PullRequest{
 		Owner: "org", Repo: "repo", Number: "9", BaseSHA: "base", HeadSHA: "head",
-		Status:          models.PipelineSucceeded,
+		Status: models.PipelineSucceeded,
 		Files: map[string]models.FileResult{
 			"apps/big.yaml": {Apps: map[string]models.AppResult{"big-app": {}}},
 		},

@@ -32,9 +32,9 @@ func StartDetail(ctx context.Context, tracer trace.Tracer, name string) (context
 	return tracer.Start(ctx, name)
 }
 
-func InitTracer(ctx context.Context, cfg config.TracingConfig, log *slog.Logger) (func(), error) {
+func InitTracer(ctx context.Context, cfg config.TelemetryConfig, log *slog.Logger) (func(), error) {
 	defaultCleanup := func() {}
-	detail.Store(cfg.Detail)
+	detail.Store(cfg.EmitDetailSpans)
 	otlpEndpoint := cfg.Endpoint
 	if otlpEndpoint == "" {
 		otel.SetTracerProvider(

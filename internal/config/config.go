@@ -10,15 +10,15 @@ import (
 )
 
 type Config struct {
-	Global  GlobalConfig    `yaml:"global"`
-	Nats    NatsConfig      `yaml:"nats"`
-	Server  ServerConfig    `yaml:"server"`
-	Github  GithubAppConfig `yaml:"github"`
-	Log     LogConfig       `yaml:"log"`
-	Webhook WebhookConfig   `yaml:"webhook"`
-	Workers WorkersConfig   `yaml:"workers"`
-	ArgoCD  ArgoCDConfig    `yaml:"argocd"`
-	Tracing TracingConfig   `yaml:"tracing"`
+	Global    GlobalConfig    `yaml:"global"`
+	Nats      NatsConfig      `yaml:"nats"`
+	Server    ServerConfig    `yaml:"server"`
+	Github    GithubAppConfig `yaml:"github"`
+	Log       LogConfig       `yaml:"log"`
+	Webhook   WebhookConfig   `yaml:"webhook"`
+	Workers   WorkersConfig   `yaml:"workers"`
+	ArgoCD    ArgoCDConfig    `yaml:"argocd"`
+	Telemetry TelemetryConfig `yaml:"telemetry"`
 }
 
 type GlobalConfig struct {
@@ -92,14 +92,15 @@ type LogConfig struct {
 	Format string `yaml:"format"`
 }
 
-type TracingConfig struct {
+type TelemetryConfig struct {
 	Endpoint string `yaml:"endpoint"`
 	// Protocol selects the OTLP transport: "http" (default) or "grpc".
 	Protocol string `yaml:"protocol"`
 	Service  string `yaml:"service"`
 	Version  string `yaml:"version"`
 	// Detail enables fine-grained spans inside handlers; off gives one span per hop.
-	Detail bool `yaml:"detail"`
+	EmitDetailSpans bool `yaml:"emitDetailSpans"`
+	EmitMetrics     bool `yaml:"emitMetrics"`
 }
 
 func Load(path string) (*Config, error) {
@@ -117,7 +118,7 @@ func Load(path string) (*Config, error) {
 				IndexCapacity: 10,
 			},
 		},
-		Tracing: TracingConfig{
+		Telemetry: TelemetryConfig{
 			Service:  "argocd-diff-reporter",
 			Protocol: "http",
 		},
@@ -171,13 +172,13 @@ func (c *Config) ApplyEnv() error {
 		c.Webhook.Secret = v
 	}
 	if v := os.Getenv("OTEL_ENDPOINT"); v != "" {
-		c.Tracing.Endpoint = v
+		c.Telemetry.Endpoint = v
 	}
 	if v := os.Getenv("OTEL_SERVICE"); v != "" {
-		c.Tracing.Service = v
+		c.Telemetry.Service = v
 	}
 	if v := os.Getenv("OTEL_VERSION"); v != "" {
-		c.Tracing.Version = v
+		c.Telemetry.Version = v
 	}
 	return nil
 }
