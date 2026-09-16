@@ -204,12 +204,6 @@ func buildDetailedOutput(log *slog.Logger, data ChecksDetails) string {
 				return "✅"
 			}
 		},
-		"diffIcon": func(count int) string {
-			if count > 0 {
-				return "📝"
-			}
-			return "✓"
-		},
 		"now": func() string {
 			return time.Now().Format("2006-01-02 15:04:05 UTC")
 		},

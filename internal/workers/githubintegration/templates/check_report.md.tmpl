@@ -1,24 +1,6 @@
 ## ArgoCD Diff Report{{ with .EnvironmentId }} ({{ . }}){{ end }}
 
-### 📋 Summary
-
-- **Files processed**: {{len .Files}}
-- **Successful**: {{.SuccessCount}}
-{{- if gt .ErrorCount 0}}
-- **Failed**: {{.ErrorCount}}
-{{- end}}
-- **Total applications**: {{.TotalApps}}
-- **Total changes**: {{.TotalChanges}}
-
-{{- if eq .Status -1 }}
-### ❌ Errors
-
-{{range $k, $v := .Files}}{{if $v.Errors}}**{{$k}}**:
-{{range $v.Errors}}- {{.}}
-{{end}}
-{{end}}
-{{- end}}
-{{- end}}
+Status: {{ if eq .Status -1 }} ❌ Failure {{ else }} ✅ Success {{- end }}
 
 {{- if .Files}}
 ### 📄 File Details
