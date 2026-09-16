@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"time"
 
 	"github.com/google/go-github/v82/github"
 	"golang.org/x/oauth2"
@@ -126,6 +127,7 @@ func (h *TriggerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	runId := nats.NewRunID()
 	headers.Set("RunId", runId)
+	headers.Set("start.time", strconv.FormatInt(time.Now().UnixMilli(), 10))
 	if err := h.bus.Publish(trCtx, subjects.WebhookPRChanged, headers, data); err != nil {
 		h.log.ErrorContext(trCtx, "failed to publish pr changed event", "error", err)
 		span.SetStatus(codes.Error, err.Error())

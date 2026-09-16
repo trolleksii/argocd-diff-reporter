@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/google/go-github/v82/github"
 
@@ -78,16 +79,14 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		repoName := repo.GetName()
 		pr := event.CheckSuite.PullRequests[0]
 		prObj := models.PullRequest{
-			PullRequestMeta: models.PullRequestMeta{
-				Owner:   owner,
-				Repo:    repoName,
-				Number:  strconv.Itoa(pr.GetNumber()),
-				Title:   pr.GetTitle(),
-				Author:  pr.GetUser().GetLogin(),
-				BaseSHA: pr.GetBase().GetSHA(),
-				HeadSHA: pr.GetHead().GetSHA(),
-			},
-			Files: make(map[string]models.FileResult),
+			Owner:   owner,
+			Repo:    repoName,
+			Number:  strconv.Itoa(pr.GetNumber()),
+			Title:   pr.GetTitle(),
+			Author:  pr.GetUser().GetLogin(),
+			BaseSHA: pr.GetBase().GetSHA(),
+			HeadSHA: pr.GetHead().GetSHA(),
+			Files:   make(map[string]models.FileResult),
 		}
 
 		span.SetAttributes(
@@ -107,6 +106,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		headers.Set("RunId", runId)
+		headers.Set("start.time", strconv.FormatInt(time.Now().UnixMilli(), 10))
 		h.bus.Publish(trCtx, subjects.WebhookPRChanged, headers, data)
 	case *github.PullRequestEvent:
 		action := event.GetAction()
@@ -136,11 +136,9 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			pr := event.GetPullRequest()
 			var headers nats.Headers = make(map[string]string)
 			prObj := models.PullRequest{
-				PullRequestMeta: models.PullRequestMeta{
-					Owner:  owner,
-					Repo:   repoName,
-					Number: strconv.Itoa(pr.GetNumber()),
-				},
+				Owner:  owner,
+				Repo:   repoName,
+				Number: strconv.Itoa(pr.GetNumber()),
 			}
 			span.SetAttributes(
 				attribute.String("pr.number", prObj.Number),
@@ -159,16 +157,14 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case "opened", "synchronize", "reopened":
 			pr := event.GetPullRequest()
 			prObj := models.PullRequest{
-				PullRequestMeta: models.PullRequestMeta{
-					Owner:   owner,
-					Repo:    repoName,
-					Number:  strconv.Itoa(pr.GetNumber()),
-					Title:   pr.GetTitle(),
-					Author:  pr.GetUser().GetLogin(),
-					BaseSHA: pr.GetBase().GetSHA(),
-					HeadSHA: pr.GetHead().GetSHA(),
-				},
-				Files: make(map[string]models.FileResult),
+				Owner:   owner,
+				Repo:    repoName,
+				Number:  strconv.Itoa(pr.GetNumber()),
+				Title:   pr.GetTitle(),
+				Author:  pr.GetUser().GetLogin(),
+				BaseSHA: pr.GetBase().GetSHA(),
+				HeadSHA: pr.GetHead().GetSHA(),
+				Files:   make(map[string]models.FileResult),
 			}
 
 			span.SetAttributes(

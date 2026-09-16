@@ -39,8 +39,8 @@ func TestServeDiff_HappyPath(t *testing.T) {
 	_, store, _ := testutil.StartNATS(t)
 
 	seedPR(t, store, models.PullRequest{
-		PullRequestMeta: models.PullRequestMeta{Owner: "org", Repo: "repo", Number: "42", BaseSHA: "base", HeadSHA: "head"},
-		Status:          models.PipelineSucceeded,
+		Owner: "org", Repo: "repo", Number: "42", BaseSHA: "base", HeadSHA: "head",
+		Status: models.PipelineSucceeded,
 		Files: map[string]models.FileResult{
 			"apps/b.yaml": {Apps: map[string]models.AppResult{"app-b": {}}},
 			"apps/a.yaml": {Apps: map[string]models.AppResult{"app-a": {}}},
@@ -93,8 +93,8 @@ func TestServeDiff_InProgress_Returns202(t *testing.T) {
 	_, store, _ := testutil.StartNATS(t)
 
 	seedPR(t, store, models.PullRequest{
-		PullRequestMeta: models.PullRequestMeta{Owner: "org", Repo: "repo", Number: "7"},
-		Status:          models.PipelineInProgress,
+		Owner: "org", Repo: "repo", Number: "7",
+		Status: models.PipelineInProgress,
 	})
 
 	rr := get(t, newMux(store), "/api/diff/org/repo/7")
@@ -105,8 +105,8 @@ func TestServeDiff_MissingReportAndErrors(t *testing.T) {
 	_, store, _ := testutil.StartNATS(t)
 
 	seedPR(t, store, models.PullRequest{
-		PullRequestMeta: models.PullRequestMeta{Owner: "org", Repo: "repo", Number: "3", BaseSHA: "base", HeadSHA: "head"},
-		Status:          models.PipelineFailed,
+		Owner: "org", Repo: "repo", Number: "3", BaseSHA: "base", HeadSHA: "head",
+		Status: models.PipelineFailed,
 		Files: map[string]models.FileResult{
 			"apps/x.yaml": {
 				Errors: []string{"appset expansion failed"},
@@ -128,8 +128,8 @@ func TestServeDiff_ZeroDiff_NoChangesNote(t *testing.T) {
 	_, store, _ := testutil.StartNATS(t)
 
 	seedPR(t, store, models.PullRequest{
-		PullRequestMeta: models.PullRequestMeta{Owner: "org", Repo: "repo", Number: "5", BaseSHA: "base", HeadSHA: "head"},
-		Status:          models.PipelineSucceeded,
+		Owner: "org", Repo: "repo", Number: "5", BaseSHA: "base", HeadSHA: "head",
+		Status: models.PipelineSucceeded,
 		Files: map[string]models.FileResult{
 			"apps/z.yaml": {Apps: map[string]models.AppResult{"app-z": {}}},
 		},
@@ -153,7 +153,7 @@ func TestServeDiff_MaxBytes_Truncates(t *testing.T) {
 	md.WriteString("```\n\n")
 
 	seedPR(t, store, models.PullRequest{
-		PullRequestMeta: models.PullRequestMeta{Owner: "org", Repo: "repo", Number: "9", BaseSHA: "base", HeadSHA: "head"},
+		Owner: "org", Repo: "repo", Number: "9", BaseSHA: "base", HeadSHA: "head",
 		Status:          models.PipelineSucceeded,
 		Files: map[string]models.FileResult{
 			"apps/big.yaml": {Apps: map[string]models.AppResult{"big-app": {}}},

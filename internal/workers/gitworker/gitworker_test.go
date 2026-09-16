@@ -347,13 +347,13 @@ func TestHandlePRChanged_PublishesMatchedAndResolved(t *testing.T) {
 	matchedCh := testutil.SubscribeOnce(t, bus, subjects.GitFilesMatched)
 	resolvedCh := testutil.SubscribeN(t, bus, subjects.GitFilesResolved, 2)
 
-	pr := models.PullRequest{PullRequestMeta: models.PullRequestMeta{
+	pr := models.PullRequest{
 		Owner:   "myorg",
 		Repo:    "myrepo",
 		Number:  "1",
 		BaseSHA: "base-sha",
 		HeadSHA: "head-sha",
-	}}
+	}
 	data, err := internalnats.Marshal(pr)
 	require.NoError(t, err)
 
@@ -411,13 +411,13 @@ func TestHandlePRChanged_RepositoryError_Naks(t *testing.T) {
 	// Register a consumer so any accidental publish would be captured.
 	resolvedCh := testutil.SubscribeN(t, bus, subjects.GitFilesResolved, 1)
 
-	pr := models.PullRequest{PullRequestMeta: models.PullRequestMeta{
+	pr := models.PullRequest{
 		Owner:   "org",
 		Repo:    "repo",
 		Number:  "1",
 		BaseSHA: "b",
 		HeadSHA: "h",
-	}}
+	}
 	data, err := internalnats.Marshal(pr)
 	require.NoError(t, err)
 
@@ -451,13 +451,13 @@ func TestHandlePRChanged_MissingRepo_Naks(t *testing.T) {
 
 	resolvedCh := testutil.SubscribeN(t, bus, subjects.GitFilesResolved, 1)
 
-	pr := models.PullRequest{PullRequestMeta: models.PullRequestMeta{
+	pr := models.PullRequest{
 		Owner:   "org2",
 		Repo:    "repo2",
 		Number:  "2",
 		BaseSHA: "b2",
 		HeadSHA: "h2",
-	}}
+	}
 	data, err := internalnats.Marshal(pr)
 	require.NoError(t, err)
 

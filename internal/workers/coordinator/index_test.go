@@ -14,8 +14,8 @@ import (
 
 func pr(number, owner, repo string, status models.PipelineStatus) models.PullRequest {
 	return models.PullRequest{
-		PullRequestMeta: models.PullRequestMeta{Number: number, Owner: owner, Repo: repo},
-		Status:          status,
+		Number: number, Owner: owner, Repo: repo,
+		Status: status,
 	}
 }
 

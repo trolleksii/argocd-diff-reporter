@@ -94,16 +94,14 @@ func TestMarshalUnmarshal_FileResult(t *testing.T) {
 
 func TestMarshalUnmarshal_PullRequest(t *testing.T) {
 	original := models.PullRequest{
-		PullRequestMeta: models.PullRequestMeta{
-			Number:  "42",
-			Author:  "alice",
-			Owner:   "org",
-			Repo:    "repo",
-			Title:   "Fix the thing",
-			BaseSHA: "aaaa",
-			HeadSHA: "bbbb",
-		},
-		Status: models.PipelineSucceeded,
+		Number:  "42",
+		Author:  "alice",
+		Owner:   "org",
+		Repo:    "repo",
+		Title:   "Fix the thing",
+		BaseSHA: "aaaa",
+		HeadSHA: "bbbb",
+		Status:  models.PipelineSucceeded,
 		Files: map[string]models.FileResult{
 			"apps/app1.yaml": {
 				Errors: nil,
@@ -139,7 +137,7 @@ func TestMarshalUnmarshal_PullRequest_AllStatuses(t *testing.T) {
 		models.PipelineInProgress,
 		models.PipelineSucceeded,
 	} {
-		pr := models.PullRequest{PullRequestMeta: models.PullRequestMeta{Number: "1"}, Status: status}
+		pr := models.PullRequest{Number: "1", Status: status}
 		data, err := Marshal(pr)
 		require.NoError(t, err)
 

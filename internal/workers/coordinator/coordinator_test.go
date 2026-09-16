@@ -95,9 +95,9 @@ func appHeaders(sha string) internalnats.Headers {
 
 func newPR() models.PullRequest {
 	return models.PullRequest{
-		PullRequestMeta: models.PullRequestMeta{Owner: owner, Repo: repo, Number: number, BaseSHA: baseSha, HeadSHA: headSha},
-		Files:           map[string]models.FileResult{},
-		Status:          models.PipelineInProgress,
+		Owner: owner, Repo: repo, Number: number, BaseSHA: baseSha, HeadSHA: headSha,
+		Files:  map[string]models.FileResult{},
+		Status: models.PipelineInProgress,
 	}
 }
 
@@ -544,7 +544,7 @@ func TestHandlePRClosed_RemovesFromIndex(t *testing.T) {
 
 	// webhook sends only the PR identity
 	data, err := internalnats.Marshal(models.PullRequest{
-		PullRequestMeta: models.PullRequestMeta{Owner: owner, Repo: repo, Number: number},
+		Owner: owner, Repo: repo, Number: number,
 	})
 	require.NoError(t, err)
 
