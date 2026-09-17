@@ -184,6 +184,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			headers.Set("RunId", runId)
+			headers.Set("start.time", strconv.FormatInt(time.Now().UnixMilli(), 10))
 			h.bus.Publish(trCtx, subjects.WebhookPRChanged, headers, data)
 		}
 	default:
