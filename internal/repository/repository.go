@@ -204,9 +204,13 @@ func (r *Repository) GetOrCreateSnapshot(ref, repoDir string, files []string) (s
 		return "", fmt.Errorf("either repoDir or files must be set")
 	}
 
-	// Fast path: return immediately if snapshot already exists on disk.
-	if dir := r.computeSnapshotDir(ref, repoDir, files); r.snapshotExists(dir) {
-		return dir, nil
+	// Fast path: snapshots are keyed by commit hash, so one that exists on disk
+	// can only be trusted when ref itself is a hash. Names (branch, tag, HEAD)
+	// may have moved and go through the queue to be re-resolved at the remote.
+	if plumbing.IsHash(ref) {
+		if dir := r.computeSnapshotDir(ref, repoDir, files); r.snapshotExists(dir) {
+			return dir, nil
+		}
 	}
 
 	out := make(chan result, 1)
@@ -284,11 +288,14 @@ func (r *Repository) listChangedFiles(base, head string) ([]Change, error) {
 }
 
 func (r *Repository) getOrCreateSnapshot(ref, repoDir string, files []string) (string, error) {
-	snapshotDir := r.computeSnapshotDir(ref, repoDir, files)
-
 	hash, err := r.fetchRef(ref)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch ref: %w", err)
+	}
+
+	snapshotDir := r.computeSnapshotDir(hash.String(), repoDir, files)
+	if r.snapshotExists(snapshotDir) {
+		return snapshotDir, nil
 	}
 
 	if repoDir != "" {
@@ -339,9 +346,12 @@ func (r *Repository) isShallow() bool {
 }
 
 func (r *Repository) fetchRef(ref string) (*plumbing.Hash, error) {
-	// Check locally first
-	if hash, err := r.repo.ResolveRevision(plumbing.Revision(ref)); err == nil {
-		return hash, nil
+	// Only a hash can be trusted from the local store; a name may have moved
+	// at the remote since it was last fetched.
+	if plumbing.IsHash(ref) {
+		if hash, err := r.repo.ResolveRevision(plumbing.Revision(ref)); err == nil {
+			return hash, nil
+		}
 	}
 
 	dst := ref

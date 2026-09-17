@@ -105,6 +105,18 @@ func TestNewRepository_SnapshotByHEAD(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join(snapDir, "app.yaml"))
 	require.NoError(t, err)
 	assert.Equal(t, "version: 1\n", string(content))
+
+	// A named ref must not serve a stale snapshot once the remote moves on.
+	branch := gitOut(t, "-C", srcDir, "rev-parse", "--abbrev-ref", "HEAD")
+	commitFile(t, srcDir, "app.yaml", "version: 2\n", "second")
+	for _, ref := range []string{"HEAD", branch} {
+		newDir, err := r.GetOrCreateSnapshot(ref, "", []string{"app.yaml"})
+		require.NoError(t, err, "snapshot by %s after a new commit", ref)
+		require.NotEqual(t, snapDir, newDir, "moved ref %s should yield a new snapshot", ref)
+		content, err = os.ReadFile(filepath.Join(newDir, "app.yaml"))
+		require.NoError(t, err)
+		assert.Equal(t, "version: 2\n", string(content), "ref %s", ref)
+	}
 }
 
 // TestNewRepository_ShallowSnapshotThenDiff covers the role transition: a repo
