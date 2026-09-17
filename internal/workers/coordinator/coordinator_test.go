@@ -101,7 +101,7 @@ func newPR() models.PullRequest {
 	}
 }
 
-// seedPR stores the PR record in KV and the index, as indexInterestingPR would.
+// seedPR stores the PR record in KV and the index, as indexQualifyingPR would.
 func seedPR(t *testing.T, c *Coordinator, store *internalnats.Store, prModel models.PullRequest) {
 	t.Helper()
 	require.NoError(t, store.SetValue(context.Background(), keys.PR(owner, repo, number), prModel))
@@ -160,10 +160,10 @@ func recorder() (ack, nak func() error, acked, naked *bool) {
 }
 
 // ---------------------------------------------------------------------------
-// indexInterestingPR
+// indexQualifyingPR
 // ---------------------------------------------------------------------------
 
-func TestIndexInterestingPR_StoresPRInKV(t *testing.T) {
+func TestIndexQualifyingPR_StoresPRInKV(t *testing.T) {
 	c, _, store := newTestCoordinator(t)
 
 	prModel := newPR()
@@ -171,20 +171,20 @@ func TestIndexInterestingPR_StoresPRInKV(t *testing.T) {
 	data, err := internalnats.Marshal(prModel)
 	require.NoError(t, err)
 
-	c.indexInterestingPR(context.Background(), prHeaders(), data, testutil.NoopAck, testutil.NoopNak)
+	c.indexQualifyingPR(context.Background(), prHeaders(), data, testutil.NoopAck, testutil.NoopNak)
 
 	stored := getPR(t, store)
 	assert.Equal(t, prModel.PullRequestMeta, stored.PullRequestMeta)
 }
 
-func TestIndexInterestingPR_UpdatesIndex(t *testing.T) {
+func TestIndexQualifyingPR_UpdatesIndex(t *testing.T) {
 	c, _, store := newTestCoordinator(t)
 	ctx := context.Background()
 
 	data, err := internalnats.Marshal(newPR())
 	require.NoError(t, err)
 
-	c.indexInterestingPR(ctx, prHeaders(), data, testutil.NoopAck, testutil.NoopNak)
+	c.indexQualifyingPR(ctx, prHeaders(), data, testutil.NoopAck, testutil.NoopNak)
 
 	elems := c.index.GetElements()
 	require.Len(t, elems, 1)
@@ -197,10 +197,10 @@ func TestIndexInterestingPR_UpdatesIndex(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// handleSideParsed
+// composeWorkOrder
 // ---------------------------------------------------------------------------
 
-func TestHandleSideParsed_CleanApps_CreatesWorkOrderAndRecordsApps(t *testing.T) {
+func TestComposeWorkOrder_CleanApps_CreatesWorkOrderAndRecordsApps(t *testing.T) {
 	c, _, store := newTestCoordinator(t)
 	ctx := context.Background()
 	seedPR(t, c, store, newPR())
@@ -211,9 +211,9 @@ func TestHandleSideParsed_CleanApps_CreatesWorkOrderAndRecordsApps(t *testing.T)
 	require.NoError(t, err)
 
 	ack, nak, acked, naked := recorder()
-	c.handleSideParsed(ctx, sideHeaders(baseSha), side, ack, nak)
+	c.composeWorkOrder(ctx, sideHeaders(baseSha), side, ack, nak)
 	// second side of the same run extends, not duplicates, the work order
-	c.handleSideParsed(ctx, sideHeaders(headSha), side, testutil.NoopAck, testutil.NoopNak)
+	c.composeWorkOrder(ctx, sideHeaders(headSha), side, testutil.NoopAck, testutil.NoopNak)
 
 	assert.True(t, *acked)
 	assert.False(t, *naked)
@@ -236,7 +236,7 @@ func TestHandleSideParsed_CleanApps_CreatesWorkOrderAndRecordsApps(t *testing.T)
 	assert.Empty(t, stored.Files[origin].Apps[appName].Errors)
 }
 
-func TestHandleSideParsed_FileError_FailsPR(t *testing.T) {
+func TestComposeWorkOrder_FileError_FailsPR(t *testing.T) {
 	c, bus, store := newTestCoordinator(t)
 	seedPR(t, c, store, newPR())
 	doneCh := testutil.SubscribeOnce(t, bus, subjects.PRProcessingCompleted)
@@ -245,7 +245,7 @@ func TestHandleSideParsed_FileError_FailsPR(t *testing.T) {
 	side, err := internalnats.Marshal([]models.FileParsingResult{{File: origin, Error: errorMsg}})
 	require.NoError(t, err)
 
-	c.handleSideParsed(context.Background(), sideHeaders(baseSha), side, testutil.NoopAck, testutil.NoopNak)
+	c.composeWorkOrder(context.Background(), sideHeaders(baseSha), side, testutil.NoopAck, testutil.NoopNak)
 
 	stored := getPR(t, store)
 	assert.Equal(t, models.PipelineFailed, stored.Status)
@@ -256,7 +256,7 @@ func TestHandleSideParsed_FileError_FailsPR(t *testing.T) {
 	assert.Equal(t, keys.MsgIDDone(owner, repo, number, runId), hdrs[keys.MsgIDHeader])
 }
 
-func TestHandleSideParsed_AppError_FailsPRAndSkipsApp(t *testing.T) {
+func TestComposeWorkOrder_AppError_FailsPRAndSkipsApp(t *testing.T) {
 	c, bus, store := newTestCoordinator(t)
 	seedPR(t, c, store, newPR())
 	doneCh := testutil.SubscribeOnce(t, bus, subjects.PRProcessingCompleted)
@@ -267,7 +267,7 @@ func TestHandleSideParsed_AppError_FailsPRAndSkipsApp(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	c.handleSideParsed(context.Background(), sideHeaders(baseSha), side, testutil.NoopAck, testutil.NoopNak)
+	c.composeWorkOrder(context.Background(), sideHeaders(baseSha), side, testutil.NoopAck, testutil.NoopNak)
 
 	stored := getPR(t, store)
 	assert.Equal(t, models.PipelineFailed, stored.Status)
@@ -307,15 +307,15 @@ func assertRemovedAppReady(t *testing.T, hdrs internalnats.Headers) {
 // Regression: a document removed from a multi-doc file yields an app parsed on
 // base only. After the last side it is marked one-sided so its base render
 // diffs against an empty head.
-func TestHandleSideParsed_AppRemovedOnHead_RenderAfterLastSide(t *testing.T) {
+func TestComposeWorkOrder_AppRemovedOnHead_RenderAfterLastSide(t *testing.T) {
 	c, bus, store := newTestCoordinator(t)
 	ctx := context.Background()
 	seedPR(t, c, store, newPR())
 	appReadyCh := testutil.SubscribeOnce(t, bus, subjects.CoordinatorAppReady)
 	base, head := removedAppSides(t)
 
-	c.handleSideParsed(ctx, sideHeaders(baseSha), base, testutil.NoopAck, testutil.NoopNak)
-	c.handleSideParsed(ctx, sideHeaders(headSha), head, testutil.NoopAck, testutil.NoopNak)
+	c.composeWorkOrder(ctx, sideHeaders(baseSha), base, testutil.NoopAck, testutil.NoopNak)
+	c.composeWorkOrder(ctx, sideHeaders(headSha), head, testutil.NoopAck, testutil.NoopNak)
 	expectSilence(t, appReadyCh, "CoordinatorAppReady before render")
 
 	wo := getWorkOrder(t, store)
@@ -324,44 +324,44 @@ func TestHandleSideParsed_AppRemovedOnHead_RenderAfterLastSide(t *testing.T) {
 
 	h := renderHeaders(baseSha, "manifests/base/removed")
 	h.Set("app.name", "removed")
-	c.handleRenderedManifest(ctx, h, nil, testutil.NoopAck, testutil.NoopNak)
+	c.coordinateReportGeneration(ctx, h, nil, testutil.NoopAck, testutil.NoopNak)
 	assertRemovedAppReady(t, expectMsg(t, appReadyCh, "CoordinatorAppReady for removed app"))
 }
 
 // Same as above but the base render lands before the head side is parsed:
 // the last side must publish app.ready itself.
-func TestHandleSideParsed_AppRemovedOnHead_RenderBeforeLastSide(t *testing.T) {
+func TestComposeWorkOrder_AppRemovedOnHead_RenderBeforeLastSide(t *testing.T) {
 	c, bus, store := newTestCoordinator(t)
 	ctx := context.Background()
 	seedPR(t, c, store, newPR())
 	appReadyCh := testutil.SubscribeOnce(t, bus, subjects.CoordinatorAppReady)
 	base, head := removedAppSides(t)
 
-	c.handleSideParsed(ctx, sideHeaders(baseSha), base, testutil.NoopAck, testutil.NoopNak)
+	c.composeWorkOrder(ctx, sideHeaders(baseSha), base, testutil.NoopAck, testutil.NoopNak)
 	h := renderHeaders(baseSha, "manifests/base/removed")
 	h.Set("app.name", "removed")
-	c.handleRenderedManifest(ctx, h, nil, testutil.NoopAck, testutil.NoopNak)
+	c.coordinateReportGeneration(ctx, h, nil, testutil.NoopAck, testutil.NoopNak)
 	expectSilence(t, appReadyCh, "CoordinatorAppReady before head side parsed")
 
-	c.handleSideParsed(ctx, sideHeaders(headSha), head, testutil.NoopAck, testutil.NoopNak)
+	c.composeWorkOrder(ctx, sideHeaders(headSha), head, testutil.NoopAck, testutil.NoopNak)
 	assertRemovedAppReady(t, expectMsg(t, appReadyCh, "CoordinatorAppReady for removed app"))
 }
 
-func TestHandleSideParsed_MissingPR_Naks(t *testing.T) {
+func TestComposeWorkOrder_MissingPR_Naks(t *testing.T) {
 	c, _, _ := newTestCoordinator(t)
 
 	side, err := internalnats.Marshal([]models.FileParsingResult{{File: origin}})
 	require.NoError(t, err)
 
 	ack, nak, acked, naked := recorder()
-	c.handleSideParsed(context.Background(), sideHeaders(baseSha), side, ack, nak)
+	c.composeWorkOrder(context.Background(), sideHeaders(baseSha), side, ack, nak)
 
 	assert.True(t, *naked)
 	assert.False(t, *acked)
 }
 
 // ---------------------------------------------------------------------------
-// handleRenderedManifest
+// coordinateReportGeneration
 // ---------------------------------------------------------------------------
 
 func renderHeaders(sha, location string) internalnats.Headers {
@@ -385,35 +385,35 @@ func assertAppReady(t *testing.T, hdrs internalnats.Headers) {
 	assert.Equal(t, keys.MsgIDAppReady(owner, repo, number, runId, appName), hdrs[keys.MsgIDHeader])
 }
 
-func TestHandleRenderedManifest_HeadFirst_PublishesAppReady(t *testing.T) {
+func TestCoordinateReportGeneration_HeadFirst_PublishesAppReady(t *testing.T) {
 	c, bus, store := newTestCoordinator(t)
 	ctx := context.Background()
 	seedRenderState(t, c, store)
 	appReadyCh := testutil.SubscribeOnce(t, bus, subjects.CoordinatorAppReady)
 
-	c.handleRenderedManifest(ctx, renderHeaders(headSha, headLoc), nil, testutil.NoopAck, testutil.NoopNak)
+	c.coordinateReportGeneration(ctx, renderHeaders(headSha, headLoc), nil, testutil.NoopAck, testutil.NoopNak)
 	expectSilence(t, appReadyCh, "CoordinatorAppReady after head only")
 
-	c.handleRenderedManifest(ctx, renderHeaders(baseSha, baseLoc), nil, testutil.NoopAck, testutil.NoopNak)
+	c.coordinateReportGeneration(ctx, renderHeaders(baseSha, baseLoc), nil, testutil.NoopAck, testutil.NoopNak)
 	assertAppReady(t, expectMsg(t, appReadyCh, "CoordinatorAppReady"))
 
 	assert.Equal(t, models.AppOrder{Origin: origin, HasBase: true, BaseLoc: baseLoc, HasHead: true, HeadLoc: headLoc}, getWorkOrder(t, store).Bom[appName])
 }
 
-func TestHandleRenderedManifest_BaseFirst_PublishesAppReady(t *testing.T) {
+func TestCoordinateReportGeneration_BaseFirst_PublishesAppReady(t *testing.T) {
 	c, bus, store := newTestCoordinator(t)
 	ctx := context.Background()
 	seedRenderState(t, c, store)
 	appReadyCh := testutil.SubscribeOnce(t, bus, subjects.CoordinatorAppReady)
 
-	c.handleRenderedManifest(ctx, renderHeaders(baseSha, baseLoc), nil, testutil.NoopAck, testutil.NoopNak)
+	c.coordinateReportGeneration(ctx, renderHeaders(baseSha, baseLoc), nil, testutil.NoopAck, testutil.NoopNak)
 	expectSilence(t, appReadyCh, "CoordinatorAppReady after base only")
 
-	c.handleRenderedManifest(ctx, renderHeaders(headSha, headLoc), nil, testutil.NoopAck, testutil.NoopNak)
+	c.coordinateReportGeneration(ctx, renderHeaders(headSha, headLoc), nil, testutil.NoopAck, testutil.NoopNak)
 	assertAppReady(t, expectMsg(t, appReadyCh, "CoordinatorAppReady"))
 }
 
-func TestHandleRenderedManifest_Error_FailsPRAndDropsApp(t *testing.T) {
+func TestCoordinateReportGeneration_Error_FailsPRAndDropsApp(t *testing.T) {
 	c, bus, store := newTestCoordinator(t)
 	seedRenderState(t, c, store)
 	doneCh := testutil.SubscribeOnce(t, bus, subjects.PRProcessingCompleted)
@@ -424,7 +424,7 @@ func TestHandleRenderedManifest_Error_FailsPRAndDropsApp(t *testing.T) {
 	headers.Set("error.msg", errorMsg)
 
 	ack, nak, acked, naked := recorder()
-	c.handleRenderedManifest(context.Background(), headers, nil, ack, nak)
+	c.coordinateReportGeneration(context.Background(), headers, nil, ack, nak)
 
 	assert.True(t, *acked)
 	assert.False(t, *naked)
@@ -439,19 +439,19 @@ func TestHandleRenderedManifest_Error_FailsPRAndDropsApp(t *testing.T) {
 	expectSilence(t, appReadyCh, "CoordinatorAppReady for a failed app")
 }
 
-func TestHandleRenderedManifest_MissingWorkOrder_Naks(t *testing.T) {
+func TestCoordinateReportGeneration_MissingWorkOrder_Naks(t *testing.T) {
 	c, _, store := newTestCoordinator(t)
 	seedPR(t, c, store, newPR())
 
 	ack, nak, acked, naked := recorder()
-	c.handleRenderedManifest(context.Background(), renderHeaders(baseSha, baseLoc), nil, ack, nak)
+	c.coordinateReportGeneration(context.Background(), renderHeaders(baseSha, baseLoc), nil, ack, nak)
 
 	assert.True(t, *naked)
 	assert.False(t, *acked)
 }
 
 // ---------------------------------------------------------------------------
-// handleGeneratedReport
+// updateWorkOrder
 // ---------------------------------------------------------------------------
 
 func diffStatsData(t *testing.T, ds models.DiffStats) []byte {
@@ -461,7 +461,7 @@ func diffStatsData(t *testing.T, ds models.DiffStats) []byte {
 	return data
 }
 
-func TestHandleGeneratedReport_LastApp_MarksSucceededAndPublishes(t *testing.T) {
+func TestUpdateWorkOrder_LastApp_MarksSucceededAndPublishes(t *testing.T) {
 	c, bus, store := newTestCoordinator(t)
 	seedPR(t, c, store, newPR())
 	seedWorkOrder(t, store, appName)
@@ -469,7 +469,7 @@ func TestHandleGeneratedReport_LastApp_MarksSucceededAndPublishes(t *testing.T) 
 
 	ds := models.DiffStats{DiffCount: 3, Additions: 2, Removals: 1}
 	ack, nak, acked, naked := recorder()
-	c.handleGeneratedReport(context.Background(), appHeaders(headSha), diffStatsData(t, ds), ack, nak)
+	c.updateWorkOrder(context.Background(), appHeaders(headSha), diffStatsData(t, ds), ack, nak)
 
 	assert.True(t, *acked)
 	assert.False(t, *naked)
@@ -483,42 +483,42 @@ func TestHandleGeneratedReport_LastApp_MarksSucceededAndPublishes(t *testing.T) 
 	assert.Equal(t, keys.MsgIDDone(owner, repo, number, runId), hdrs[keys.MsgIDHeader])
 }
 
-func TestHandleGeneratedReport_PartialProgress_StaysInProgress(t *testing.T) {
+func TestUpdateWorkOrder_PartialProgress_StaysInProgress(t *testing.T) {
 	c, bus, store := newTestCoordinator(t)
 	seedPR(t, c, store, newPR())
 	seedWorkOrder(t, store, appName, "other")
 	doneCh := testutil.SubscribeOnce(t, bus, subjects.PRProcessingCompleted)
 
-	c.handleGeneratedReport(context.Background(), appHeaders(headSha), diffStatsData(t, models.DiffStats{DiffCount: 1}), testutil.NoopAck, testutil.NoopNak)
+	c.updateWorkOrder(context.Background(), appHeaders(headSha), diffStatsData(t, models.DiffStats{DiffCount: 1}), testutil.NoopAck, testutil.NoopNak)
 
 	assert.Equal(t, models.PipelineInProgress, getPR(t, store).Status)
 	assert.Equal(t, map[string]struct{}{"other": {}}, getWorkOrder(t, store).ToDo)
 	expectSilence(t, doneCh, "PRProcessingCompleted with apps still pending")
 }
 
-func TestHandleGeneratedReport_MissingPR_Naks(t *testing.T) {
+func TestUpdateWorkOrder_MissingPR_Naks(t *testing.T) {
 	c, _, store := newTestCoordinator(t)
 	seedWorkOrder(t, store, appName)
 
 	ack, nak, acked, naked := recorder()
-	c.handleGeneratedReport(context.Background(), appHeaders(headSha), diffStatsData(t, models.DiffStats{}), ack, nak)
+	c.updateWorkOrder(context.Background(), appHeaders(headSha), diffStatsData(t, models.DiffStats{}), ack, nak)
 
 	assert.True(t, *naked)
 	assert.False(t, *acked)
 }
 
-func TestHandleGeneratedReport_MissingWorkOrder_Naks(t *testing.T) {
+func TestUpdateWorkOrder_MissingWorkOrder_Naks(t *testing.T) {
 	c, _, store := newTestCoordinator(t)
 	seedPR(t, c, store, newPR())
 
 	ack, nak, acked, naked := recorder()
-	c.handleGeneratedReport(context.Background(), appHeaders(headSha), diffStatsData(t, models.DiffStats{}), ack, nak)
+	c.updateWorkOrder(context.Background(), appHeaders(headSha), diffStatsData(t, models.DiffStats{}), ack, nak)
 
 	assert.True(t, *naked)
 	assert.False(t, *acked)
 }
 
-func TestHandleGeneratedReport_Redelivery_PublishesCompletedOnce(t *testing.T) {
+func TestUpdateWorkOrder_Redelivery_PublishesCompletedOnce(t *testing.T) {
 	c, bus, store := newTestCoordinator(t)
 	ctx := context.Background()
 	seedPR(t, c, store, newPR())
@@ -526,18 +526,18 @@ func TestHandleGeneratedReport_Redelivery_PublishesCompletedOnce(t *testing.T) {
 	doneCh := testutil.SubscribeN(t, bus, subjects.PRProcessingCompleted, 2)
 
 	data := diffStatsData(t, models.DiffStats{DiffCount: 1})
-	c.handleGeneratedReport(ctx, appHeaders(headSha), data, testutil.NoopAck, testutil.NoopNak)
-	c.handleGeneratedReport(ctx, appHeaders(headSha), data, testutil.NoopAck, testutil.NoopNak)
+	c.updateWorkOrder(ctx, appHeaders(headSha), data, testutil.NoopAck, testutil.NoopNak)
+	c.updateWorkOrder(ctx, appHeaders(headSha), data, testutil.NoopAck, testutil.NoopNak)
 
 	expectMsg(t, doneCh, "PRProcessingCompleted")
 	expectSilence(t, doneCh, "second PRProcessingCompleted; JetStream should dedup on "+keys.MsgIDHeader)
 }
 
 // ---------------------------------------------------------------------------
-// handlePRClosed
+// dropPRFromIndex
 // ---------------------------------------------------------------------------
 
-func TestHandlePRClosed_RemovesFromIndex(t *testing.T) {
+func TestDropPRFromIndex_RemovesFromIndex(t *testing.T) {
 	c, _, store := newTestCoordinator(t)
 	ctx := context.Background()
 	seedPR(t, c, store, newPR())
@@ -548,7 +548,7 @@ func TestHandlePRClosed_RemovesFromIndex(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	c.handlePRClosed(ctx, internalnats.Headers{"RunId": runId}, data, testutil.NoopAck, testutil.NoopNak)
+	c.dropPRFromIndex(ctx, internalnats.Headers{"RunId": runId}, data, testutil.NoopAck, testutil.NoopNak)
 
 	assert.Empty(t, c.index.GetElements())
 	storedIndex, err := internalnats.GetValue[[]models.PullRequest](ctx, store, keys.Index)
@@ -556,6 +556,6 @@ func TestHandlePRClosed_RemovesFromIndex(t *testing.T) {
 	assert.Empty(t, storedIndex)
 }
 
-func TestHandlePRClosed_Acks(t *testing.T) {
-	t.Skip("bug: handlePRClosed (coordinator.go:405-444) never calls ack(); the message is redelivered until MaxDeliver")
+func TestDropPRFromIndex_Acks(t *testing.T) {
+	t.Skip("bug: dropPRFromIndex (coordinator.go:405-444) never calls ack(); the message is redelivered until MaxDeliver")
 }

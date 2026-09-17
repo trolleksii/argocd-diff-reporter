@@ -47,7 +47,7 @@ func (w *DiffWorker) Run(ctx context.Context) error {
 		AckWait:     10 * time.Second,
 		Concurrency: 10,
 		Routes: []nats.Route{
-			{Subjects: []string{subjects.CoordinatorAppReady}, Handler: w.handleDiffReport},
+			{Subjects: []string{subjects.CoordinatorAppReady}, Handler: w.prepareDiffReport},
 		},
 	})
 	if err != nil {
@@ -56,10 +56,10 @@ func (w *DiffWorker) Run(ctx context.Context) error {
 	return nil
 }
 
-func (w *DiffWorker) handleDiffReport(ctx context.Context, headers nats.Headers, _ []byte, ack, nak func() error) {
+func (w *DiffWorker) prepareDiffReport(ctx context.Context, headers nats.Headers, _ []byte, ack, nak func() error) {
 	ctx, span := tracer.Start(
 		otel.GetTextMapPropagator().Extract(ctx, headers),
-		"handleDiffReport",
+		"prepareDiffReport",
 	)
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()

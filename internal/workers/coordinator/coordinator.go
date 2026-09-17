@@ -62,11 +62,11 @@ func (c *Coordinator) Run(ctx context.Context) error {
 		MaxDeliver: 3,
 		AckWait:    10 * time.Second,
 		Routes: []nats.Route{
-			{Subjects: []string{subjects.GitFilesMatched}, Handler: c.indexInterestingPR},
-			{Subjects: []string{subjects.ArgoSideParsed}, Handler: c.handleSideParsed},
-			{Subjects: []string{subjects.ManifestRenderFinished}, Handler: c.handleRenderedManifest},
-			{Subjects: []string{subjects.DiffReportGenerated}, Handler: c.handleGeneratedReport},
-			{Subjects: []string{subjects.WebhookPRClosed}, Handler: c.handlePRClosed},
+			{Subjects: []string{subjects.GitFilesMatched}, Handler: c.indexQualifyingPR},
+			{Subjects: []string{subjects.ArgoSideParsed}, Handler: c.composeWorkOrder},
+			{Subjects: []string{subjects.ManifestRenderFinished}, Handler: c.coordinateReportGeneration},
+			{Subjects: []string{subjects.DiffReportGenerated}, Handler: c.updateWorkOrder},
+			{Subjects: []string{subjects.WebhookPRClosed}, Handler: c.dropPRFromIndex},
 		},
 	})
 	if err != nil {
@@ -75,11 +75,11 @@ func (c *Coordinator) Run(ctx context.Context) error {
 	return nil
 }
 
-// indexInterestingPR waits for non-empty PR events
-func (c *Coordinator) indexInterestingPR(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
+// indexQualifyingPR waits for non-empty PR events
+func (c *Coordinator) indexQualifyingPR(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
 	ctx, span := tracer.Start(
 		otel.GetTextMapPropagator().Extract(ctx, headers),
-		"indexInterestingPR",
+		"indexQualifyingPR",
 	)
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
@@ -111,10 +111,10 @@ func (c *Coordinator) indexInterestingPR(ctx context.Context, headers nats.Heade
 	ack()
 }
 
-func (c *Coordinator) handleSideParsed(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
+func (c *Coordinator) composeWorkOrder(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
 	ctx, span := tracer.Start(
 		otel.GetTextMapPropagator().Extract(ctx, headers),
-		"handleSideParsed",
+		"composeWorkOrder",
 	)
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
@@ -237,10 +237,10 @@ func (c *Coordinator) handleSideParsed(ctx context.Context, headers nats.Headers
 	ack()
 }
 
-func (c *Coordinator) handleRenderedManifest(ctx context.Context, headers nats.Headers, _ []byte, ack, nak func() error) {
+func (c *Coordinator) coordinateReportGeneration(ctx context.Context, headers nats.Headers, _ []byte, ack, nak func() error) {
 	ctx, span := tracer.Start(
 		otel.GetTextMapPropagator().Extract(ctx, headers),
-		"handleRenderedManifest",
+		"coordinateReportGeneration",
 	)
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
@@ -352,10 +352,10 @@ func (c *Coordinator) publishAppReady(ctx context.Context, headers nats.Headers,
 	c.bus.Publish(ctx, subjects.CoordinatorAppReady, headers, nil)
 }
 
-func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
+func (c *Coordinator) updateWorkOrder(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
 	ctx, span := tracer.Start(
 		otel.GetTextMapPropagator().Extract(ctx, headers),
-		"handleGeneratedReport",
+		"updateWorkOrder",
 	)
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
@@ -449,10 +449,10 @@ func (c *Coordinator) handleGeneratedReport(ctx context.Context, headers nats.He
 	ack()
 }
 
-func (c *Coordinator) handlePRClosed(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
+func (c *Coordinator) dropPRFromIndex(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
 	ctx, span := tracer.Start(
 		otel.GetTextMapPropagator().Extract(ctx, headers),
-		"handlePRClosed",
+		"dropPRFromIndex",
 	)
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()

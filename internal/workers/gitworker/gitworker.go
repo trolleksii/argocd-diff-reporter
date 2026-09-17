@@ -66,10 +66,10 @@ func (w *GitWorker) Run(ctx context.Context) error {
 		AckWait:     5 * time.Minute,
 		Concurrency: 2,
 		Routes: []nats.Route{
-			{Subjects: []string{subjects.WebhookPRChanged}, Handler: w.handlePRChanged},
-			{Subjects: []string{subjects.GitFilesResolved}, Handler: w.handleFilesResolved},
-			{Subjects: []string{subjects.ArgoHelmGitParsed}, Handler: w.handleHelmGitParsed},
-			{Subjects: []string{subjects.ArgoDirectoryGitParsed}, Handler: w.handleDirectoryGitParsed},
+			{Subjects: []string{subjects.WebhookPRChanged}, Handler: w.resolvePRFileChanges},
+			{Subjects: []string{subjects.GitFilesResolved}, Handler: w.snapshotChangedFiles},
+			{Subjects: []string{subjects.ArgoHelmGitParsed}, Handler: w.fetchHelmChartFromGitRepo},
+			{Subjects: []string{subjects.ArgoDirectoryGitParsed}, Handler: w.fetchDirectoryFromGitRepo},
 		},
 	})
 	if err != nil {
@@ -78,10 +78,10 @@ func (w *GitWorker) Run(ctx context.Context) error {
 	return nil
 }
 
-func (w *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
+func (w *GitWorker) resolvePRFileChanges(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
 	ctx, span := tracer.Start(
 		otel.GetTextMapPropagator().Extract(ctx, headers),
-		"handlePRChanged",
+		"resolvePRFileChanges",
 	)
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
@@ -183,10 +183,10 @@ func (w *GitWorker) handlePRChanged(ctx context.Context, headers nats.Headers, d
 	ack()
 }
 
-func (w *GitWorker) handleFilesResolved(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
+func (w *GitWorker) snapshotChangedFiles(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
 	ctx, span := tracer.Start(
 		otel.GetTextMapPropagator().Extract(ctx, headers),
-		"handleFilesResolved",
+		"snapshotChangedFiles",
 	)
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()
@@ -236,11 +236,11 @@ func (w *GitWorker) handleFilesResolved(ctx context.Context, headers nats.Header
 	ack()
 }
 
-func (w *GitWorker) handleHelmGitParsed(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
+func (w *GitWorker) fetchHelmChartFromGitRepo(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
 	w.fetchSource(ctx, headers, data, ack, nak, subjects.GitChartFetched, subjects.ManifestRenderFinished)
 }
 
-func (w *GitWorker) handleDirectoryGitParsed(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
+func (w *GitWorker) fetchDirectoryFromGitRepo(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
 	w.fetchSource(ctx, headers, data, ack, nak, subjects.GitDirectoryFetched, subjects.ManifestRenderFinished)
 }
 

@@ -14,10 +14,10 @@ package gitworker
 //   fast and hermetic.
 //
 //   Tests in this section:
-//   - TestHandlePRChanged_PublishesMatchedAndResolved
-//   - TestHandleFilesResolved_PublishesFilesSnapshotted
-//   - TestHandleHelmGitParsed_PublishesChartFetched (via fetchSource)
-//   - TestHandleDirectoryGitParsed_PublishesDirectoryFetched (via fetchSource)
+//   - TestResolvePRFileChanges_PublishesMatchedAndResolved
+//   - TestSnapshotChangedFiles_PublishesFilesSnapshotted
+//   - TestFetchHelmChartFromGitRepo_PublishesChartFetched (via fetchSource)
+//   - TestFetchDirectoryFromGitRepo_PublishesDirectoryFetched (via fetchSource)
 //   - TestFetchSource_SnapshotError_PublishesRenderFinished
 
 import (
@@ -329,12 +329,12 @@ func (s *stubAuth) GetBasicHTTPAuth() (*githttp.BasicAuth, error) {
 	return nil, s.err
 }
 
-// TestHandlePRChanged_PublishesMatchedAndResolved verifies that handlePRChanged,
+// TestResolvePRFileChanges_PublishesMatchedAndResolved verifies that resolvePRFileChanges,
 // given a stubbed repository returning one changed file present on both sides,
 // publishes subjects.GitFilesMatched (Msg-Id keys.MsgIDSides) followed by two
 // subjects.GitFilesResolved messages — one per side — carrying the pr.* headers,
 // file.withBase/file.withHead, and sha.active set to that side's SHA.
-func TestHandlePRChanged_PublishesMatchedAndResolved(t *testing.T) {
+func TestResolvePRFileChanges_PublishesMatchedAndResolved(t *testing.T) {
 	w, bus := newTestWorker(t)
 
 	stub := &stubRepo{
@@ -362,7 +362,7 @@ func TestHandlePRChanged_PublishesMatchedAndResolved(t *testing.T) {
 	ack := func() error { ackCalled = true; return nil }
 
 	ctx := context.Background()
-	w.handlePRChanged(ctx, internalnats.Headers{"RunId": runId}, data, ack, testutil.NoopNak)
+	w.resolvePRFileChanges(ctx, internalnats.Headers{"RunId": runId}, data, ack, testutil.NoopNak)
 	assert.True(t, ackCalled, "ack should be called after publishing")
 
 	select {
@@ -400,10 +400,10 @@ func TestHandlePRChanged_PublishesMatchedAndResolved(t *testing.T) {
 	assert.ElementsMatch(t, []string{"base-sha", "head-sha"}, shaActiveValues)
 }
 
-// TestHandlePRChanged_RepositoryError_Naks verifies that when the repository's
-// ListChangedFiles returns an error, handlePRChanged calls nak and does not
+// TestResolvePRFileChanges_RepositoryError_Naks verifies that when the repository's
+// ListChangedFiles returns an error, resolvePRFileChanges calls nak and does not
 // publish any message to subjects.GitFilesResolved.
-func TestHandlePRChanged_RepositoryError_Naks(t *testing.T) {
+func TestResolvePRFileChanges_RepositoryError_Naks(t *testing.T) {
 	w, bus := newTestWorker(t)
 
 	w.repos[repoKey("org", "repo")] = &stubRepoError{err: errors.New("list failed")}
@@ -426,7 +426,7 @@ func TestHandlePRChanged_RepositoryError_Naks(t *testing.T) {
 	ack := func() error { ackCalled = true; return nil }
 
 	ctx := context.Background()
-	w.handlePRChanged(ctx, internalnats.Headers{"RunId": "run-repo-error"}, data, ack, nak)
+	w.resolvePRFileChanges(ctx, internalnats.Headers{"RunId": "run-repo-error"}, data, ack, nak)
 
 	assert.True(t, nakCalled, "nak should be called on repository error")
 	assert.False(t, ackCalled, "ack should not be called on repository error")
@@ -439,11 +439,11 @@ func TestHandlePRChanged_RepositoryError_Naks(t *testing.T) {
 	}
 }
 
-// TestHandlePRChanged_MissingRepo_Naks verifies that when w.repos does not
+// TestResolvePRFileChanges_MissingRepo_Naks verifies that when w.repos does not
 // contain the requested URL, getOrCreateRepo falls through to
 // repository.NewRepository which calls w.auth.GetBasicHTTPAuth(). When auth
-// returns an error, handlePRChanged calls nak and publishes nothing.
-func TestHandlePRChanged_MissingRepo_Naks(t *testing.T) {
+// returns an error, resolvePRFileChanges calls nak and publishes nothing.
+func TestResolvePRFileChanges_MissingRepo_Naks(t *testing.T) {
 	w, bus := newTestWorker(t)
 
 	// Leave w.repos empty (cache miss) and inject a failing auth.
@@ -466,7 +466,7 @@ func TestHandlePRChanged_MissingRepo_Naks(t *testing.T) {
 	ack := func() error { ackCalled = true; return nil }
 
 	ctx := context.Background()
-	w.handlePRChanged(ctx, internalnats.Headers{"RunId": "run-missing-repo"}, data, ack, nak)
+	w.resolvePRFileChanges(ctx, internalnats.Headers{"RunId": "run-missing-repo"}, data, ack, nak)
 
 	assert.True(t, nakCalled, "nak should be called when auth fails during repo creation")
 	assert.False(t, ackCalled, "ack should not be called when auth fails during repo creation")
@@ -479,10 +479,10 @@ func TestHandlePRChanged_MissingRepo_Naks(t *testing.T) {
 	}
 }
 
-// TestHandleFilesResolved_PublishesFilesSnapshotted verifies that
-// handleFilesResolved, given a valid file list and a pre-populated repository,
+// TestSnapshotChangedFiles_PublishesFilesSnapshotted verifies that
+// snapshotChangedFiles, given a valid file list and a pre-populated repository,
 // publishes subjects.GitFilesSnapshotted with pr.files.snapshot set.
-func TestHandleFilesResolved_PublishesFilesSnapshotted(t *testing.T) {
+func TestSnapshotChangedFiles_PublishesFilesSnapshotted(t *testing.T) {
 	w, bus := newTestWorker(t)
 
 	snapshotsDir := t.TempDir()
@@ -509,7 +509,7 @@ func TestHandleFilesResolved_PublishesFilesSnapshotted(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	w.handleFilesResolved(ctx, headers, data, testutil.NoopAck, testutil.NoopNak)
+	w.snapshotChangedFiles(ctx, headers, data, testutil.NoopAck, testutil.NoopNak)
 
 	select {
 	case hdrs := <-snapshottedCh:
@@ -523,11 +523,11 @@ func TestHandleFilesResolved_PublishesFilesSnapshotted(t *testing.T) {
 	}
 }
 
-// TestHandleHelmGitParsed_PublishesChartFetched verifies that fetchSource, when
-// invoked via handleHelmGitParsed with a valid ArgoAppSpec referencing a
+// TestFetchHelmChartFromGitRepo_PublishesChartFetched verifies that fetchSource, when
+// invoked via fetchHelmChartFromGitRepo with a valid ArgoAppSpec referencing a
 // pre-populated repository, publishes subjects.GitChartFetched with the
 // chart.location header set.
-func TestHandleHelmGitParsed_PublishesChartFetched(t *testing.T) {
+func TestFetchHelmChartFromGitRepo_PublishesChartFetched(t *testing.T) {
 	w, bus := newTestWorker(t)
 
 	snapshotsDir := t.TempDir()
@@ -560,7 +560,7 @@ func TestHandleHelmGitParsed_PublishesChartFetched(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	w.handleHelmGitParsed(ctx, headers, data, testutil.NoopAck, testutil.NoopNak)
+	w.fetchHelmChartFromGitRepo(ctx, headers, data, testutil.NoopAck, testutil.NoopNak)
 
 	select {
 	case hdrs := <-chartFetchedCh:
@@ -572,11 +572,11 @@ func TestHandleHelmGitParsed_PublishesChartFetched(t *testing.T) {
 	}
 }
 
-// TestHandleDirectoryGitParsed_PublishesDirectoryFetched verifies that
-// fetchSource, when invoked via handleDirectoryGitParsed with a valid
+// TestFetchDirectoryFromGitRepo_PublishesDirectoryFetched verifies that
+// fetchSource, when invoked via fetchDirectoryFromGitRepo with a valid
 // ArgoAppSpec referencing a pre-populated repository, publishes
 // subjects.GitDirectoryFetched with the chart.location header set.
-func TestHandleDirectoryGitParsed_PublishesDirectoryFetched(t *testing.T) {
+func TestFetchDirectoryFromGitRepo_PublishesDirectoryFetched(t *testing.T) {
 	w, bus := newTestWorker(t)
 
 	stub := &stubRepo{}
@@ -607,7 +607,7 @@ func TestHandleDirectoryGitParsed_PublishesDirectoryFetched(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	w.handleDirectoryGitParsed(ctx, headers, data, testutil.NoopAck, testutil.NoopNak)
+	w.fetchDirectoryFromGitRepo(ctx, headers, data, testutil.NoopAck, testutil.NoopNak)
 
 	select {
 	case hdrs := <-directoryFetchedCh:
@@ -656,7 +656,7 @@ func TestFetchSource_SnapshotError_PublishesRenderFinished(t *testing.T) {
 	nak := func() error { nakCalled = true; return nil }
 
 	ctx := context.Background()
-	w.handleHelmGitParsed(ctx, headers, data, ack, nak)
+	w.fetchHelmChartFromGitRepo(ctx, headers, data, ack, nak)
 
 	assert.True(t, ackCalled, "ack should be called on fetch failure")
 	assert.False(t, nakCalled, "nak should not be called on fetch failure")
@@ -682,9 +682,9 @@ func TestFetchSource_SnapshotError_PublishesRenderFinished(t *testing.T) {
 // Part 3: Unmarshal error tests
 // ---------------------------------------------------------------------------
 
-// TestHandlePRChanged_UnmarshalError_Naks verifies that handlePRChanged calls
+// TestResolvePRFileChanges_UnmarshalError_Naks verifies that resolvePRFileChanges calls
 // nak (not ack) and publishes nothing when given unparseable data.
-func TestHandlePRChanged_UnmarshalError_Naks(t *testing.T) {
+func TestResolvePRFileChanges_UnmarshalError_Naks(t *testing.T) {
 	w, bus := newTestWorker(t)
 
 	resolvedCh := testutil.SubscribeOnce(t, bus, subjects.GitFilesResolved)
@@ -694,7 +694,7 @@ func TestHandlePRChanged_UnmarshalError_Naks(t *testing.T) {
 	nak := func() error { nakCalled = true; return nil }
 
 	ctx := context.Background()
-	w.handlePRChanged(ctx, internalnats.Headers{"RunId": "run-pr-unmarshal"}, []byte("invalid"), ack, nak)
+	w.resolvePRFileChanges(ctx, internalnats.Headers{"RunId": "run-pr-unmarshal"}, []byte("invalid"), ack, nak)
 
 	assert.True(t, nakCalled, "nak should be called on unmarshal error")
 	assert.False(t, ackCalled, "ack should not be called on unmarshal error")
@@ -707,9 +707,9 @@ func TestHandlePRChanged_UnmarshalError_Naks(t *testing.T) {
 	}
 }
 
-// TestHandleFilesResolved_UnmarshalError_Naks verifies that handleFilesResolved
+// TestSnapshotChangedFiles_UnmarshalError_Naks verifies that snapshotChangedFiles
 // calls nak (not ack) and publishes nothing when given unparseable data.
-func TestHandleFilesResolved_UnmarshalError_Naks(t *testing.T) {
+func TestSnapshotChangedFiles_UnmarshalError_Naks(t *testing.T) {
 	w, bus := newTestWorker(t)
 
 	snapshottedCh := testutil.SubscribeOnce(t, bus, subjects.GitFilesSnapshotted)
@@ -727,7 +727,7 @@ func TestHandleFilesResolved_UnmarshalError_Naks(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	w.handleFilesResolved(ctx, headers, []byte("invalid"), ack, nak)
+	w.snapshotChangedFiles(ctx, headers, []byte("invalid"), ack, nak)
 
 	assert.True(t, nakCalled, "nak should be called on unmarshal error")
 	assert.False(t, ackCalled, "ack should not be called on unmarshal error")
@@ -740,9 +740,9 @@ func TestHandleFilesResolved_UnmarshalError_Naks(t *testing.T) {
 	}
 }
 
-// TestHandleHelmGitParsed_UnmarshalError_Naks verifies that handleHelmGitParsed
+// TestFetchHelmChartFromGitRepo_UnmarshalError_Naks verifies that fetchHelmChartFromGitRepo
 // calls nak (not ack) and publishes nothing when given unparseable data.
-func TestHandleHelmGitParsed_UnmarshalError_Naks(t *testing.T) {
+func TestFetchHelmChartFromGitRepo_UnmarshalError_Naks(t *testing.T) {
 	w, bus := newTestWorker(t)
 
 	chartFetchedCh := testutil.SubscribeOnce(t, bus, subjects.GitChartFetched)
@@ -760,7 +760,7 @@ func TestHandleHelmGitParsed_UnmarshalError_Naks(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	w.handleHelmGitParsed(ctx, headers, []byte("invalid"), ack, nak)
+	w.fetchHelmChartFromGitRepo(ctx, headers, []byte("invalid"), ack, nak)
 
 	assert.True(t, nakCalled, "nak should be called on unmarshal error")
 	assert.False(t, ackCalled, "ack should not be called on unmarshal error")
@@ -773,10 +773,10 @@ func TestHandleHelmGitParsed_UnmarshalError_Naks(t *testing.T) {
 	}
 }
 
-// TestHandleDirectoryGitParsed_UnmarshalError_Naks verifies that
-// handleDirectoryGitParsed calls nak (not ack) and publishes nothing when given
+// TestFetchDirectoryFromGitRepo_UnmarshalError_Naks verifies that
+// fetchDirectoryFromGitRepo calls nak (not ack) and publishes nothing when given
 // unparseable data.
-func TestHandleDirectoryGitParsed_UnmarshalError_Naks(t *testing.T) {
+func TestFetchDirectoryFromGitRepo_UnmarshalError_Naks(t *testing.T) {
 	w, bus := newTestWorker(t)
 
 	directoryFetchedCh := testutil.SubscribeOnce(t, bus, subjects.GitDirectoryFetched)
@@ -794,7 +794,7 @@ func TestHandleDirectoryGitParsed_UnmarshalError_Naks(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	w.handleDirectoryGitParsed(ctx, headers, []byte("invalid"), ack, nak)
+	w.fetchDirectoryFromGitRepo(ctx, headers, []byte("invalid"), ack, nak)
 
 	assert.True(t, nakCalled, "nak should be called on unmarshal error")
 	assert.False(t, ackCalled, "ack should not be called on unmarshal error")

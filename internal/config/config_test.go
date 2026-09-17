@@ -59,7 +59,7 @@ workers:
     snapshotBaseDir: "my-snaps"
   helmWorker:
     chartCacheDir: "my-charts"
-tracing:
+telemetry:
   service: "custom-service"
 github:
   appId: 1

@@ -53,7 +53,7 @@ func (w *ArgoWorker) Run(ctx context.Context) error {
 		// message is redelivered while the first attempt is still running.
 		AckWait:     time.Minute,
 		Concurrency: 4,
-		Routes:      []nats.Route{{Subjects: []string{subjects.GitFilesSnapshotted}, Handler: w.handleSnapshottedFiles}},
+		Routes:      []nats.Route{{Subjects: []string{subjects.GitFilesSnapshotted}, Handler: w.parseForArgoResources}},
 	})
 	if err != nil {
 		return fmt.Errorf("argotemplateengine: consume: %w", err)
@@ -61,10 +61,10 @@ func (w *ArgoWorker) Run(ctx context.Context) error {
 	return nil
 }
 
-func (w *ArgoWorker) handleSnapshottedFiles(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
+func (w *ArgoWorker) parseForArgoResources(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
 	ctx, span := tracer.Start(
 		otel.GetTextMapPropagator().Extract(ctx, headers),
-		"handleSnapshottedFiles",
+		"parseForArgoResources",
 	)
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()

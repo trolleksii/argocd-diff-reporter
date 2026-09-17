@@ -51,7 +51,7 @@ func (w *DirectoryWorker) Run(ctx context.Context) error {
 		AckWait:     time.Minute,
 		Concurrency: 8,
 		Routes: []nats.Route{
-			{Subjects: []string{subjects.GitDirectoryFetched}, Handler: w.handleDirectoryRender},
+			{Subjects: []string{subjects.GitDirectoryFetched}, Handler: w.renderManifestsFromDir},
 		},
 	})
 	if err != nil {
@@ -60,10 +60,10 @@ func (w *DirectoryWorker) Run(ctx context.Context) error {
 	return nil
 }
 
-func (w *DirectoryWorker) handleDirectoryRender(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
+func (w *DirectoryWorker) renderManifestsFromDir(ctx context.Context, headers nats.Headers, data []byte, ack, nak func() error) {
 	ctx, span := tracer.Start(
 		otel.GetTextMapPropagator().Extract(ctx, headers),
-		"handleDirectoryRender",
+		"renderManifestsFromDir",
 	)
 	otel.GetTextMapPropagator().Inject(ctx, headers)
 	defer span.End()

@@ -52,10 +52,10 @@ func readTestdata(t *testing.T, name string) string {
 }
 
 // ---------------------------------------------------------------------------
-// handleDiffReport — DiffStats correctness
+// prepareDiffReport — DiffStats correctness
 // ---------------------------------------------------------------------------
 
-func TestHandleDiffReport_DiffStatsCorrect(t *testing.T) {
+func TestPrepareDiffReport_DiffStatsCorrect(t *testing.T) {
 	w, _, store := newTestDiffWorker(t)
 	ctx := context.Background()
 
@@ -90,7 +90,7 @@ func TestHandleDiffReport_DiffStatsCorrect(t *testing.T) {
 		"manifest.head.location": headLoc,
 	}
 
-	w.handleDiffReport(ctx, headers, nil, testutil.NoopAck, testutil.NoopNak)
+	w.prepareDiffReport(ctx, headers, nil, testutil.NoopAck, testutil.NoopNak)
 
 	reportKey := keys.Report(owner, repo, number, baseSha, headSha, origin, appName)
 	storedReport, err := internalnats.GetObject[models.Report](ctx, store, reportKey)
@@ -108,10 +108,10 @@ func TestHandleDiffReport_DiffStatsCorrect(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// handleDiffReport — report stored at expected key
+// prepareDiffReport — report stored at expected key
 // ---------------------------------------------------------------------------
 
-func TestHandleDiffReport_ReportStoredAtExpectedKey(t *testing.T) {
+func TestPrepareDiffReport_ReportStoredAtExpectedKey(t *testing.T) {
 	w, _, store := newTestDiffWorker(t)
 	ctx := context.Background()
 
@@ -145,7 +145,7 @@ func TestHandleDiffReport_ReportStoredAtExpectedKey(t *testing.T) {
 		"manifest.head.location": headLoc,
 	}
 
-	w.handleDiffReport(ctx, headers, nil, testutil.NoopAck, testutil.NoopNak)
+	w.prepareDiffReport(ctx, headers, nil, testutil.NoopAck, testutil.NoopNak)
 
 	expectedKey := keys.Report(owner, repo, number, baseSha, headSha, origin, appName)
 	_, err := internalnats.GetObject[models.Report](ctx, store, expectedKey)
@@ -153,10 +153,10 @@ func TestHandleDiffReport_ReportStoredAtExpectedKey(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// handleDiffReport — diff.report.generated published upon completion
+// prepareDiffReport — diff.report.generated published upon completion
 // ---------------------------------------------------------------------------
 
-func TestHandleDiffReport_PublishesDiffReportGenerated(t *testing.T) {
+func TestPrepareDiffReport_PublishesDiffReportGenerated(t *testing.T) {
 	w, bus, store := newTestDiffWorker(t)
 	ctx := context.Background()
 
@@ -192,7 +192,7 @@ func TestHandleDiffReport_PublishesDiffReportGenerated(t *testing.T) {
 		"manifest.head.location": headLoc,
 	}
 
-	w.handleDiffReport(ctx, headers, nil, testutil.NoopAck, testutil.NoopNak)
+	w.prepareDiffReport(ctx, headers, nil, testutil.NoopAck, testutil.NoopNak)
 
 	select {
 	case hdrs := <-hdrCh:
@@ -214,10 +214,10 @@ func TestHandleDiffReport_PublishesDiffReportGenerated(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// handleDiffReport — identical manifests produce zero diff
+// prepareDiffReport — identical manifests produce zero diff
 // ---------------------------------------------------------------------------
 
-func TestHandleDiffReport_IdenticalManifests_ZeroDiff(t *testing.T) {
+func TestPrepareDiffReport_IdenticalManifests_ZeroDiff(t *testing.T) {
 	w, _, store := newTestDiffWorker(t)
 	ctx := context.Background()
 
@@ -253,7 +253,7 @@ func TestHandleDiffReport_IdenticalManifests_ZeroDiff(t *testing.T) {
 		"manifest.head.location": headLoc,
 	}
 
-	w.handleDiffReport(ctx, headers, nil, testutil.NoopAck, testutil.NoopNak)
+	w.prepareDiffReport(ctx, headers, nil, testutil.NoopAck, testutil.NoopNak)
 
 	reportKey := keys.Report(owner, repo, number, baseSha, headSha, origin, appName)
 	storedReport, err := internalnats.GetObject[models.Report](ctx, store, reportKey)
@@ -263,10 +263,10 @@ func TestHandleDiffReport_IdenticalManifests_ZeroDiff(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// handleDiffReport — empty base location means "no manifest on this side"
+// prepareDiffReport — empty base location means "no manifest on this side"
 // ---------------------------------------------------------------------------
 
-func TestHandleDiffReport_EmptyBaseLocation_ReportsAdditions(t *testing.T) {
+func TestPrepareDiffReport_EmptyBaseLocation_ReportsAdditions(t *testing.T) {
 	w, bus, store := newTestDiffWorker(t)
 	ctx := context.Background()
 
@@ -305,7 +305,7 @@ func TestHandleDiffReport_EmptyBaseLocation_ReportsAdditions(t *testing.T) {
 		"manifest.head.location": headLoc,
 	}
 
-	w.handleDiffReport(ctx, headers, nil, ack, nak)
+	w.prepareDiffReport(ctx, headers, nil, ack, nak)
 
 	assert.True(t, ackCalled, "ack should be called when the base side is empty")
 	assert.False(t, nakCalled, "nak should not be called when the base side is empty")
@@ -325,10 +325,10 @@ func TestHandleDiffReport_EmptyBaseLocation_ReportsAdditions(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// handleDiffReport — non-empty location that is missing from the store naks
+// prepareDiffReport — non-empty location that is missing from the store naks
 // ---------------------------------------------------------------------------
 
-func TestHandleDiffReport_MissingBaseManifest_Naks(t *testing.T) {
+func TestPrepareDiffReport_MissingBaseManifest_Naks(t *testing.T) {
 	w, _, _ := newTestDiffWorker(t)
 	ctx := context.Background()
 
@@ -359,11 +359,11 @@ func TestHandleDiffReport_MissingBaseManifest_Naks(t *testing.T) {
 		"manifest.head.location": keys.Manifest(owner, repo, number, headSha, origin, appName),
 	}
 
-	w.handleDiffReport(ctx, headers, nil, testutil.NoopAck, nak)
+	w.prepareDiffReport(ctx, headers, nil, testutil.NoopAck, nak)
 	assert.True(t, nakCalled, "nak should be called when base manifest is not found in the object store")
 }
 
-func TestHandleDiffReport_MissingHeadManifest_Naks(t *testing.T) {
+func TestPrepareDiffReport_MissingHeadManifest_Naks(t *testing.T) {
 	w, _, store := newTestDiffWorker(t)
 	ctx := context.Background()
 
@@ -397,15 +397,15 @@ func TestHandleDiffReport_MissingHeadManifest_Naks(t *testing.T) {
 		"manifest.head.location": keys.Manifest(owner, repo, number, headSha, origin, appName),
 	}
 
-	w.handleDiffReport(ctx, headers, nil, testutil.NoopAck, nak)
+	w.prepareDiffReport(ctx, headers, nil, testutil.NoopAck, nak)
 	assert.True(t, nakCalled, "nak should be called when head manifest is not found in the object store")
 }
 
 // ---------------------------------------------------------------------------
-// handleDiffReport — invalid base manifest YAML naks
+// prepareDiffReport — invalid base manifest YAML naks
 // ---------------------------------------------------------------------------
 
-func TestHandleDiffReport_InvalidBaseYAML_Naks(t *testing.T) {
+func TestPrepareDiffReport_InvalidBaseYAML_Naks(t *testing.T) {
 	w, bus, store := newTestDiffWorker(t)
 	ctx := context.Background()
 
@@ -446,7 +446,7 @@ func TestHandleDiffReport_InvalidBaseYAML_Naks(t *testing.T) {
 
 	reportGeneratedCh := testutil.SubscribeOnce(t, bus, subjects.DiffReportGenerated)
 
-	w.handleDiffReport(ctx, headers, nil, ack, nak)
+	w.prepareDiffReport(ctx, headers, nil, ack, nak)
 
 	assert.True(t, nakCalled, "nak should be called when base manifest contains invalid YAML")
 	assert.False(t, ackCalled, "ack should not be called when base manifest contains invalid YAML")
@@ -460,10 +460,10 @@ func TestHandleDiffReport_InvalidBaseYAML_Naks(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// handleDiffReport — invalid head manifest YAML naks
+// prepareDiffReport — invalid head manifest YAML naks
 // ---------------------------------------------------------------------------
 
-func TestHandleDiffReport_InvalidHeadYAML_Naks(t *testing.T) {
+func TestPrepareDiffReport_InvalidHeadYAML_Naks(t *testing.T) {
 	w, bus, store := newTestDiffWorker(t)
 	ctx := context.Background()
 
@@ -504,7 +504,7 @@ func TestHandleDiffReport_InvalidHeadYAML_Naks(t *testing.T) {
 
 	reportGeneratedCh := testutil.SubscribeOnce(t, bus, subjects.DiffReportGenerated)
 
-	w.handleDiffReport(ctx, headers, nil, ack, nak)
+	w.prepareDiffReport(ctx, headers, nil, ack, nak)
 
 	assert.True(t, nakCalled, "nak should be called when head manifest contains invalid YAML")
 	assert.False(t, ackCalled, "ack should not be called when head manifest contains invalid YAML")

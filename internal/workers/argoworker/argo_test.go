@@ -83,7 +83,7 @@ func TestParseFileResources_EmptyFile(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// handleSnapshottedFiles integration tests
+// parseForArgoResources integration tests
 // ---------------------------------------------------------------------------
 
 // argoStreamSubjects lists all subjects the ArgoWorker publishes so the test
@@ -314,7 +314,7 @@ func makeSnapshotDir(t *testing.T, fileNames ...string) string {
 	return dir
 }
 
-// filesPayload serialises the []string file list handleSnapshottedFiles expects.
+// filesPayload serialises the []string file list parseForArgoResources expects.
 func filesPayload(t *testing.T, files ...string) []byte {
 	t.Helper()
 	data, err := internalnats.Marshal(files)
@@ -340,7 +340,7 @@ func awaitSide(t *testing.T, ch <-chan []byte) []models.FileParsingResult {
 // OCI subject routing
 // ---------------------------------------------------------------------------
 
-func TestHandleSnapshottedFiles_OCIAppRoutedToOCISubject(t *testing.T) {
+func TestParseForArgoResources_OCIAppRoutedToOCISubject(t *testing.T) {
 	// The Application YAML on disk has no Helm — use the rendererFunc path via
 	// an ApplicationSet file so we fully exercise rendererFunc injection.
 	rendererFunc := func(_ appv1alpha1.ApplicationSet) ([]appv1alpha1.Application, error) {
@@ -354,7 +354,7 @@ func TestHandleSnapshottedFiles_OCIAppRoutedToOCISubject(t *testing.T) {
 	snapshotDir := makeSnapshotDir(t, "applicationset.yaml")
 	headers := testHeaders("run-1", snapshotDir)
 
-	w.handleSnapshottedFiles(context.Background(), headers, filesPayload(t, "applicationset.yaml"), testutil.NoopAck, testutil.NoopNak)
+	w.parseForArgoResources(context.Background(), headers, filesPayload(t, "applicationset.yaml"), testutil.NoopAck, testutil.NoopNak)
 
 	select {
 	case hdrs := <-ociCh:
@@ -369,7 +369,7 @@ func TestHandleSnapshottedFiles_OCIAppRoutedToOCISubject(t *testing.T) {
 // Git subject routing
 // ---------------------------------------------------------------------------
 
-func TestHandleSnapshottedFiles_GitAppRoutedToGitSubject(t *testing.T) {
+func TestParseForArgoResources_GitAppRoutedToGitSubject(t *testing.T) {
 	rendererFunc := func(_ appv1alpha1.ApplicationSet) ([]appv1alpha1.Application, error) {
 		return []appv1alpha1.Application{
 			helmApp("git-app", "git@github.com:example/charts.git", "charts/my-app", ""),
@@ -381,7 +381,7 @@ func TestHandleSnapshottedFiles_GitAppRoutedToGitSubject(t *testing.T) {
 	snapshotDir := makeSnapshotDir(t, "applicationset.yaml")
 	headers := testHeaders("run-2", snapshotDir)
 
-	w.handleSnapshottedFiles(context.Background(), headers, filesPayload(t, "applicationset.yaml"), testutil.NoopAck, testutil.NoopNak)
+	w.parseForArgoResources(context.Background(), headers, filesPayload(t, "applicationset.yaml"), testutil.NoopAck, testutil.NoopNak)
 
 	select {
 	case hdrs := <-gitCh:
@@ -396,7 +396,7 @@ func TestHandleSnapshottedFiles_GitAppRoutedToGitSubject(t *testing.T) {
 // HTTP subject routing
 // ---------------------------------------------------------------------------
 
-func TestHandleSnapshottedFiles_HTTPAppRoutedToHTTPSubject(t *testing.T) {
+func TestParseForArgoResources_HTTPAppRoutedToHTTPSubject(t *testing.T) {
 	rendererFunc := func(_ appv1alpha1.ApplicationSet) ([]appv1alpha1.Application, error) {
 		return []appv1alpha1.Application{
 			helmApp("http-app", "https://charts.example.com", "", "my-chart"),
@@ -408,7 +408,7 @@ func TestHandleSnapshottedFiles_HTTPAppRoutedToHTTPSubject(t *testing.T) {
 	snapshotDir := makeSnapshotDir(t, "applicationset.yaml")
 	headers := testHeaders("run-3", snapshotDir)
 
-	w.handleSnapshottedFiles(context.Background(), headers, filesPayload(t, "applicationset.yaml"), testutil.NoopAck, testutil.NoopNak)
+	w.parseForArgoResources(context.Background(), headers, filesPayload(t, "applicationset.yaml"), testutil.NoopAck, testutil.NoopNak)
 
 	select {
 	case hdrs := <-httpCh:
@@ -423,7 +423,7 @@ func TestHandleSnapshottedFiles_HTTPAppRoutedToHTTPSubject(t *testing.T) {
 // ArgoSideParsed lists every app rendered from a file
 // ---------------------------------------------------------------------------
 
-func TestHandleSnapshottedFiles_SideParsed_ListsAllApps(t *testing.T) {
+func TestParseForArgoResources_SideParsed_ListsAllApps(t *testing.T) {
 	// Renderer returns two apps for one ApplicationSet.
 	rendererFunc := func(_ appv1alpha1.ApplicationSet) ([]appv1alpha1.Application, error) {
 		return []appv1alpha1.Application{
@@ -437,7 +437,7 @@ func TestHandleSnapshottedFiles_SideParsed_ListsAllApps(t *testing.T) {
 	snapshotDir := makeSnapshotDir(t, "applicationset.yaml")
 	headers := testHeaders("run-4", snapshotDir)
 
-	w.handleSnapshottedFiles(context.Background(), headers, filesPayload(t, "applicationset.yaml"), testutil.NoopAck, testutil.NoopNak)
+	w.parseForArgoResources(context.Background(), headers, filesPayload(t, "applicationset.yaml"), testutil.NoopAck, testutil.NoopNak)
 
 	side := awaitSide(t, sideCh)
 	require.Len(t, side, 1)
@@ -450,7 +450,7 @@ func TestHandleSnapshottedFiles_SideParsed_ListsAllApps(t *testing.T) {
 // Multi-ApplicationSet file — appsets render in parallel
 // ---------------------------------------------------------------------------
 
-func TestHandleSnapshottedFiles_MultiAppSetFile_RendersInParallel(t *testing.T) {
+func TestParseForArgoResources_MultiAppSetFile_RendersInParallel(t *testing.T) {
 	// Each render blocks until all three ApplicationSets are in-flight at
 	// once. A sequential implementation times out inside the renderer,
 	// returns errors, and the side result below carries a file error.
@@ -478,7 +478,7 @@ func TestHandleSnapshottedFiles_MultiAppSetFile_RendersInParallel(t *testing.T) 
 	snapshotDir := makeSnapshotDir(t, "multi_appsets.yaml")
 	headers := testHeaders("run-5", snapshotDir)
 
-	w.handleSnapshottedFiles(context.Background(), headers, filesPayload(t, "multi_appsets.yaml"), testutil.NoopAck, testutil.NoopNak)
+	w.parseForArgoResources(context.Background(), headers, filesPayload(t, "multi_appsets.yaml"), testutil.NoopAck, testutil.NoopNak)
 
 	side := awaitSide(t, sideCh)
 	require.Len(t, side, 1)
@@ -490,7 +490,7 @@ func TestHandleSnapshottedFiles_MultiAppSetFile_RendersInParallel(t *testing.T) 
 // Error handling — invalid file lands in ArgoSideParsed, not a panic
 // ---------------------------------------------------------------------------
 
-func TestHandleSnapshottedFiles_InvalidFile_ReportsFileErrorNotPanic(t *testing.T) {
+func TestParseForArgoResources_InvalidFile_ReportsFileErrorNotPanic(t *testing.T) {
 	// rendererFunc should never be called for unparseable files.
 	rendererFunc := func(_ appv1alpha1.ApplicationSet) ([]appv1alpha1.Application, error) {
 		t.Fatal("rendererFunc should not be called for invalid YAML files")
@@ -504,7 +504,7 @@ func TestHandleSnapshottedFiles_InvalidFile_ReportsFileErrorNotPanic(t *testing.
 
 	// Must not panic.
 	require.NotPanics(t, func() {
-		w.handleSnapshottedFiles(context.Background(), headers, filesPayload(t, "invalid.yaml"), testutil.NoopAck, testutil.NoopNak)
+		w.parseForArgoResources(context.Background(), headers, filesPayload(t, "invalid.yaml"), testutil.NoopAck, testutil.NoopNak)
 	})
 
 	side := awaitSide(t, sideCh)
@@ -518,7 +518,7 @@ func TestHandleSnapshottedFiles_InvalidFile_ReportsFileErrorNotPanic(t *testing.
 // Renderer function error lands in ArgoSideParsed as a file error
 // ---------------------------------------------------------------------------
 
-func TestHandleSnapshottedFiles_RendererError_ReportsFileError(t *testing.T) {
+func TestParseForArgoResources_RendererError_ReportsFileError(t *testing.T) {
 	rendererFunc := func(_ appv1alpha1.ApplicationSet) ([]appv1alpha1.Application, error) {
 		return nil, fmt.Errorf("renderer exploded")
 	}
@@ -529,7 +529,7 @@ func TestHandleSnapshottedFiles_RendererError_ReportsFileError(t *testing.T) {
 	headers := testHeaders("run-7", snapshotDir)
 
 	require.NotPanics(t, func() {
-		w.handleSnapshottedFiles(context.Background(), headers, filesPayload(t, "applicationset.yaml"), testutil.NoopAck, testutil.NoopNak)
+		w.parseForArgoResources(context.Background(), headers, filesPayload(t, "applicationset.yaml"), testutil.NoopAck, testutil.NoopNak)
 	})
 
 	side := awaitSide(t, sideCh)
@@ -542,7 +542,7 @@ func TestHandleSnapshottedFiles_RendererError_ReportsFileError(t *testing.T) {
 // Non-existent file lands in ArgoSideParsed as a file error
 // ---------------------------------------------------------------------------
 
-func TestHandleSnapshottedFiles_NonExistentFile_ReportsFileError(t *testing.T) {
+func TestParseForArgoResources_NonExistentFile_ReportsFileError(t *testing.T) {
 	rendererFunc := func(_ appv1alpha1.ApplicationSet) ([]appv1alpha1.Application, error) {
 		t.Fatal("rendererFunc should not be called for missing files")
 		return nil, nil
@@ -554,7 +554,7 @@ func TestHandleSnapshottedFiles_NonExistentFile_ReportsFileError(t *testing.T) {
 	headers := testHeaders("run-8", snapshotDir)
 
 	require.NotPanics(t, func() {
-		w.handleSnapshottedFiles(context.Background(), headers, filesPayload(t, "does-not-exist.yaml"), testutil.NoopAck, testutil.NoopNak)
+		w.parseForArgoResources(context.Background(), headers, filesPayload(t, "does-not-exist.yaml"), testutil.NoopAck, testutil.NoopNak)
 	})
 
 	side := awaitSide(t, sideCh)
@@ -567,7 +567,7 @@ func TestHandleSnapshottedFiles_NonExistentFile_ReportsFileError(t *testing.T) {
 // Malformed payload naks and publishes nothing
 // ---------------------------------------------------------------------------
 
-func TestHandleSnapshottedFiles_MalformedPayload_NaksAndPublishesNothing(t *testing.T) {
+func TestParseForArgoResources_MalformedPayload_NaksAndPublishesNothing(t *testing.T) {
 	// rendererFunc must never be reached — unmarshal must fail first.
 	rendererFunc := func(_ appv1alpha1.ApplicationSet) ([]appv1alpha1.Application, error) {
 		panic("rendererFunc should not be called for malformed payload")
@@ -586,7 +586,7 @@ func TestHandleSnapshottedFiles_MalformedPayload_NaksAndPublishesNothing(t *test
 	malformed := []byte{0xff, 0xff, 0xff, 0xff, 0xff}
 
 	require.NotPanics(t, func() {
-		w.handleSnapshottedFiles(context.Background(), headers, malformed, ack, nak)
+		w.parseForArgoResources(context.Background(), headers, malformed, ack, nak)
 	})
 
 	assert.Equal(t, 1, nakCount, "nak should be called exactly once for malformed payload")
@@ -605,7 +605,7 @@ func TestHandleSnapshottedFiles_MalformedPayload_NaksAndPublishesNothing(t *test
 // Plain Application file routes without invoking the renderer
 // ---------------------------------------------------------------------------
 
-func TestHandleSnapshottedFiles_PlainApplication_RoutedWithoutRenderer(t *testing.T) {
+func TestParseForArgoResources_PlainApplication_RoutedWithoutRenderer(t *testing.T) {
 	// testdata/application.yaml holds a plain Application (not an
 	// ApplicationSet), so parseFileResources puts it directly into the apps
 	// slice and the rendererFunc is never invoked. Panic if it is.
@@ -624,7 +624,7 @@ func TestHandleSnapshottedFiles_PlainApplication_RoutedWithoutRenderer(t *testin
 	headers := testHeaders("run-10", snapshotDir)
 
 	require.NotPanics(t, func() {
-		w.handleSnapshottedFiles(context.Background(), headers, filesPayload(t, "application.yaml"), ack, nak)
+		w.parseForArgoResources(context.Background(), headers, filesPayload(t, "application.yaml"), ack, nak)
 	})
 
 	select {
@@ -643,7 +643,7 @@ func TestHandleSnapshottedFiles_PlainApplication_RoutedWithoutRenderer(t *testin
 // Directory subject routing
 // ---------------------------------------------------------------------------
 
-func TestHandleSnapshottedFiles_DirectoryAppRoutedToDirectoryGitSubject(t *testing.T) {
+func TestParseForArgoResources_DirectoryAppRoutedToDirectoryGitSubject(t *testing.T) {
 	rendererFunc := func(_ appv1alpha1.ApplicationSet) ([]appv1alpha1.Application, error) {
 		return []appv1alpha1.Application{
 			directoryApp("directory-app", "https://github.com/example/repo", "manifests/staging", false),
@@ -655,7 +655,7 @@ func TestHandleSnapshottedFiles_DirectoryAppRoutedToDirectoryGitSubject(t *testi
 	snapshotDir := makeSnapshotDir(t, "applicationset_directory.yaml")
 	headers := testHeaders("run-30", snapshotDir)
 
-	w.handleSnapshottedFiles(context.Background(), headers, filesPayload(t, "applicationset_directory.yaml"), testutil.NoopAck, testutil.NoopNak)
+	w.parseForArgoResources(context.Background(), headers, filesPayload(t, "applicationset_directory.yaml"), testutil.NoopAck, testutil.NoopNak)
 
 	select {
 	case hdrs := <-dirCh:
@@ -666,7 +666,7 @@ func TestHandleSnapshottedFiles_DirectoryAppRoutedToDirectoryGitSubject(t *testi
 	}
 }
 
-func TestHandleSnapshottedFiles_DirectoryApp_RecurseTrue_PropagatesInBody(t *testing.T) {
+func TestParseForArgoResources_DirectoryApp_RecurseTrue_PropagatesInBody(t *testing.T) {
 	rendererFunc := func(_ appv1alpha1.ApplicationSet) ([]appv1alpha1.Application, error) {
 		return []appv1alpha1.Application{
 			directoryApp("directory-recurse-app", "https://github.com/example/repo", "manifests/staging", true),
@@ -678,7 +678,7 @@ func TestHandleSnapshottedFiles_DirectoryApp_RecurseTrue_PropagatesInBody(t *tes
 	snapshotDir := makeSnapshotDir(t, "applicationset_directory.yaml")
 	headers := testHeaders("run-31", snapshotDir)
 
-	w.handleSnapshottedFiles(context.Background(), headers, filesPayload(t, "applicationset_directory.yaml"), testutil.NoopAck, testutil.NoopNak)
+	w.parseForArgoResources(context.Background(), headers, filesPayload(t, "applicationset_directory.yaml"), testutil.NoopAck, testutil.NoopNak)
 
 	select {
 	case <-dirCh:
@@ -702,7 +702,7 @@ func TestBuildAppSpec_ExplicitDirectory_SourceTypeAndRecurse(t *testing.T) {
 	snapshotDir := makeSnapshotDir(t, "applicationset_directory.yaml")
 	headers := testHeaders("run-35", snapshotDir)
 
-	w.handleSnapshottedFiles(context.Background(), headers, filesPayload(t, "applicationset_directory.yaml"), testutil.NoopAck, testutil.NoopNak)
+	w.parseForArgoResources(context.Background(), headers, filesPayload(t, "applicationset_directory.yaml"), testutil.NoopAck, testutil.NoopNak)
 
 	select {
 	case <-dirHdrCh:
@@ -722,12 +722,12 @@ func TestBuildAppSpec_ExplicitDirectory_SourceTypeAndRecurse(t *testing.T) {
 // Kustomize app (no helm) routes to ArgoDirectoryGitParsed
 // ---------------------------------------------------------------------------
 
-// TestHandleSnapshottedFiles_KustomizeAppRoutedToDirectoryGitSubject verifies
+// TestParseForArgoResources_KustomizeAppRoutedToDirectoryGitSubject verifies
 // that an Application whose source has spec.source.kustomize != nil but no
 // Helm spec is treated as a plain-directory app and published to
 // ArgoDirectoryGitParsed (not skipped). This is the unified routing contract
 // introduced when the Kustomize-specific pipeline was removed.
-func TestHandleSnapshottedFiles_KustomizeAppRoutedToDirectoryGitSubject(t *testing.T) {
+func TestParseForArgoResources_KustomizeAppRoutedToDirectoryGitSubject(t *testing.T) {
 	rendererFunc := func(_ appv1alpha1.ApplicationSet) ([]appv1alpha1.Application, error) {
 		// Build an application that has kustomize set but no helm.
 		app := directoryApp("kustomize-app", "https://github.com/example/repo", "overlays/staging", false)
@@ -740,7 +740,7 @@ func TestHandleSnapshottedFiles_KustomizeAppRoutedToDirectoryGitSubject(t *testi
 	snapshotDir := makeSnapshotDir(t, "applicationset_kustomize.yaml")
 	headers := testHeaders("run-40", snapshotDir)
 
-	w.handleSnapshottedFiles(context.Background(), headers, filesPayload(t, "applicationset_kustomize.yaml"), testutil.NoopAck, testutil.NoopNak)
+	w.parseForArgoResources(context.Background(), headers, filesPayload(t, "applicationset_kustomize.yaml"), testutil.NoopAck, testutil.NoopNak)
 
 	select {
 	case hdrs := <-dirCh:
@@ -767,7 +767,7 @@ func TestBuildAppSpec_MultipleExplicitTypes_ReportsAppError(t *testing.T) {
 	snapshotDir := makeSnapshotDir(t, "applicationset.yaml")
 	headers := testHeaders("run-50", snapshotDir)
 
-	w.handleSnapshottedFiles(context.Background(), headers, filesPayload(t, "applicationset.yaml"), testutil.NoopAck, testutil.NoopNak)
+	w.parseForArgoResources(context.Background(), headers, filesPayload(t, "applicationset.yaml"), testutil.NoopAck, testutil.NoopNak)
 
 	side := awaitSide(t, sideCh)
 	require.Len(t, side, 1)
@@ -793,7 +793,7 @@ func TestBuildAppSpec_UnsupportedSourceType_Plugin_ReturnsError(t *testing.T) {
 		"error should include the Plugin source type name")
 }
 
-func TestHandleSnapshottedFiles_DirectoryHelmTogether_NoRegression(t *testing.T) {
+func TestParseForArgoResources_DirectoryHelmTogether_NoRegression(t *testing.T) {
 	callCount := 0
 	rendererFunc := func(_ appv1alpha1.ApplicationSet) ([]appv1alpha1.Application, error) {
 		callCount++
@@ -815,7 +815,7 @@ func TestHandleSnapshottedFiles_DirectoryHelmTogether_NoRegression(t *testing.T)
 	snapshotDir := makeSnapshotDir(t, "applicationset.yaml", "applicationset_directory.yaml")
 	headers := testHeaders("run-33", snapshotDir)
 
-	w.handleSnapshottedFiles(context.Background(), headers, filesPayload(t, "applicationset.yaml", "applicationset_directory.yaml"), testutil.NoopAck, testutil.NoopNak)
+	w.parseForArgoResources(context.Background(), headers, filesPayload(t, "applicationset.yaml", "applicationset_directory.yaml"), testutil.NoopAck, testutil.NoopNak)
 
 	select {
 	case hdrs := <-ociCh:
@@ -836,15 +836,15 @@ func TestHandleSnapshottedFiles_DirectoryHelmTogether_NoRegression(t *testing.T)
 // Mixed source types in a single file (one renderer call) route correctly
 // ---------------------------------------------------------------------------
 
-// TestHandleSnapshottedFiles_MixedSourceTypes_InSingleFile_RoutedCorrectly
+// TestParseForArgoResources_MixedSourceTypes_InSingleFile_RoutedCorrectly
 // drives the path where a single file holds one ApplicationSet whose single
 // renderer invocation returns a heterogeneous []Application (a Helm app and a
 // Directory app). Each app must be routed to its own downstream subject and
 // ArgoSideParsed must list both. The renderer's call count is asserted to be
 // exactly 1 to prove both apps came from a single call — distinguishing this
-// test from TestHandleSnapshottedFiles_DirectoryHelmTogether_NoRegression
+// test from TestParseForArgoResources_DirectoryHelmTogether_NoRegression
 // which uses two separate files.
-func TestHandleSnapshottedFiles_MixedSourceTypes_InSingleFile_RoutedCorrectly(t *testing.T) {
+func TestParseForArgoResources_MixedSourceTypes_InSingleFile_RoutedCorrectly(t *testing.T) {
 	var rendererCalls int
 	rendererFunc := func(_ appv1alpha1.ApplicationSet) ([]appv1alpha1.Application, error) {
 		rendererCalls++
@@ -870,7 +870,7 @@ func TestHandleSnapshottedFiles_MixedSourceTypes_InSingleFile_RoutedCorrectly(t 
 	headers := testHeaders("run-34", snapshotDir)
 
 	require.NotPanics(t, func() {
-		w.handleSnapshottedFiles(context.Background(), headers, filesPayload(t, "applicationset.yaml"), ack, nak)
+		w.parseForArgoResources(context.Background(), headers, filesPayload(t, "applicationset.yaml"), ack, nak)
 	})
 
 	// Helm app must be routed to its OCI subject and carry helm-a in the body.
@@ -932,7 +932,7 @@ func TestBuildAppSpec_NilSourceType_RoutesToDirectoryForAutoDetect(t *testing.T)
 	snapshotDir := makeSnapshotDir(t, "applicationset.yaml")
 	headers := testHeaders("run-60", snapshotDir)
 
-	w.handleSnapshottedFiles(context.Background(), headers, filesPayload(t, "applicationset.yaml"), testutil.NoopAck, testutil.NoopNak)
+	w.parseForArgoResources(context.Background(), headers, filesPayload(t, "applicationset.yaml"), testutil.NoopAck, testutil.NoopNak)
 
 	select {
 	case <-dirHdrCh:
@@ -990,7 +990,7 @@ func TestBuildAppSpec_Kustomize_SimpleFields(t *testing.T) {
 	snapshotDir := makeSnapshotDir(t, "applicationset_kustomize.yaml")
 	headers := testHeaders("run-41", snapshotDir)
 
-	w.handleSnapshottedFiles(context.Background(), headers, filesPayload(t, "applicationset_kustomize.yaml"), testutil.NoopAck, testutil.NoopNak)
+	w.parseForArgoResources(context.Background(), headers, filesPayload(t, "applicationset_kustomize.yaml"), testutil.NoopAck, testutil.NoopNak)
 
 	select {
 	case <-dirHdrCh:
@@ -1040,7 +1040,7 @@ func TestBuildAppSpec_Kustomize_ImagesAndReplicas(t *testing.T) {
 	snapshotDir := makeSnapshotDir(t, "applicationset_kustomize.yaml")
 	headers := testHeaders("run-42", snapshotDir)
 
-	w.handleSnapshottedFiles(context.Background(), headers, filesPayload(t, "applicationset_kustomize.yaml"), testutil.NoopAck, testutil.NoopNak)
+	w.parseForArgoResources(context.Background(), headers, filesPayload(t, "applicationset_kustomize.yaml"), testutil.NoopAck, testutil.NoopNak)
 
 	select {
 	case <-dirHdrCh:
@@ -1101,7 +1101,7 @@ func TestBuildAppSpec_Kustomize_Patches(t *testing.T) {
 	snapshotDir := makeSnapshotDir(t, "applicationset_kustomize.yaml")
 	headers := testHeaders("run-43", snapshotDir)
 
-	w.handleSnapshottedFiles(context.Background(), headers, filesPayload(t, "applicationset_kustomize.yaml"), testutil.NoopAck, testutil.NoopNak)
+	w.parseForArgoResources(context.Background(), headers, filesPayload(t, "applicationset_kustomize.yaml"), testutil.NoopAck, testutil.NoopNak)
 
 	select {
 	case <-dirHdrCh:
@@ -1146,7 +1146,7 @@ func TestBuildAppSpec_Helm_ParametersAndValueFiles(t *testing.T) {
 	snapshotDir := makeSnapshotDir(t, "applicationset.yaml")
 	headers := testHeaders("run-80", snapshotDir)
 
-	w.handleSnapshottedFiles(context.Background(), headers, filesPayload(t, "applicationset.yaml"), testutil.NoopAck, testutil.NoopNak)
+	w.parseForArgoResources(context.Background(), headers, filesPayload(t, "applicationset.yaml"), testutil.NoopAck, testutil.NoopNak)
 
 	select {
 	case <-hdrCh:
@@ -1184,7 +1184,7 @@ func TestBuildAppSpec_Helm_NoValues_NoPanic(t *testing.T) {
 	headers := testHeaders("run-81", snapshotDir)
 
 	require.NotPanics(t, func() {
-		w.handleSnapshottedFiles(context.Background(), headers, filesPayload(t, "applicationset.yaml"), testutil.NoopAck, testutil.NoopNak)
+		w.parseForArgoResources(context.Background(), headers, filesPayload(t, "applicationset.yaml"), testutil.NoopAck, testutil.NoopNak)
 	})
 
 	select {

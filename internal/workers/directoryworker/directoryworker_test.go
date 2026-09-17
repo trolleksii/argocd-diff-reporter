@@ -44,10 +44,10 @@ func newTestDirectoryWorker(t *testing.T) (*DirectoryWorker, *internalnats.Bus, 
 }
 
 // ---------------------------------------------------------------------------
-// handleDirectoryRender — renders directory YAML files, stores, publishes
+// renderManifestsFromDir — renders directory YAML files, stores, publishes
 // ---------------------------------------------------------------------------
 
-func TestHandleDirectoryRender_RendersAndStores(t *testing.T) {
+func TestRenderManifestsFromDir_RendersAndStores(t *testing.T) {
 	w, bus, store := newTestDirectoryWorker(t)
 	ctx := context.Background()
 
@@ -113,7 +113,7 @@ spec:
 	ack := func() error { ackCalled = true; return nil }
 	nak := func() error { nakCalled = true; return nil }
 
-	w.handleDirectoryRender(ctx, headers, data, ack, nak)
+	w.renderManifestsFromDir(ctx, headers, data, ack, nak)
 
 	assert.True(t, ackCalled, "ack should be called on successful render")
 	assert.False(t, nakCalled, "nak should not be called on successful render")
@@ -136,10 +136,10 @@ spec:
 }
 
 // ---------------------------------------------------------------------------
-// handleDirectoryRender — recurse includes subdirectory files
+// renderManifestsFromDir — recurse includes subdirectory files
 // ---------------------------------------------------------------------------
 
-func TestHandleDirectoryRender_Recurse_IncludesSubdirFiles(t *testing.T) {
+func TestRenderManifestsFromDir_Recurse_IncludesSubdirFiles(t *testing.T) {
 	w, bus, store := newTestDirectoryWorker(t)
 	ctx := context.Background()
 
@@ -202,7 +202,7 @@ metadata:
 	ack := func() error { return nil }
 	nak := func() error { return nil }
 
-	w.handleDirectoryRender(ctx, headers, data, ack, nak)
+	w.renderManifestsFromDir(ctx, headers, data, ack, nak)
 
 	expectedKey := keys.Manifest(owner, repo, number, sha, origin, appName)
 	stored, err := internalnats.GetObject[string](ctx, store, expectedKey)
@@ -220,10 +220,10 @@ metadata:
 }
 
 // ---------------------------------------------------------------------------
-// handleDirectoryRender — kustomization.yaml triggers krusty render
+// renderManifestsFromDir — kustomization.yaml triggers krusty render
 // ---------------------------------------------------------------------------
 
-func TestHandleDirectoryRender_KustomizationYaml_UsesKrusty(t *testing.T) {
+func TestRenderManifestsFromDir_KustomizationYaml_UsesKrusty(t *testing.T) {
 	w, bus, store := newTestDirectoryWorker(t)
 	ctx := context.Background()
 
@@ -294,7 +294,7 @@ resources:
 	ack := func() error { ackCalled = true; return nil }
 	nak := func() error { nakCalled = true; return nil }
 
-	w.handleDirectoryRender(ctx, headers, data, ack, nak)
+	w.renderManifestsFromDir(ctx, headers, data, ack, nak)
 
 	assert.True(t, ackCalled, "ack should be called on successful krusty render")
 	assert.False(t, nakCalled, "nak should not be called on successful krusty render")
@@ -317,10 +317,10 @@ resources:
 }
 
 // ---------------------------------------------------------------------------
-// handleDirectoryRender — kustomize overlay applies namePrefix
+// renderManifestsFromDir — kustomize overlay applies namePrefix
 // ---------------------------------------------------------------------------
 
-func TestHandleDirectoryRender_KustomizationYaml_WithOverlay(t *testing.T) {
+func TestRenderManifestsFromDir_KustomizationYaml_WithOverlay(t *testing.T) {
 	w, bus, store := newTestDirectoryWorker(t)
 	ctx := context.Background()
 
@@ -394,7 +394,7 @@ resources:
 	ack := func() error { ackCalled = true; return nil }
 	nak := func() error { nakCalled = true; return nil }
 
-	w.handleDirectoryRender(ctx, headers, data, ack, nak)
+	w.renderManifestsFromDir(ctx, headers, data, ack, nak)
 
 	assert.True(t, ackCalled, "ack should be called on successful krusty overlay render")
 	assert.False(t, nakCalled, "nak should not be called on successful krusty overlay render")
@@ -416,10 +416,10 @@ resources:
 }
 
 // ---------------------------------------------------------------------------
-// handleDirectoryRender — empty directory publishes ManifestRenderFinished with error.msg
+// renderManifestsFromDir — empty directory publishes ManifestRenderFinished with error.msg
 // ---------------------------------------------------------------------------
 
-func TestHandleDirectoryRender_EmptyDirectory_PublishesFailure(t *testing.T) {
+func TestRenderManifestsFromDir_EmptyDirectory_PublishesFailure(t *testing.T) {
 	w, bus, _ := newTestDirectoryWorker(t)
 	ctx := context.Background()
 
@@ -457,7 +457,7 @@ func TestHandleDirectoryRender_EmptyDirectory_PublishesFailure(t *testing.T) {
 	ack := func() error { ackCalled = true; return nil }
 	nak := func() error { nakCalled = true; return nil }
 
-	w.handleDirectoryRender(ctx, headers, data, ack, nak)
+	w.renderManifestsFromDir(ctx, headers, data, ack, nak)
 
 	assert.True(t, ackCalled, "ack should be called even when render fails (error reported via event)")
 	assert.False(t, nakCalled, "nak should not be called on render error")
@@ -496,10 +496,10 @@ func mustParseDeployment(t *testing.T, yamlStr string) appsv1.Deployment {
 }
 
 // ---------------------------------------------------------------------------
-// handleDirectoryRender — kustomize overlay applies namespace
+// renderManifestsFromDir — kustomize overlay applies namespace
 // ---------------------------------------------------------------------------
 
-func TestHandleDirectoryRender_Overlay_Namespace(t *testing.T) {
+func TestRenderManifestsFromDir_Overlay_Namespace(t *testing.T) {
 	w, bus, store := newTestDirectoryWorker(t)
 	ctx := context.Background()
 
@@ -572,7 +572,7 @@ resources:
 	ack := func() error { ackCalled = true; return nil }
 	nak := func() error { nakCalled = true; return nil }
 
-	w.handleDirectoryRender(ctx, headers, data, ack, nak)
+	w.renderManifestsFromDir(ctx, headers, data, ack, nak)
 
 	assert.True(t, ackCalled, "ack should be called on successful krusty overlay render")
 	assert.False(t, nakCalled, "nak should not be called on successful krusty overlay render")
@@ -596,10 +596,10 @@ resources:
 }
 
 // ---------------------------------------------------------------------------
-// handleDirectoryRender — kustomize overlay applies nameSuffix
+// renderManifestsFromDir — kustomize overlay applies nameSuffix
 // ---------------------------------------------------------------------------
 
-func TestHandleDirectoryRender_Overlay_NameSuffix(t *testing.T) {
+func TestRenderManifestsFromDir_Overlay_NameSuffix(t *testing.T) {
 	w, bus, store := newTestDirectoryWorker(t)
 	ctx := context.Background()
 
@@ -672,7 +672,7 @@ resources:
 	ack := func() error { ackCalled = true; return nil }
 	nak := func() error { nakCalled = true; return nil }
 
-	w.handleDirectoryRender(ctx, headers, data, ack, nak)
+	w.renderManifestsFromDir(ctx, headers, data, ack, nak)
 
 	assert.True(t, ackCalled, "ack should be called on successful krusty overlay render")
 	assert.False(t, nakCalled, "nak should not be called on successful krusty overlay render")
@@ -696,10 +696,10 @@ resources:
 }
 
 // ---------------------------------------------------------------------------
-// handleDirectoryRender — kustomize overlay applies commonLabels
+// renderManifestsFromDir — kustomize overlay applies commonLabels
 // ---------------------------------------------------------------------------
 
-func TestHandleDirectoryRender_Overlay_CommonLabels(t *testing.T) {
+func TestRenderManifestsFromDir_Overlay_CommonLabels(t *testing.T) {
 	w, bus, store := newTestDirectoryWorker(t)
 	ctx := context.Background()
 
@@ -772,7 +772,7 @@ resources:
 	ack := func() error { ackCalled = true; return nil }
 	nak := func() error { nakCalled = true; return nil }
 
-	w.handleDirectoryRender(ctx, headers, data, ack, nak)
+	w.renderManifestsFromDir(ctx, headers, data, ack, nak)
 
 	assert.True(t, ackCalled, "ack should be called on successful krusty overlay render")
 	assert.False(t, nakCalled, "nak should not be called on successful krusty overlay render")
@@ -796,10 +796,10 @@ resources:
 }
 
 // ---------------------------------------------------------------------------
-// handleDirectoryRender — kustomize overlay applies commonAnnotations
+// renderManifestsFromDir — kustomize overlay applies commonAnnotations
 // ---------------------------------------------------------------------------
 
-func TestHandleDirectoryRender_Overlay_CommonAnnotations(t *testing.T) {
+func TestRenderManifestsFromDir_Overlay_CommonAnnotations(t *testing.T) {
 	w, bus, store := newTestDirectoryWorker(t)
 	ctx := context.Background()
 
@@ -872,7 +872,7 @@ resources:
 	ack := func() error { ackCalled = true; return nil }
 	nak := func() error { nakCalled = true; return nil }
 
-	w.handleDirectoryRender(ctx, headers, data, ack, nak)
+	w.renderManifestsFromDir(ctx, headers, data, ack, nak)
 
 	assert.True(t, ackCalled, "ack should be called on successful krusty overlay render")
 	assert.False(t, nakCalled, "nak should not be called on successful krusty overlay render")
@@ -896,10 +896,10 @@ resources:
 }
 
 // ---------------------------------------------------------------------------
-// handleDirectoryRender — kustomize overlay applies forceCommonLabels
+// renderManifestsFromDir — kustomize overlay applies forceCommonLabels
 // ---------------------------------------------------------------------------
 
-func TestHandleDirectoryRender_Overlay_ForceCommonLabels(t *testing.T) {
+func TestRenderManifestsFromDir_Overlay_ForceCommonLabels(t *testing.T) {
 	w, bus, store := newTestDirectoryWorker(t)
 	ctx := context.Background()
 
@@ -973,7 +973,7 @@ resources:
 	ack := func() error { ackCalled = true; return nil }
 	nak := func() error { nakCalled = true; return nil }
 
-	w.handleDirectoryRender(ctx, headers, data, ack, nak)
+	w.renderManifestsFromDir(ctx, headers, data, ack, nak)
 
 	assert.True(t, ackCalled, "ack should be called on successful krusty overlay render")
 	assert.False(t, nakCalled, "nak should not be called on successful krusty overlay render")
@@ -999,10 +999,10 @@ resources:
 }
 
 // ---------------------------------------------------------------------------
-// handleDirectoryRender — kustomize overlay applies images
+// renderManifestsFromDir — kustomize overlay applies images
 // ---------------------------------------------------------------------------
 
-func TestHandleDirectoryRender_Overlay_Images(t *testing.T) {
+func TestRenderManifestsFromDir_Overlay_Images(t *testing.T) {
 	w, bus, store := newTestDirectoryWorker(t)
 	ctx := context.Background()
 
@@ -1075,7 +1075,7 @@ resources:
 	ack := func() error { ackCalled = true; return nil }
 	nak := func() error { nakCalled = true; return nil }
 
-	w.handleDirectoryRender(ctx, headers, data, ack, nak)
+	w.renderManifestsFromDir(ctx, headers, data, ack, nak)
 
 	assert.True(t, ackCalled, "ack should be called on successful krusty overlay render")
 	assert.False(t, nakCalled, "nak should not be called on successful krusty overlay render")
@@ -1099,10 +1099,10 @@ resources:
 }
 
 // ---------------------------------------------------------------------------
-// handleDirectoryRender — kustomize overlay applies replicas
+// renderManifestsFromDir — kustomize overlay applies replicas
 // ---------------------------------------------------------------------------
 
-func TestHandleDirectoryRender_Overlay_Replicas(t *testing.T) {
+func TestRenderManifestsFromDir_Overlay_Replicas(t *testing.T) {
 	w, bus, store := newTestDirectoryWorker(t)
 	ctx := context.Background()
 
@@ -1177,7 +1177,7 @@ resources:
 	ack := func() error { ackCalled = true; return nil }
 	nak := func() error { nakCalled = true; return nil }
 
-	w.handleDirectoryRender(ctx, headers, data, ack, nak)
+	w.renderManifestsFromDir(ctx, headers, data, ack, nak)
 
 	assert.True(t, ackCalled, "ack should be called on successful krusty overlay render")
 	assert.False(t, nakCalled, "nak should not be called on successful krusty overlay render")
@@ -1202,10 +1202,10 @@ resources:
 }
 
 // ---------------------------------------------------------------------------
-// handleDirectoryRender — kustomize overlay applies patches
+// renderManifestsFromDir — kustomize overlay applies patches
 // ---------------------------------------------------------------------------
 
-func TestHandleDirectoryRender_Overlay_Patches(t *testing.T) {
+func TestRenderManifestsFromDir_Overlay_Patches(t *testing.T) {
 	w, bus, store := newTestDirectoryWorker(t)
 	ctx := context.Background()
 
@@ -1297,7 +1297,7 @@ spec:
 	ack := func() error { ackCalled = true; return nil }
 	nak := func() error { nakCalled = true; return nil }
 
-	w.handleDirectoryRender(ctx, headers, data, ack, nak)
+	w.renderManifestsFromDir(ctx, headers, data, ack, nak)
 
 	assert.True(t, ackCalled, "ack should be called on successful krusty overlay render")
 	assert.False(t, nakCalled, "nak should not be called on successful krusty overlay render")
@@ -1323,11 +1323,11 @@ spec:
 }
 
 // ---------------------------------------------------------------------------
-// handleDirectoryRender — kustomize overlay applies namespace, commonLabels,
+// renderManifestsFromDir — kustomize overlay applies namespace, commonLabels,
 // images, and replicas simultaneously
 // ---------------------------------------------------------------------------
 
-func TestHandleDirectoryRender_Overlay_Combined(t *testing.T) {
+func TestRenderManifestsFromDir_Overlay_Combined(t *testing.T) {
 	w, bus, store := newTestDirectoryWorker(t)
 	ctx := context.Background()
 
@@ -1405,7 +1405,7 @@ resources:
 	ack := func() error { ackCalled = true; return nil }
 	nak := func() error { nakCalled = true; return nil }
 
-	w.handleDirectoryRender(ctx, headers, data, ack, nak)
+	w.renderManifestsFromDir(ctx, headers, data, ack, nak)
 
 	assert.True(t, ackCalled, "ack should be called on successful krusty overlay render")
 	assert.False(t, nakCalled, "nak should not be called on successful krusty overlay render")
@@ -1433,10 +1433,10 @@ resources:
 }
 
 // ---------------------------------------------------------------------------
-// handleDirectoryRender — kustomization.yml auto-detection
+// renderManifestsFromDir — kustomization.yml auto-detection
 // ---------------------------------------------------------------------------
 
-func TestHandleDirectoryRender_KustomizationYml_UsesKrusty(t *testing.T) {
+func TestRenderManifestsFromDir_KustomizationYml_UsesKrusty(t *testing.T) {
 	w, bus, store := newTestDirectoryWorker(t)
 	ctx := context.Background()
 
@@ -1506,7 +1506,7 @@ resources:
 	ack := func() error { ackCalled = true; return nil }
 	nak := func() error { nakCalled = true; return nil }
 
-	w.handleDirectoryRender(ctx, headers, data, ack, nak)
+	w.renderManifestsFromDir(ctx, headers, data, ack, nak)
 
 	assert.True(t, ackCalled, "ack should be called on successful krusty render")
 	assert.False(t, nakCalled, "nak should not be called on successful krusty render")
@@ -1530,10 +1530,10 @@ resources:
 }
 
 // ---------------------------------------------------------------------------
-// handleDirectoryRender — Kustomization (capitalized, no extension) auto-detection
+// renderManifestsFromDir — Kustomization (capitalized, no extension) auto-detection
 // ---------------------------------------------------------------------------
 
-func TestHandleDirectoryRender_KustomizationCapitalized_UsesKrusty(t *testing.T) {
+func TestRenderManifestsFromDir_KustomizationCapitalized_UsesKrusty(t *testing.T) {
 	w, bus, store := newTestDirectoryWorker(t)
 	ctx := context.Background()
 
@@ -1603,7 +1603,7 @@ resources:
 	ack := func() error { ackCalled = true; return nil }
 	nak := func() error { nakCalled = true; return nil }
 
-	w.handleDirectoryRender(ctx, headers, data, ack, nak)
+	w.renderManifestsFromDir(ctx, headers, data, ack, nak)
 
 	assert.True(t, ackCalled, "ack should be called on successful krusty render")
 	assert.False(t, nakCalled, "nak should not be called on successful krusty render")
@@ -1627,10 +1627,10 @@ resources:
 }
 
 // ---------------------------------------------------------------------------
-// handleDirectoryRender — mixed .yaml and .yml extensions in plain directory
+// renderManifestsFromDir — mixed .yaml and .yml extensions in plain directory
 // ---------------------------------------------------------------------------
 
-func TestHandleDirectoryRender_MixedExtensions_IncludesBoth(t *testing.T) {
+func TestRenderManifestsFromDir_MixedExtensions_IncludesBoth(t *testing.T) {
 	w, bus, store := newTestDirectoryWorker(t)
 	ctx := context.Background()
 
@@ -1700,7 +1700,7 @@ spec:
 	ack := func() error { ackCalled = true; return nil }
 	nak := func() error { nakCalled = true; return nil }
 
-	w.handleDirectoryRender(ctx, headers, data, ack, nak)
+	w.renderManifestsFromDir(ctx, headers, data, ack, nak)
 
 	assert.True(t, ackCalled, "ack should be called on successful render")
 	assert.False(t, nakCalled, "nak should not be called on successful render")
@@ -1724,10 +1724,10 @@ spec:
 }
 
 // ---------------------------------------------------------------------------
-// handleDirectoryRender — kustomization.yml with .yml resources
+// renderManifestsFromDir — kustomization.yml with .yml resources
 // ---------------------------------------------------------------------------
 
-func TestHandleDirectoryRender_KustomizationYml_YmlResources(t *testing.T) {
+func TestRenderManifestsFromDir_KustomizationYml_YmlResources(t *testing.T) {
 	w, bus, store := newTestDirectoryWorker(t)
 	ctx := context.Background()
 
@@ -1797,7 +1797,7 @@ resources:
 	ack := func() error { ackCalled = true; return nil }
 	nak := func() error { nakCalled = true; return nil }
 
-	w.handleDirectoryRender(ctx, headers, data, ack, nak)
+	w.renderManifestsFromDir(ctx, headers, data, ack, nak)
 
 	assert.True(t, ackCalled, "ack should be called on successful krusty render")
 	assert.False(t, nakCalled, "nak should not be called on successful krusty render")
